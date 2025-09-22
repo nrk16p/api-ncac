@@ -3,6 +3,6 @@ uvicorn[standard]
 sqlalchemy
 alembic
 python-dotenv
-psycopg[binary]
+psycopg2-binary
 PyJWT
 passlib[bcrypt]
