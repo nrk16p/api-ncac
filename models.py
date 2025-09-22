@@ -3,7 +3,7 @@ from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Text, Nume
 from sqlalchemy.orm import relationship, validates
 from passlib.context import CryptContext
 from database import Base
-
+from pydantic import BaseModel
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 class PositionLevel(Base):
@@ -33,6 +33,9 @@ class User(Base):
     position = relationship("Position", backref="users")
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    firstname = Column(String(100), nullable=True)
+    lastname = Column(String(100), nullable=True)
+   
 
     def set_password(self, password: str):
         self.password_hash = pwd_context.hash(password)
@@ -171,3 +174,16 @@ class CaseProduct(Base):
         if value is not None and value < 0:
             raise ValueError("amount must be >= 0")
         return value
+from pydantic import BaseModel
+from typing import Optional
+
+
+class RegisterRequest(BaseModel):
+    username: str
+    password: str
+    firstname: str
+    lastname: str
+    employee_id: Optional[str]
+    department_id: Optional[int]
+    site_id: Optional[int]
+    position_id: Optional[int]
