@@ -8,15 +8,44 @@ from models import CaseReport, CaseProduct
 
 router = APIRouter(prefix="/case_reports", tags=["Case Reports"])
 
-def generate_document_no(db: Session) -> str:
-    last = db.query(CaseReport).order_by(CaseReport.case_id.desc()).first()
-    if last and last.document_no and last.document_no.startswith("CR-"):
-        try:
-            last_num = int(last.document_no.split("-")[1])
-        except Exception:
-            last_num = 0
-        return f"CR-{last_num + 1:03d}"
-    return "CR-001"
+SITE_CODES = {
+    2: "LB",
+    3: "SB",
+    4: "RY",
+    5: "KK",
+    6: "BPK",
+}
+
+def generate_document_no(db: Session, site_id: int) -> str:
+    # Step 1: site code
+    site_code = SITE_CODES.get(site_id, "XX")  # fallback if unknown
+
+    # Step 2: current YYMM
+    now = datetime.now()
+    yymm = now.strftime("%y%m")
+
+    # Step 3: start/end of current month
+    start_of_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    if now.month == 12:
+        next_month = now.replace(year=now.year + 1, month=1, day=1)
+    else:
+        next_month = now.replace(month=now.month + 1, day=1)
+
+    # Step 4: count cases for THIS site_id in this month
+    count = (
+        db.query(CaseReport)
+        .filter(
+            CaseReport.site_id == site_id,
+            CaseReport.record_date >= start_of_month,
+            CaseReport.record_date < next_month,
+        )
+        .count()
+    )
+
+    running = f"{count + 1:03d}"  # 001, 002, ...
+
+    # Step 5: final format
+    return f"NCB-{site_code}-{yymm}-{running}"
 
 def parse_dt(val):
     if not val:
@@ -46,11 +75,12 @@ class CaseReportSchema(BaseModel):
     client_id: Optional[int] = None
     vehicle_id_head: Optional[int] = None
     vehicle_id_tail: Optional[int] = None
+    vehicle_truckno: Optional[str] = None
+
     origin_id: Optional[int] = None
     driver_role_id: Optional[int] = None
     driver_id: Optional[int] = None
     incident_cause_id: Optional[int] = None
-    employee_id: Optional[int] = None
     reporter_id: Optional[int] = None
     record_date: Optional[str] = None
     incident_date: Optional[str] = None
@@ -65,7 +95,7 @@ class CaseReportSchema(BaseModel):
 
 @router.post("/", status_code=201)
 def create_or_update_case_report(payload: CaseReportSchema, db: Session = Depends(get_db)):
-    document_no = payload.document_no or generate_document_no(db)
+    document_no = payload.document_no or generate_document_no(db, payload.site_id)
     report = db.query(CaseReport).filter_by(document_no=document_no).first()
 
     if report:
@@ -87,11 +117,12 @@ def create_or_update_case_report(payload: CaseReportSchema, db: Session = Depend
         client_id=payload.client_id,
         vehicle_id_head=payload.vehicle_id_head,
         vehicle_id_tail=payload.vehicle_id_tail,
+       vehicle_truckno=payload.vehicle_truckno,   # <-- this one fails
+
         origin_id=payload.origin_id,
         driver_role_id=payload.driver_role_id,
         driver_id=payload.driver_id,
         incident_cause_id=payload.incident_cause_id,
-        employee_id=payload.employee_id,
         reporter_id=payload.reporter_id,
         record_date=parse_dt(payload.record_date),
         incident_date=parse_dt(payload.incident_date),
@@ -115,9 +146,9 @@ def get_case_reports(db: Session = Depends(get_db)):
     reports = db.query(CaseReport).order_by(CaseReport.case_id.desc()).all()
     return [r.to_dict() for r in reports]
 
-@router.get("/{case_id}")
-def get_case_report(case_id: int, db: Session = Depends(get_db)):
-    r = db.query(CaseReport).get(case_id)
+@router.get("/{document_no}")
+def get_case_report(document_no: str, db: Session = Depends(get_db)):
+    r = db.query(CaseReport).filter(CaseReport.document_no == document_no).first()
     if not r:
         raise HTTPException(status_code=404, detail="Case report not found")
     return r.to_dict()

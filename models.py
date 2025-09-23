@@ -108,7 +108,6 @@ class CaseReport(Base):
     driver_role_id = Column(Integer, ForeignKey("driver_roles.driver_role_id"))
     driver_id = Column(Integer, ForeignKey("masterdrivers.driver_id"))
     incident_cause_id = Column(Integer, ForeignKey("mastercauses.cause_id"))
-    employee_id = Column(Integer)
     reporter_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     record_date = Column(DateTime)
     incident_date = Column(DateTime)
@@ -125,6 +124,7 @@ class CaseReport(Base):
     client = relationship("Client", backref="case_reports")
     vehicle_head = relationship("Vehicle", foreign_keys=[vehicle_id_head])
     vehicle_tail = relationship("Vehicle", foreign_keys=[vehicle_id_tail])
+    vehicle_truckno = Column(String(50), nullable=True)
     driver_role = relationship("DriverRole", backref="case_reports")
     driver = relationship("MasterDriver", backref="case_reports")
     cause = relationship("MasterCause", backref="case_reports")
@@ -136,16 +136,16 @@ class CaseReport(Base):
         return {
             "case_id": self.case_id,
             "document_no": self.document_no,
-            "site": self.site.site_name_en if self.site else None,
-            "department": self.department.department_name_en if self.department else None,
+            "site": self.site.site_name_th if self.site else None,
+            "department": self.department.department_name_th if self.department else None,
             "client": self.client.client_name if self.client else None,
-            "vehicle_head": f"{self.vehicle_head.truck_no} / {self.vehicle_head.vehicle_number_plate}" if self.vehicle_head else None,
-            "vehicle_tail": f"{self.vehicle_tail.truck_no} / {self.vehicle_tail.vehicle_number_plate}" if self.vehicle_tail else None,
+            "vehicle_head": f"{self.vehicle_head.vehicle_number_plate}" if self.vehicle_head else None,
+            "vehicle_tail": f"{self.vehicle_tail.vehicle_number_plate}" if self.vehicle_tail else None,
+            "vehicle_truckno": self.vehicle_truckno,
             "driver": f"{self.driver.first_name} {self.driver.last_name}" if self.driver else None,
             "driver_role": self.driver_role.role_name if self.driver_role else None,
             "incident_cause": self.cause.cause_name if self.cause else None,
-            "employee": self.employee_id,
-            "reporter": self.reporter.username if self.reporter else None,
+            "reporter": f"{self.reporter.firstname} {self.reporter.lastname}" if self.reporter else None,
             "record_date": self.record_date.isoformat() if self.record_date else None,
             "incident_date": self.incident_date.isoformat() if self.incident_date else None,
             "case_location": self.case_location,
