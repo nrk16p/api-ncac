@@ -16,7 +16,7 @@ from routes import (
     driver_roles,
     masterdrivers,
     mastercauses,
-    case_reports,
+    case_reports, positions, position_levels
 )
 
 app = FastAPI(title="NCAC API", version="1.0.0")
@@ -32,6 +32,8 @@ app.include_router(driver_roles.router)
 app.include_router(masterdrivers.router)
 app.include_router(mastercauses.router)
 app.include_router(case_reports.router)
+app.include_router(positions.router)
+app.include_router(position_levels.router)
 
 @app.get("/")
 def root():

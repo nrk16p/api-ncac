@@ -17,7 +17,7 @@ class Position(Base):
     position_name_th = Column(String(255), nullable=False)
     position_name_en = Column(String(255), nullable=False)
     position_level_id = Column(Integer, ForeignKey("position_levels.position_level_id"), nullable=False)
-    level = relationship("PositionLevel", backref="positions")
+    level = relationship("PositionLevel", backref="positions")   # 👈 ตรงนี้ใช้ชื่อ level
 
 class User(Base):
     __tablename__ = "users"
@@ -187,3 +187,4 @@ class RegisterRequest(BaseModel):
     department_id: Optional[int]
     site_id: Optional[int]
     position_id: Optional[int]
+    

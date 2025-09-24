@@ -11,31 +11,34 @@ router = APIRouter(prefix="/case_reports", tags=["Case Reports"])
 SITE_CODES = {
     2: "LB",
     3: "SB",
-    4: "RY",
-    5: "KK",
-    6: "BPK",
+    4: "SB",
+    5: "LB",
+    6: "BP",
 }
 
 def generate_document_no(db: Session, site_id: int) -> str:
     # Step 1: site code
     site_code = SITE_CODES.get(site_id, "XX")  # fallback if unknown
 
-    # Step 2: current YYMM
+    # Step 2: all site_ids with the same site_code
+    grouped_sites = [sid for sid, code in SITE_CODES.items() if code == site_code]
+
+    # Step 3: current YYMM
     now = datetime.now()
     yymm = now.strftime("%y%m")
 
-    # Step 3: start/end of current month
+    # Step 4: start/end of current month
     start_of_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     if now.month == 12:
         next_month = now.replace(year=now.year + 1, month=1, day=1)
     else:
         next_month = now.replace(month=now.month + 1, day=1)
 
-    # Step 4: count cases for THIS site_id in this month
+    # Step 5: count cases for THIS site_code group in this month
     count = (
         db.query(CaseReport)
         .filter(
-            CaseReport.site_id == site_id,
+            CaseReport.site_id.in_(grouped_sites),
             CaseReport.record_date >= start_of_month,
             CaseReport.record_date < next_month,
         )
@@ -44,8 +47,8 @@ def generate_document_no(db: Session, site_id: int) -> str:
 
     running = f"{count + 1:03d}"  # 001, 002, ...
 
-    # Step 5: final format
-    return f"NCB-{site_code}-{yymm}-{running}"
+    # Step 6: final format
+    return f"NC-{site_code}-{yymm}-{running}"
 
 def parse_dt(val):
     if not val:
@@ -132,7 +135,7 @@ def create_or_update_case_report(payload: CaseReportSchema, db: Session = Depend
         estimated_cost=payload.estimated_cost,
         actual_price=payload.actual_price,
         attachments=payload.attachments,
-        casestatus=payload.casestatus or "OPEN",
+        casestatus=payload.casestatus or "สร้างเอกสาร",
     )
     db.add(report)
     db.flush()
