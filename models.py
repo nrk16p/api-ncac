@@ -66,7 +66,6 @@ class Location(Base):
     __tablename__ = "locations"
     location_id = Column(Integer, primary_key=True, index=True)
     location_name = Column(String(255), nullable=False)
-    location_address = Column(String(255), nullable=True)
 
 class DriverRole(Base):
     __tablename__ = "driver_roles"

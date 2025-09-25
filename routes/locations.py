@@ -9,7 +9,6 @@ router = APIRouter(prefix="/locations", tags=["Locations"])
 
 class LocationBase(BaseModel):
     location_name: Optional[str] = None
-    location_address: Optional[str] = None
 
 class LocationCreate(LocationBase):
     location_name: str
@@ -21,7 +20,7 @@ class LocationResponse(LocationBase):
 
 @router.post("/", response_model=LocationResponse, status_code=201)
 def create_location(payload: LocationCreate, db: Session = Depends(get_db)):
-    loc = Location(location_name=payload.location_name, location_address=payload.location_address)
+    loc = Location(location_name=payload.location_name)
     db.add(loc)
     db.commit()
     db.refresh(loc)
@@ -38,8 +37,6 @@ def update_location(location_id: int, payload: LocationBase, db: Session = Depen
         raise HTTPException(status_code=404, detail="Location not found")
     if payload.location_name is not None:
         loc.location_name = payload.location_name
-    if payload.location_address is not None:
-        loc.location_address = payload.location_address
     db.commit()
     return {"message": "Location updated"}
 
