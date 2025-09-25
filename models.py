@@ -50,6 +50,8 @@ class Site(Base):
     site_code = Column(String(50), unique=True, nullable=True)
     site_name_th = Column(String(255), nullable=False)
     site_name_en = Column(String(255), nullable=False)
+    
+
 
 class Department(Base):
     __tablename__ = "departments"
@@ -63,10 +65,18 @@ class Client(Base):
     client_name = Column(String(255), nullable=False)
     contact_info = Column(String(255))
 
+
 class Location(Base):
     __tablename__ = "locations"
     location_id = Column(Integer, primary_key=True, index=True)
     location_name = Column(String(255), nullable=False)
+    address = Column(String(255))
+    site_id = Column(Integer, ForeignKey("sites.site_id"))
+
+    site = relationship("Site", backref="locations")
+
+    
+
 
 class DriverRole(Base):
     __tablename__ = "driver_roles"
