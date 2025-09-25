@@ -99,7 +99,9 @@ class MasterCause(Base):
     cause_id = Column(Integer, primary_key=True, index=True)
     cause_name = Column(String(255), nullable=False)
     description = Column(String(255))
-
+    site_id = Column(Integer, ForeignKey("sites.site_id"))
+    site = relationship("Site", backref="locations")
+    
 class Vehicle(Base):
     __tablename__ = "vehicles"
     vehicle_id = Column(Integer, primary_key=True, index=True)
