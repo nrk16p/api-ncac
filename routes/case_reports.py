@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from database import get_db
 from models import CaseReport, CaseProduct
 
+
 router = APIRouter(prefix="/case_reports", tags=["Case Reports"])
 
 SITE_CODES = {
@@ -145,37 +146,37 @@ def create_or_update_case_report(payload: CaseReportSchema, db: Session = Depend
     return {"message": "Case report created", "document_no": document_no}
 
 
+
+
 @router.get("/")
 def get_case_reports(
     db: Session = Depends(get_db),
-    document_no: Optional[str] = Query(None),
-    site_id: Optional[int] = Query(None),
-    driver_id: Optional[str] = Query(None),
-    casestatus: Optional[str] = Query(None),
+    document_no: Optional[List[str]] = Query(None),
+    site_id: Optional[List[int]] = Query(None),
+    driver_id: Optional[List[int]] = Query(None),
+    casestatus: Optional[List[str]] = Query(None),
     start_date: Optional[str] = Query(None),
     end_date: Optional[str] = Query(None)
 ):
     query = db.query(CaseReport)
 
     if document_no:
-        query = query.filter(CaseReport.document_no.ilike(f"%{document_no}%"))
+        query = query.filter(CaseReport.document_no.in_(document_no))
     if site_id:
-        query = query.filter(CaseReport.site_id == site_id)
+        query = query.filter(CaseReport.site_id.in_(site_id))
     if driver_id:
-        query = query.filter(CaseReport.driver_id == driver_id)
+        query = query.filter(CaseReport.driver_id.in_(driver_id))
     if casestatus:
-        query = query.filter(CaseReport.casestatus == casestatus)
+        query = query.filter(CaseReport.casestatus.in_(casestatus))
     if start_date and end_date:
-        try:
-            start = parse_dt(start_date)
-            end = parse_dt(end_date)
-            if start and end:
-                query = query.filter(CaseReport.record_date.between(start, end))
-        except Exception:
-            pass
+        start = parse_dt(start_date)
+        end = parse_dt(end_date)
+        if start and end:
+            query = query.filter(CaseReport.record_date.between(start, end))
 
     reports = query.order_by(CaseReport.case_id.desc()).all()
     return [r.to_dict() for r in reports]
+
 
 @router.get("/{document_no}")
 def get_case_report(document_no: str, db: Session = Depends(get_db)):
