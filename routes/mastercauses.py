@@ -14,7 +14,7 @@ class MasterCauseBase(BaseModel):
 
 class MasterCauseResponse(MasterCauseBase):
     cause_id: int
-    site_id: int
+    site_id: Optional[int] = None
     class Config:
         orm_mode = True
 
