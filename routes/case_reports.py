@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException , Query
 from sqlalchemy.orm import Session
 from datetime import datetime
 from typing import List, Optional
@@ -144,9 +144,37 @@ def create_or_update_case_report(payload: CaseReportSchema, db: Session = Depend
     db.commit()
     return {"message": "Case report created", "document_no": document_no}
 
+
 @router.get("/")
-def get_case_reports(db: Session = Depends(get_db)):
-    reports = db.query(CaseReport).order_by(CaseReport.case_id.desc()).all()
+def get_case_reports(
+    db: Session = Depends(get_db),
+    document_no: Optional[str] = Query(None),
+    site_id: Optional[int] = Query(None),
+    driver_id: Optional[int] = Query(None),
+    casestatus: Optional[str] = Query(None),
+    start_date: Optional[str] = Query(None),
+    end_date: Optional[str] = Query(None)
+):
+    query = db.query(CaseReport)
+
+    if document_no:
+        query = query.filter(CaseReport.document_no.ilike(f"%{document_no}%"))
+    if site_id:
+        query = query.filter(CaseReport.site_id == site_id)
+    if driver_id:
+        query = query.filter(CaseReport.driver_id == driver_id)
+    if casestatus:
+        query = query.filter(CaseReport.casestatus == casestatus)
+    if start_date and end_date:
+        try:
+            start = parse_dt(start_date)
+            end = parse_dt(end_date)
+            if start and end:
+                query = query.filter(CaseReport.record_date.between(start, end))
+        except Exception:
+            pass
+
+    reports = query.order_by(CaseReport.case_id.desc()).all()
     return [r.to_dict() for r in reports]
 
 @router.get("/{document_no}")
