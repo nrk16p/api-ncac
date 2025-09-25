@@ -73,15 +73,16 @@ class DriverRole(Base):
     driver_role_id = Column(Integer, primary_key=True, index=True)
     role_name = Column(String(100), nullable=False)
 
+from sqlalchemy import Column, String, Integer, ForeignKey
+from database import Base
+
 class MasterDriver(Base):
     __tablename__ = "masterdrivers"
-    driver_id = Column(String, primary_key=True, index=True)
-    first_name = Column(String(100))
-    last_name = Column(String(100))
+    driver_id = Column(String, primary_key=True, index=True)   # เปลี่ยนจาก Integer → String
+    first_name = Column(String(100), nullable=False)
+    last_name = Column(String(100), nullable=False)
     site_id = Column(Integer, ForeignKey("sites.site_id"))
     driver_role_id = Column(Integer, ForeignKey("driver_roles.driver_role_id"))
-    site = relationship("Site", backref="drivers")
-    role = relationship("DriverRole", backref="drivers")
 
 class MasterCause(Base):
     __tablename__ = "mastercauses"
