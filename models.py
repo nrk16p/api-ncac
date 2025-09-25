@@ -75,7 +75,7 @@ class DriverRole(Base):
 
 class MasterDriver(Base):
     __tablename__ = "masterdrivers"
-    driver_id = Column(Integer, primary_key=True, index=True)
+    driver_id = Column(String, primary_key=True, index=True)
     first_name = Column(String(100))
     last_name = Column(String(100))
     site_id = Column(Integer, ForeignKey("sites.site_id"))
