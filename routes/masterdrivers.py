@@ -20,7 +20,7 @@ class MasterDriverCreate(MasterDriverBase):
     driver_role_id: int
 
 class MasterDriverResponse(MasterDriverBase):
-    driver_id: int
+    driver_id: str
     class Config:
         orm_mode = True
 
