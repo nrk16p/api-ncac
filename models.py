@@ -1,5 +1,6 @@
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Text, Numeric
+from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Text, Numeric ,TIMESTAMP , DECIMAL , JSON
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship, validates
 from passlib.context import CryptContext
 from database import Base
@@ -187,3 +188,82 @@ class RegisterRequest(BaseModel):
     site_id: Optional[int]
     position_id: Optional[int]
     
+
+class AccidentCase(Base):
+    __tablename__ = "accident_cases"
+
+    accident_case_id = Column(Integer, primary_key=True, index=True)
+    document_no_ac = Column(String(50), nullable=False)
+
+    site_id = Column(Integer, ForeignKey("sites.site_id"))
+    department_id = Column(Integer, ForeignKey("departments.department_id"))
+    client_id = Column(Integer, ForeignKey("clients.client_id"))
+    origin_id = Column(Integer, ForeignKey("locations.location_id"))
+    reporter_id = Column(Integer, ForeignKey("users.id"))
+
+    record_datetime = Column(TIMESTAMP, nullable=False)
+    incident_datetime = Column(TIMESTAMP, nullable=False)
+
+    province_id = Column(Integer, ForeignKey("provinces.province_id"))
+    district_id = Column(Integer, ForeignKey("districts.district_id"))
+    sub_district_id = Column(Integer, ForeignKey("sub_districts.sub_district_id"))
+    case_location = Column(String(255))
+    police_station_area = Column(String(255))
+
+    vehicle_id_head = Column(Integer, ForeignKey("vehicles.vehicle_id"))
+    vehicle_id_tail = Column(Integer, ForeignKey("vehicles.vehicle_id"))
+    vehicle_truckno = Column(String(50))
+    driver_role_id = Column(Integer, ForeignKey("driver_roles.driver_role_id"))
+    driver_id = Column(Integer, ForeignKey("masterdrivers.driver_id"))
+
+    case_details = Column(Text)
+    alcohol_test = Column(Text)
+    drug_test = Column(Text)
+    truck_damage = Column(Text)
+    product_damage = Column(Text)
+    product_damage_details = Column(Text)
+
+    injured_not_hospitalized = Column(Integer, default=0)
+    injured_hospitalized = Column(Integer, default=0)
+    fatalities = Column(Integer, default=0)
+    injury_description = Column(Text)
+
+    other_party_full_name = Column(String(255))
+    other_party_vehicle_plate = Column(String(50))
+    other_party_company_name = Column(String(255))
+    other_party_phone = Column(String(20))
+    other_party_insurance_name = Column(String(255))
+    other_party_claim_no = Column(String(50))
+    claim_officer_full_name = Column(String(255))
+    claim_officer_phone = Column(String(20))
+
+    estimated_goods_damage_value = Column(DECIMAL(12,2))
+    estimated_vehicle_damage_value = Column(DECIMAL(12,2))
+    actual_goods_damage_value = Column(DECIMAL(12,2))
+    actual_vehicle_damage_value = Column(DECIMAL(12,2))
+
+    attachments = Column(Text)
+    
+
+class Province(Base):
+    __tablename__ = "provinces"
+    province_id = Column(Integer, primary_key=True, index=True)
+    province_code = Column(String(10))
+    province_name_th = Column(String(100))
+    province_name_en = Column(String(100))
+
+class District(Base):
+    __tablename__ = "districts"
+    district_id = Column(Integer, primary_key=True, index=True)
+    province_id = Column(Integer)
+    district_code = Column(String(10))
+    district_name_th = Column(String(100))
+    district_name_en = Column(String(100))
+
+class SubDistrict(Base):
+    __tablename__ = "sub_districts"
+    sub_district_id = Column(Integer, primary_key=True, index=True)
+    district_id = Column(Integer)
+    sub_district_code = Column(String(10))
+    sub_district_name_th = Column(String(100))
+    sub_district_name_en = Column(String(100))
