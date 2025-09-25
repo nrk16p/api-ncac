@@ -100,7 +100,10 @@ class MasterCause(Base):
     cause_name = Column(String(255), nullable=False)
     description = Column(String(255))
     site_id = Column(Integer, ForeignKey("sites.site_id"))
-    site = relationship("Site", backref="locations")
+    
+    site = relationship("Site", backref="mastercauses")  # 👈 ผูกกับ mastercauses
+    
+    
     
 class Vehicle(Base):
     __tablename__ = "vehicles"
