@@ -18,6 +18,8 @@ class VehicleResponse(BaseModel):
     vehicle_id: int
     vehicle_number_plate: str
     truck_no: Optional[str] = None
+    plate_type: Optional[str] = None
+    
     class Config:
         orm_mode = True
 
