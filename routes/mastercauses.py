@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import List, Optional
@@ -31,15 +31,18 @@ def create_cause(payload: MasterCauseBase, db: Session = Depends(get_db)):
     db.refresh(c)
     return c
 
-# ✅ Read
+# ✅ Read (with optional site_id filter)
 @router.get("/", response_model=List[MasterCauseResponse])
-def get_causes(db: Session = Depends(get_db)):
-    return db.query(MasterCause).all()
+def get_causes(db: Session = Depends(get_db), site_id: Optional[int] = Query(None)):
+    query = db.query(MasterCause)
+    if site_id is not None:
+        query = query.filter(MasterCause.site_id == site_id)
+    return query.all()
 
 # ✅ Update
 @router.put("/{cause_id}", response_model=MasterCauseResponse)
 def update_cause(cause_id: int, payload: MasterCauseBase, db: Session = Depends(get_db)):
-    c = db.query(MasterCause).get(cause_id)
+    c = db.get(MasterCause, cause_id)   # 👈 ใช้ db.get แทน query.get
     if not c:
         raise HTTPException(status_code=404, detail="Cause not found")
 
@@ -55,7 +58,7 @@ def update_cause(cause_id: int, payload: MasterCauseBase, db: Session = Depends(
 # ✅ Delete
 @router.delete("/{cause_id}")
 def delete_cause(cause_id: int, db: Session = Depends(get_db)):
-    c = db.query(MasterCause).get(cause_id)
+    c = db.get(MasterCause, cause_id)   # 👈 ใช้ db.get แทน query.get
     if not c:
         raise HTTPException(status_code=404, detail="Cause not found")
     db.delete(c)
