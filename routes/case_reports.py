@@ -150,7 +150,7 @@ def get_case_reports(
     db: Session = Depends(get_db),
     document_no: Optional[str] = Query(None),
     site_id: Optional[int] = Query(None),
-    driver_id: Optional[int] = Query(None),
+    driver_id: Optional[str] = Query(None),
     casestatus: Optional[str] = Query(None),
     start_date: Optional[str] = Query(None),
     end_date: Optional[str] = Query(None)
