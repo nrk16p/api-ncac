@@ -1,6 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Text, Numeric ,TIMESTAMP , DECIMAL , JSON
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Text, Numeric
 from sqlalchemy.orm import relationship, validates
 from passlib.context import CryptContext
 from database import Base
@@ -18,7 +17,7 @@ class Position(Base):
     position_name_th = Column(String(255), nullable=False)
     position_name_en = Column(String(255), nullable=False)
     position_level_id = Column(Integer, ForeignKey("position_levels.position_level_id"), nullable=False)
-    level = relationship("PositionLevel", backref="positions")   # 👈 ตรงนี้ใช้ชื่อ level
+    level = relationship("PositionLevel", backref="positions")   # 👈 ใช้ชื่อ level
 
 class User(Base):
     __tablename__ = "users"
@@ -50,8 +49,6 @@ class Site(Base):
     site_code = Column(String(50), unique=True, nullable=True)
     site_name_th = Column(String(255), nullable=False)
     site_name_en = Column(String(255), nullable=False)
-    
-
 
 class Department(Base):
     __tablename__ = "departments"
@@ -65,53 +62,38 @@ class Client(Base):
     client_name = Column(String(255), nullable=False)
     contact_info = Column(String(255))
 
-
 class Location(Base):
     __tablename__ = "locations"
     location_id = Column(Integer, primary_key=True, index=True)
     location_name = Column(String(255), nullable=False)
-    address = Column(String(255))
-    site_id = Column(Integer, ForeignKey("sites.site_id"))
-
-    site = relationship("Site", backref="locations")
-
-    
-
+    location_address = Column(String(255), nullable=True)
 
 class DriverRole(Base):
     __tablename__ = "driver_roles"
     driver_role_id = Column(Integer, primary_key=True, index=True)
     role_name = Column(String(100), nullable=False)
 
-from sqlalchemy import Column, String, Integer, ForeignKey
-from database import Base
-
 class MasterDriver(Base):
     __tablename__ = "masterdrivers"
-    driver_id = Column(String, primary_key=True, index=True)   # เปลี่ยนจาก Integer → String
-    first_name = Column(String(100), nullable=False)
-    last_name = Column(String(100), nullable=False)
+    driver_id = Column(Integer, primary_key=True, index=True)
+    first_name = Column(String(100))
+    last_name = Column(String(100))
     site_id = Column(Integer, ForeignKey("sites.site_id"))
     driver_role_id = Column(Integer, ForeignKey("driver_roles.driver_role_id"))
+    site = relationship("Site", backref="drivers")
+    role = relationship("DriverRole", backref="drivers")
 
 class MasterCause(Base):
     __tablename__ = "mastercauses"
     cause_id = Column(Integer, primary_key=True, index=True)
     cause_name = Column(String(255), nullable=False)
     description = Column(String(255))
-    site_id = Column(Integer, ForeignKey("sites.site_id"))
-    
-    site = relationship("Site", backref="mastercauses")  # 👈 ผูกกับ mastercauses
-    
-    
-    
+
 class Vehicle(Base):
     __tablename__ = "vehicles"
     vehicle_id = Column(Integer, primary_key=True, index=True)
     truck_no = Column(String(50), nullable=False)
     vehicle_number_plate = Column(String(50), nullable=False)
-    plate_type = Column(String(50), nullable=False)
-    
 
 class CaseReport(Base):
     __tablename__ = "case_reports"
@@ -147,6 +129,7 @@ class CaseReport(Base):
     driver = relationship("MasterDriver", backref="case_reports")
     cause = relationship("MasterCause", backref="case_reports")
     reporter = relationship("User", backref="case_reports")
+    priority = Column(String(20), nullable=True)
 
     products = relationship("CaseProduct", backref="case_report", lazy="joined", cascade="all, delete-orphan")
 
@@ -177,6 +160,8 @@ class CaseReport(Base):
             "actual_price": str(self.actual_price) if self.actual_price else None,
             "attachments": self.attachments,
             "casestatus": self.casestatus,
+            "priority": self.priority,
+
         }
 
 class CaseProduct(Base):
@@ -207,81 +192,107 @@ class RegisterRequest(BaseModel):
     position_id: Optional[int]
     
 
+
+from sqlalchemy import Column, Integer, String, DateTime, Float, ForeignKey
+from sqlalchemy.orm import relationship
+from database import Base
+from datetime import datetime
+
 class AccidentCase(Base):
     __tablename__ = "accident_cases"
 
     accident_case_id = Column(Integer, primary_key=True, index=True)
-    document_no_ac = Column(String(50), nullable=False)
 
-    site_id = Column(Integer, ForeignKey("sites.site_id"))
-    department_id = Column(Integer, ForeignKey("departments.department_id"))
-    client_id = Column(Integer, ForeignKey("clients.client_id"))
-    origin_id = Column(Integer, ForeignKey("locations.location_id"))
-    reporter_id = Column(Integer, ForeignKey("users.id"))
+    # ✅ system-generated in API
+    document_no_ac = Column(String(50), nullable=False, unique=True, index=True)
 
-    record_datetime = Column(TIMESTAMP, nullable=False)
-    incident_datetime = Column(TIMESTAMP, nullable=False)
+    site_id = Column(Integer, ForeignKey("sites.site_id"), nullable=True)
+    department_id = Column(Integer, ForeignKey("departments.department_id"), nullable=True)
+    client_id = Column(Integer, ForeignKey("clients.client_id"), nullable=True)
+    origin_id = Column(Integer, ForeignKey("locations.location_id"), nullable=True)
+    reporter_id = Column(Integer, ForeignKey("users.employee_id"), nullable=True)
+    driver_id = Column(Integer, ForeignKey("drivers.driver_id"), nullable=True)
+    driver_role_id = Column(Integer, ForeignKey("driver_roles.driver_role_id"), nullable=True)
+    vehicle_id_head = Column(Integer, ForeignKey("vehicles.vehicle_id"), nullable=True)
+    vehicle_id_tail = Column(Integer, ForeignKey("vehicles.vehicle_id"), nullable=True)
+    incident_cause_id = Column(Integer, ForeignKey("incident_causes.incident_cause_id"), nullable=True)
 
-    province_id = Column(Integer, ForeignKey("provinces.province_id"))
-    district_id = Column(Integer, ForeignKey("districts.district_id"))
-    sub_district_id = Column(Integer, ForeignKey("sub_districts.sub_district_id"))
-    case_location = Column(String(255))
-    police_station_area = Column(String(255))
+    record_datetime = Column(DateTime, default=datetime.utcnow, nullable=False)
+    incident_datetime = Column(DateTime, nullable=False)
 
-    vehicle_id_head = Column(Integer, ForeignKey("vehicles.vehicle_id"))
-    vehicle_id_tail = Column(Integer, ForeignKey("vehicles.vehicle_id"))
-    vehicle_truckno = Column(String(50))
-    driver_role_id = Column(Integer, ForeignKey("driver_roles.driver_role_id"))
-    driver_id = Column(Integer, ForeignKey("masterdrivers.driver_id"))
+    destination = Column(String(255), nullable=True)
+    case_location = Column(String(255), nullable=True)
+    police_station_area = Column(String(255), nullable=True)
+    vehicle_truckno = Column(String(50), nullable=True)
+    case_details = Column(String(500), nullable=True)
 
-    case_details = Column(Text)
-    alcohol_test = Column(Text)
-    drug_test = Column(Text)
-    truck_damage = Column(Text)
-    product_damage = Column(Text)
-    product_damage_details = Column(Text)
+    alcohol_test = Column(String(50), nullable=True)
+    drug_test = Column(String(50), nullable=True)
+    truck_damage = Column(String(255), nullable=True)
+    product_damage = Column(String(255), nullable=True)
+    product_damage_details = Column(String(500), nullable=True)
 
     injured_not_hospitalized = Column(Integer, default=0)
     injured_hospitalized = Column(Integer, default=0)
     fatalities = Column(Integer, default=0)
-    injury_description = Column(Text)
+    injury_description = Column(String(500), nullable=True)
 
-    other_party_full_name = Column(String(255))
-    other_party_vehicle_plate = Column(String(50))
-    other_party_company_name = Column(String(255))
-    other_party_phone = Column(String(20))
-    other_party_insurance_name = Column(String(255))
-    other_party_claim_no = Column(String(50))
-    claim_officer_full_name = Column(String(255))
-    claim_officer_phone = Column(String(20))
+    other_party_full_name = Column(String(255), nullable=True)
+    other_party_vehicle_plate = Column(String(50), nullable=True)
+    other_party_company_name = Column(String(255), nullable=True)
+    other_party_phone = Column(String(50), nullable=True)
+    other_party_insurance_name = Column(String(255), nullable=True)
+    other_party_claim_no = Column(String(100), nullable=True)
+    claim_officer_full_name = Column(String(255), nullable=True)
+    claim_officer_phone = Column(String(50), nullable=True)
 
-    estimated_goods_damage_value = Column(DECIMAL(12,2))
-    estimated_vehicle_damage_value = Column(DECIMAL(12,2))
-    actual_goods_damage_value = Column(DECIMAL(12,2))
-    actual_vehicle_damage_value = Column(DECIMAL(12,2))
+    estimated_goods_damage_value = Column(Float, nullable=True)
+    estimated_vehicle_damage_value = Column(Float, nullable=True)
+    actual_goods_damage_value = Column(Float, nullable=True)
+    actual_vehicle_damage_value = Column(Float, nullable=True)
 
-    attachments = Column(Text)
+    attachments = Column(String(500), nullable=True)
+
+    # relationships (optional if you want to join later)
+    site = relationship("Site", backref="accident_cases")
+    department = relationship("Department", backref="accident_cases")
+    client = relationship("Client", backref="accident_cases")
+    reporter = relationship("User", backref="reported_cases")
     
-
 class Province(Base):
     __tablename__ = "provinces"
+
     province_id = Column(Integer, primary_key=True, index=True)
-    province_code = Column(String(10))
-    province_name_th = Column(String(100))
-    province_name_en = Column(String(100))
+    province_name_th = Column(String(255), nullable=False)
+    province_name_en = Column(String(255), nullable=True)
+
+    # backref to districts
+    districts = relationship("District", back_populates="province")
+
 
 class District(Base):
     __tablename__ = "districts"
+
     district_id = Column(Integer, primary_key=True, index=True)
-    province_id = Column(Integer)
-    district_code = Column(String(10))
-    district_name_th = Column(String(100))
-    district_name_en = Column(String(100))
+    province_id = Column(Integer, ForeignKey("provinces.province_id"), nullable=False)
+    district_code = Column(String(10), nullable=True)
+    district_name_th = Column(String(100), nullable=False)
+    district_name_en = Column(String(100), nullable=True)
+
+    # ✅ relationship to Province
+    province = relationship("Province", back_populates="districts")
+
+    # ✅ backref for sub_districts
+    sub_districts = relationship("SubDistrict", back_populates="district")
+
 
 class SubDistrict(Base):
     __tablename__ = "sub_districts"
+
     sub_district_id = Column(Integer, primary_key=True, index=True)
-    district_id = Column(Integer)
-    sub_district_code = Column(String(10))
-    sub_district_name_th = Column(String(100))
-    sub_district_name_en = Column(String(100))
+    district_id = Column(Integer, ForeignKey("districts.district_id"), nullable=False)
+    sub_district_name_th = Column(String(100), nullable=False)
+    sub_district_name_en = Column(String(100), nullable=True)
+
+    # ✅ relationship to District
+    district = relationship("District", back_populates="sub_districts")

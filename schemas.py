@@ -71,8 +71,12 @@ class User(UserBase):
 
     class Config:
         orm_mode = True
+from pydantic import BaseModel
+from datetime import datetime
+from typing import Optional
+
+# ✅ Base: shared optional fields (no document_no_ac here)
 class AccidentCaseBase(BaseModel):
-    document_no_ac: str
     site_id: Optional[int] = None
     department_id: Optional[int] = None
     client_id: Optional[int] = None
@@ -114,14 +118,94 @@ class AccidentCaseBase(BaseModel):
     actual_vehicle_damage_value: Optional[float] = None
     attachments: Optional[str] = None
 
+
+# ✅ Create: what the client sends (no accident_case_id, no document_no_ac)
 class AccidentCaseCreate(AccidentCaseBase):
     pass
 
+
+# ✅ Update: same as base, partial updates allowed
 class AccidentCaseUpdate(AccidentCaseBase):
     pass
 
+
+# ✅ Response: includes system-generated fields
 class AccidentCaseResponse(AccidentCaseBase):
     accident_case_id: int
+    document_no_ac: str   # system-generated
 
     class Config:
         orm_mode = True
+        
+# ----------------------
+# Province
+# ----------------------
+class ProvinceBase(BaseModel):
+    province_name_th: str
+    province_name_en: Optional[str] = None
+
+
+class ProvinceCreate(ProvinceBase):
+    pass
+
+
+class ProvinceUpdate(ProvinceBase):
+    pass
+
+
+class ProvinceResponse(ProvinceBase):
+    province_id: int
+
+    class Config:
+        orm_mode = True
+
+
+# ----------------------
+# District
+# ----------------------
+class DistrictBase(BaseModel):
+    district_name_th: str
+    district_name_en: Optional[str] = None
+    province_id: int
+
+
+class DistrictCreate(DistrictBase):
+    pass
+
+
+class DistrictUpdate(DistrictBase):
+    pass
+
+
+class DistrictResponse(DistrictBase):
+    district_id: int
+    province: Optional[ProvinceResponse] = None   # ✅ allow missing
+
+    class Config:
+        orm_mode = True
+
+
+# ----------------------
+# SubDistrict
+# ----------------------
+class SubDistrictBase(BaseModel):
+    sub_district_name_th: str
+    sub_district_name_en: Optional[str] = None
+    district_id: int
+
+
+class SubDistrictCreate(SubDistrictBase):
+    pass
+
+
+class SubDistrictUpdate(SubDistrictBase):
+    pass
+
+
+class SubDistrictResponse(SubDistrictBase):
+    sub_district_id: int
+    district: DistrictResponse
+
+    class Config:
+        orm_mode = True
+        
