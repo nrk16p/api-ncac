@@ -97,6 +97,8 @@ class Vehicle(Base):
     vehicle_id = Column(Integer, primary_key=True, index=True)
     truck_no = Column(String(50), nullable=False)
     vehicle_number_plate = Column(String(50), nullable=False)
+    plate_type = Column(String(50), nullable=False)
+
 
 class CaseReport(Base):
     __tablename__ = "case_reports"
