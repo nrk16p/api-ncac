@@ -117,6 +117,9 @@ class AccidentCaseBase(BaseModel):
     actual_goods_damage_value: Optional[float] = None
     actual_vehicle_damage_value: Optional[float] = None
     attachments: Optional[str] = None
+    casestatus: Optional[str] = None
+    priority: Optional[str] = None
+
 
 
 # ✅ Create: what the client sends (no accident_case_id, no document_no_ac)

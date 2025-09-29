@@ -79,7 +79,7 @@ class CaseReportSchema(BaseModel):
     vehicle_truckno: Optional[str] = None
     origin_id: Optional[int] = None
     driver_role_id: Optional[int] = None
-    driver_id: Optional[int] = None
+    driver_id: Optional[str] = None
     incident_cause_id: Optional[int] = None
     reporter_id: Optional[int] = None
     record_date: Optional[str] = None
@@ -92,6 +92,8 @@ class CaseReportSchema(BaseModel):
     attachments: Optional[str] = None
     casestatus: Optional[str] = "OPEN"
     products: Optional[List[ProductSchema]] = None
+    priority: Optional[List[ProductSchema]] = None
+    
 
 def calculate_priority(estimated_cost: float, actual_price: float) -> Optional[str]:
     value = actual_price if actual_price not in (None, 0) else estimated_cost
@@ -177,8 +179,10 @@ def get_case_reports(
     db: Session = Depends(get_db),
     document_no: Optional[List[str]] = Query(None),
     site_id: Optional[List[int]] = Query(None),
-    driver_id: Optional[List[int]] = Query(None),
+    driver_id: Optional[List[str]] = Query(None),
     casestatus: Optional[List[str]] = Query(None),
+    priority: Optional[List[str]] = Query(None),
+
     start_date: Optional[str] = Query(None),
     end_date: Optional[str] = Query(None),
 ):
@@ -187,6 +191,8 @@ def get_case_reports(
         query = query.filter(CaseReport.document_no.in_(document_no))
     if site_id:
         query = query.filter(CaseReport.site_id.in_(site_id))
+    if priority:
+        query = query.filter(CaseReport.priority.in_(priority))
     if driver_id:
         query = query.filter(CaseReport.driver_id.in_(driver_id))
     if casestatus:

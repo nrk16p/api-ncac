@@ -260,7 +260,8 @@ class AccidentCase(Base):
     actual_vehicle_damage_value = Column(Float, nullable=True)
 
     attachments = Column(String(500), nullable=True)
-
+    casestatus = Column(String(500), nullable=True)
+    priority = Column(String(500), nullable=True)
     # relationships (optional if you want to join later)
     site = relationship("Site", backref="accident_cases")
     department = relationship("Department", backref="accident_cases")

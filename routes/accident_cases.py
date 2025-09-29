@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 from datetime import datetime
 
 from database import get_db
@@ -22,51 +22,80 @@ SITE_CODES = {
 
 def generate_document_no_ac(db: Session, site_id: int) -> str:
     """Generate a unique accident case document number based on site and month."""
-    # Step 1: site code
     site_code = SITE_CODES.get(site_id, "XX")
 
-    # Step 2: all site_ids with the same site_code
+    # All site_ids with the same site_code
     grouped_sites = [sid for sid, code in SITE_CODES.items() if code == site_code]
 
-    # Step 3: current YYMM
     now = datetime.now()
     yymm = now.strftime("%y%m")
 
-    # Step 4: month start/end
+    # Month start/end
     start_of_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     if now.month == 12:
         next_month = now.replace(year=now.year + 1, month=1, day=1)
     else:
         next_month = now.replace(month=now.month + 1, day=1)
 
-    # Step 5: count existing cases for this site group and month
+    # Count existing cases
     count = (
         db.query(models.AccidentCase)
         .filter(
             models.AccidentCase.site_id.in_(grouped_sites),
-            models.AccidentCase.record_datetime >= start_of_month,   # ✅ fixed
+            models.AccidentCase.record_datetime >= start_of_month,
             models.AccidentCase.record_datetime < next_month,
         )
         .count()
     )
 
     running = f"{count + 1:03d}"
-
-    # Step 6: final format
     return f"AC-{site_code}-{yymm}-{running}"
 
+
+def calculate_priority(
+    estimated_goods_damage_value: Optional[float],
+    estimated_vehicle_damage_value: Optional[float],
+    actual_goods_damage_value: Optional[float],
+    actual_vehicle_damage_value: Optional[float]
+) -> Optional[str]:
+    """Calculate priority based on sum of goods + vehicle damages."""
+    estimate = (estimated_goods_damage_value or 0) + (estimated_vehicle_damage_value or 0)
+    actual = (actual_goods_damage_value or 0) + (actual_vehicle_damage_value or 0)
+
+    value = actual if actual not in (None, 0) else estimate
+    if value in (None, 0):
+        return None
+
+    value = float(value)
+    if value < 5000:
+        return "Minor"
+    elif 5000 <= value <= 50000:
+        return "Significant"
+    elif 50000 < value <= 500000:
+        return "Major"
+    else:
+        return "Crisis"
 
 # -----------------------------
 # Routes
 # -----------------------------
 @router.post("/", response_model=schemas.AccidentCaseResponse, status_code=201)
 def create_case(payload: schemas.AccidentCaseCreate, db: Session = Depends(get_db)):
-    """Create a new accident case with auto-generated document number."""
+    """Create a new accident case with auto-generated document number and priority."""
     doc_no = generate_document_no_ac(db, payload.site_id)
 
+    priority = calculate_priority(
+        payload.estimated_goods_damage_value,
+        payload.estimated_vehicle_damage_value,
+        payload.actual_goods_damage_value,
+        payload.actual_vehicle_damage_value,
+    )
+
     case = models.AccidentCase(
-        **payload.dict(),
-        document_no_ac=doc_no   # ✅ fixed name
+        **payload.dict(exclude={"priority", "document_no_ac", "casestatus"}),  # 🚫 exclude client value
+        document_no_ac=doc_no,
+        priority=priority,
+        casestatus="OPEN"  # ✅ always OPEN on creation
     )
     db.add(case)
     db.commit()
@@ -91,13 +120,21 @@ def get_case(case_id: int, db: Session = Depends(get_db)):
 
 @router.put("/{case_id}", response_model=schemas.AccidentCaseResponse)
 def update_case(case_id: int, payload: schemas.AccidentCaseUpdate, db: Session = Depends(get_db)):
-    """Update an existing accident case."""
+    """Update an existing accident case and recalc priority."""
     case = db.query(models.AccidentCase).get(case_id)
     if not case:
         raise HTTPException(status_code=404, detail="Case not found")
 
-    for key, value in payload.dict(exclude_unset=True).items():
+    for key, value in payload.dict(exclude_unset=True, exclude={"priority", "document_no_ac"}).items():
         setattr(case, key, value)
+
+    # Recalc priority
+    case.priority = calculate_priority(
+        getattr(case, "estimated_goods_damage_value", None),
+        getattr(case, "estimated_vehicle_damage_value", None),
+        getattr(case, "actual_goods_damage_value", None),
+        getattr(case, "actual_vehicle_damage_value", None),
+    )
 
     db.commit()
     db.refresh(case)
@@ -113,4 +150,3 @@ def delete_case(case_id: int, db: Session = Depends(get_db)):
 
     db.delete(case)
     db.commit()
-    return
