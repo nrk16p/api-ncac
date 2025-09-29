@@ -204,7 +204,7 @@ def get_case_reports(
         if start and end:
             next_day = end + timedelta(days=1)
             query = query.filter(CaseReport.record_date >= start,
-                                CaseReport.record_date < next_day)
+                                CaseReport.record_date <= next_day)
 
 
     reports = query.order_by(CaseReport.case_id.desc()).all()
