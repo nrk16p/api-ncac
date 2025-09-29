@@ -4,8 +4,11 @@ from sqlalchemy.orm import relationship, validates
 from passlib.context import CryptContext
 from database import Base
 from pydantic import BaseModel
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
+pwd_context = CryptContext(
+    schemes=["argon2"],  # ✅ ใช้ argon2 แทน bcrypt
+    deprecated="auto"
+)
 class PositionLevel(Base):
     __tablename__ = "position_levels"
     position_level_id = Column(Integer, primary_key=True, index=True)
@@ -66,7 +69,6 @@ class Location(Base):
     __tablename__ = "locations"
     location_id = Column(Integer, primary_key=True, index=True)
     location_name = Column(String(255), nullable=False)
-    location_address = Column(String(255), nullable=True)
 
 class DriverRole(Base):
     __tablename__ = "driver_roles"

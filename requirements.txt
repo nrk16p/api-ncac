@@ -5,4 +5,5 @@ alembic
 python-dotenv
 psycopg2-binary
 PyJWT
-passlib[bcrypt]
+passlib
+argon2-cffi
