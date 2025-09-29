@@ -69,6 +69,7 @@ class Location(Base):
     __tablename__ = "locations"
     location_id = Column(Integer, primary_key=True, index=True)
     location_name = Column(String(255), nullable=False)
+    site_id = Column(Integer, ForeignKey("sites.site_id"), nullable=False)
 
 class DriverRole(Base):
     __tablename__ = "driver_roles"
@@ -213,11 +214,14 @@ class AccidentCase(Base):
     client_id = Column(Integer, ForeignKey("clients.client_id"), nullable=True)
     origin_id = Column(Integer, ForeignKey("locations.location_id"), nullable=True)
     reporter_id = Column(Integer, ForeignKey("users.employee_id"), nullable=True)
-    driver_id = Column(Integer, ForeignKey("drivers.driver_id"), nullable=True)
+    driver_id = Column(String(255), ForeignKey("masterdrivers.driver_id"), nullable=True)
     driver_role_id = Column(Integer, ForeignKey("driver_roles.driver_role_id"), nullable=True)
     vehicle_id_head = Column(Integer, ForeignKey("vehicles.vehicle_id"), nullable=True)
     vehicle_id_tail = Column(Integer, ForeignKey("vehicles.vehicle_id"), nullable=True)
-    incident_cause_id = Column(Integer, ForeignKey("incident_causes.incident_cause_id"), nullable=True)
+    province_id = Column(Integer, ForeignKey("provinces.province_id"), nullable=True)
+    province_id = Column(Integer, ForeignKey("provinces.province_id"), nullable=True)
+    district_id = Column(Integer, ForeignKey("districts.district_id"), nullable=True)
+    sub_district_id = Column(Integer, ForeignKey("sub_districts.sub_district_id"), nullable=True)
 
     record_datetime = Column(DateTime, default=datetime.utcnow, nullable=False)
     incident_datetime = Column(DateTime, nullable=False)

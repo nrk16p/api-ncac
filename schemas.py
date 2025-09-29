@@ -93,7 +93,7 @@ class AccidentCaseBase(BaseModel):
     vehicle_id_tail: Optional[int] = None
     vehicle_truckno: Optional[str] = None
     driver_role_id: Optional[int] = None
-    driver_id: Optional[int] = None
+    driver_id: Optional[str] = None
     case_details: Optional[str] = None
     alcohol_test: Optional[str] = None
     drug_test: Optional[str] = None
@@ -208,4 +208,12 @@ class SubDistrictResponse(SubDistrictBase):
 
     class Config:
         orm_mode = True
-        
+class LocationBase(BaseModel):
+    location_name: str
+    site_id: Optional[int] = None
+            
+class LocationResponse(LocationBase):
+    location_id: int
+
+    class Config:
+        orm_mode = True
