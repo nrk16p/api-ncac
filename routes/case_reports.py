@@ -200,8 +200,12 @@ def get_case_reports(
     if start_date and end_date:
         start = parse_dt(start_date)
         end = parse_dt(end_date)
+
         if start and end:
-            query = query.filter(CaseReport.record_date.between(start, end))
+            next_day = end + timedelta(days=1)
+            query = query.filter(CaseReport.record_date >= start,
+                                CaseReport.record_date < next_day)
+
 
     reports = query.order_by(CaseReport.case_id.desc()).all()
     return [r.to_dict() for r in reports]
