@@ -5,6 +5,7 @@ from typing import List, Optional
 from pydantic import BaseModel
 from database import get_db
 from models import CaseReport, CaseProduct
+from datetime import timedelta
 
 router = APIRouter(prefix="/case_reports", tags=["Case Reports"])
 
@@ -197,14 +198,16 @@ def get_case_reports(
         query = query.filter(CaseReport.driver_id.in_(driver_id))
     if casestatus:
         query = query.filter(CaseReport.casestatus.in_(casestatus))
+
     if start_date and end_date:
         start = parse_dt(start_date)
         end = parse_dt(end_date)
 
         if start and end:
-            next_day = end + timedelta(days=1)
+            # use half-open interval [start, end+1day)
+            end_next = end + timedelta(days=1)
             query = query.filter(CaseReport.record_date >= start,
-                                CaseReport.record_date <= next_day)
+                                CaseReport.record_date < end_next)
 
 
     reports = query.order_by(CaseReport.case_id.desc()).all()
