@@ -102,6 +102,7 @@ class Vehicle(Base):
 
 class CaseReport(Base):
     __tablename__ = "case_reports"
+
     case_id = Column(Integer, primary_key=True, autoincrement=True)
     document_no = Column(String(50), nullable=False, unique=True)
     site_id = Column(Integer, ForeignKey("sites.site_id"), nullable=False)
@@ -123,20 +124,27 @@ class CaseReport(Base):
     actual_price = Column(Numeric(12, 2))
     attachments = Column(String(255))
     casestatus = Column(String(50), default="OPEN")
+    vehicle_truckno = Column(String(50), nullable=True)
+    priority = Column(String(20), nullable=True)
 
+    # ✅ Relationships
     site = relationship("Site", backref="case_reports")
     department = relationship("Department", backref="case_reports")
     client = relationship("Client", backref="case_reports")
     vehicle_head = relationship("Vehicle", foreign_keys=[vehicle_id_head])
     vehicle_tail = relationship("Vehicle", foreign_keys=[vehicle_id_tail])
-    vehicle_truckno = Column(String(50), nullable=True)
     driver_role = relationship("DriverRole", backref="case_reports")
     driver = relationship("MasterDriver", backref="case_reports")
     cause = relationship("MasterCause", backref="case_reports")
     reporter = relationship("User", backref="case_reports")
-    priority = Column(String(20), nullable=True)
+    origin = relationship("Location", backref="case_reports_origin")  # ✅ added
 
-    products = relationship("CaseProduct", backref="case_report", lazy="joined", cascade="all, delete-orphan")
+    products = relationship(
+        "CaseProduct",
+        backref="case_report",
+        lazy="joined",
+        cascade="all, delete-orphan"
+    )
 
     def to_dict(self):
         return {
@@ -154,6 +162,10 @@ class CaseReport(Base):
             "reporter": f"{self.reporter.firstname} {self.reporter.lastname}" if self.reporter else None,
             "record_date": self.record_date.isoformat() if self.record_date else None,
             "incident_date": self.incident_date.isoformat() if self.incident_date else None,
+
+            # ✅ fixed origin
+            "origin_name": self.origin.location_name if self.origin else None,
+
             "case_location": self.case_location,
             "destination": self.destination,
             "case_details": self.case_details,
@@ -166,7 +178,6 @@ class CaseReport(Base):
             "attachments": self.attachments,
             "casestatus": self.casestatus,
             "priority": self.priority,
-
         }
 
 class CaseProduct(Base):
