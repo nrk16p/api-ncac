@@ -56,22 +56,75 @@ def calculate_priority(
     estimated_goods_damage_value: Optional[float],
     estimated_vehicle_damage_value: Optional[float],
     actual_goods_damage_value: Optional[float],
-    actual_vehicle_damage_value: Optional[float]
+    actual_vehicle_damage_value: Optional[float],
+    alcohol_test_result: Optional[float],
+    drug_test_result: Optional[str],
+    injured_not_hospitalized: Optional[int],
+    injured_hospitalized: Optional[int],
+    fatalities: Optional[int]
 ) -> Optional[str]:
-    """Calculate priority based on sum of goods + vehicle damages."""
+    """
+    Calculate priority based on damage, test results, injuries, and fatalities.
+    
+    Priority Rules:
+    - Crisis: Total damage >500,000 OR alcohol% >0 OR drug detected OR fatalities >=1
+    - Major: Total damage 50,000-500,000 OR no injuries/fatalities
+    - Significant: Total damage 5,000-50,000 OR injured_hospitalized >=1
+    - Minor: Total damage <5,000 OR injured_not_hospitalized >=1
+    """
+    # Calculate total damage value (prioritize actual over estimated)
     estimate = (estimated_goods_damage_value or 0) + (estimated_vehicle_damage_value or 0)
     actual = (actual_goods_damage_value or 0) + (actual_vehicle_damage_value or 0)
-
-    value = actual if actual not in (None, 0) else estimate
-    if value in (None, 0):
-        return None
-
-    value = float(value)
-    if value < 5000:
-        return "Minor"
-    elif 5000 <= value <= 50000:
+    total_damage = actual if actual not in (None, 0) else estimate
+    
+    # Initialize counts
+    alcohol_test_result = alcohol_test_result or 0
+    drug_test_result = (drug_test_result or "").strip()
+    injured_not_hospitalized = injured_not_hospitalized or 0
+    injured_hospitalized = injured_hospitalized or 0
+    fatalities = fatalities or 0
+    
+    # Crisis: Highest severity conditions
+    if (total_damage > 500000 or 
+        alcohol_test_result > 0 or 
+        (drug_test_result and drug_test_result.lower() not in ["", "ไม่ใส่ชนิดสารเสพติด", "none"]) or
+        fatalities >= 1):
+        return "Crisis"
+    
+    # Major: Moderate-high damage, no serious injuries
+    if (50000 < total_damage <= 500000 and 
+        alcohol_test_result == 0 and 
+        not drug_test_result and
+        injured_not_hospitalized == 0 and
+        injured_hospitalized == 0 and
+        fatalities == 0):
+        return "Major"
+    
+    # Significant: Moderate damage or hospitalized injuries
+    if (5000 <= total_damage <= 50000 and
+        alcohol_test_result == 0 and
+        not drug_test_result and
+        injured_hospitalized >= 1 and
+        fatalities == 0):
         return "Significant"
-    elif 50000 < value <= 500000:
+    
+    # Minor: Low damage or minor injuries only
+    if (total_damage < 5000 and
+        alcohol_test_result == 0 and
+        not drug_test_result and
+        injured_not_hospitalized >= 1 and
+        injured_hospitalized == 0 and
+        fatalities == 0):
+        return "Minor"
+    
+    # Default fallback based on damage value only
+    if total_damage == 0:
+        return None
+    elif total_damage < 5000:
+        return "Minor"
+    elif 5000 <= total_damage <= 50000:
+        return "Significant"
+    elif 50000 < total_damage <= 500000:
         return "Major"
     else:
         return "Crisis"
@@ -89,13 +142,19 @@ def create_case(payload: schemas.AccidentCaseCreate, db: Session = Depends(get_d
         payload.estimated_vehicle_damage_value,
         payload.actual_goods_damage_value,
         payload.actual_vehicle_damage_value,
+        payload.alcohol_test_result,
+        payload.drug_test_result,
+        payload.injured_not_hospitalized,
+        payload.injured_hospitalized,
+        payload.fatalities,
     )
 
     case = models.AccidentCase(
-        **payload.dict(exclude={"priority", "document_no_ac", "casestatus"}),  # 🚫 exclude client value
+        **payload.dict(exclude={"priority", "document_no_ac", "casestatus","attachments"}),  # 🚫 exclude client value
         document_no_ac=doc_no,
         priority=priority,
-        casestatus="OPEN"  # ✅ always OPEN on creation
+        casestatus="OPEN" ,
+        attachments = "https://mena-safety-ncac.vercel.app/nc-form?doc=" +doc_no # ✅ always OPEN on creation
     )
     db.add(case)
     db.commit()

@@ -119,7 +119,8 @@ class AccidentCaseBase(BaseModel):
     attachments: Optional[str] = None
     casestatus: Optional[str] = None
     priority: Optional[str] = None
-
+    alcohol_test_result: Optional[float] = None
+    drug_test_result: Optional[str] = None
 
 
 # ✅ Create: what the client sends (no accident_case_id, no document_no_ac)

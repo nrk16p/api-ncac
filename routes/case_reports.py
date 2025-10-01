@@ -94,6 +94,8 @@ class CaseReportSchema(BaseModel):
     casestatus: Optional[str] = "OPEN"
     products: Optional[List[ProductSchema]] = None
     priority: Optional[List[ProductSchema]] = None
+
+
     
 
 def calculate_priority(estimated_cost: float, actual_price: float) -> Optional[str]:

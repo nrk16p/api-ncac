@@ -269,7 +269,8 @@ class AccidentCase(Base):
     estimated_vehicle_damage_value = Column(Float, nullable=True)
     actual_goods_damage_value = Column(Float, nullable=True)
     actual_vehicle_damage_value = Column(Float, nullable=True)
-
+    alcohol_test_result= Column(Float(500), nullable=True)
+    drug_test_result= Column(String(500), nullable=True)
     attachments = Column(String(500), nullable=True)
     casestatus = Column(String(500), nullable=True)
     priority = Column(String(500), nullable=True)
