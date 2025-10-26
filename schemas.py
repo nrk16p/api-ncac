@@ -76,6 +76,10 @@ from datetime import datetime
 from typing import Optional
 
 # ✅ Base: shared optional fields (no document_no_ac here)
+# ✅ Base shared optional fields (unchanged)
+# ──────────────────────────────────────────────
+# 🧱 Base schema (shared fields)
+# ──────────────────────────────────────────────
 class AccidentCaseBase(BaseModel):
     site_id: Optional[int] = None
     department_id: Optional[int] = None
@@ -123,24 +127,71 @@ class AccidentCaseBase(BaseModel):
     drug_test_result: Optional[str] = None
 
 
-# ✅ Create: what the client sends (no accident_case_id, no document_no_ac)
+# ──────────────────────────────────────────────
+# 🧾 Schema for creation (POST)
+# ──────────────────────────────────────────────
 class AccidentCaseCreate(AccidentCaseBase):
+    """Used for creating new AccidentCase records."""
     pass
 
 
-# ✅ Update: same as base, partial updates allowed
+# ──────────────────────────────────────────────
+# 🧾 Schema for update (PUT/PATCH)
+# ──────────────────────────────────────────────
 class AccidentCaseUpdate(AccidentCaseBase):
+    """Used for updating AccidentCase records."""
     pass
 
 
-# ✅ Response: includes system-generated fields
-class AccidentCaseResponse(AccidentCaseBase):
+# ──────────────────────────────────────────────
+# 📤 Schema for response (GET)
+# ──────────────────────────────────────────────
+class AccidentCaseResponse(BaseModel):
     accident_case_id: int
-    document_no_ac: str   # system-generated
+    document_no_ac: str
+    site_name: Optional[str]
+    department_name: Optional[str]
+    client_name: Optional[str]
+    origin_name: Optional[str]
+    reporter_name: Optional[str]
+    driver_name: Optional[str]
+    driver_role_name: Optional[str]
+    vehicle_head_plate: Optional[str]
+    vehicle_tail_plate: Optional[str]
+    record_datetime: Optional[datetime]
+    incident_datetime: Optional[datetime]
+    case_location: Optional[str]
+    police_station_area: Optional[str]
+    case_details: Optional[str]
+    priority: Optional[str]
+    casestatus: Optional[str]
+    estimated_goods_damage_value: Optional[float]
+    estimated_vehicle_damage_value: Optional[float]
+    actual_goods_damage_value: Optional[float]
+    actual_vehicle_damage_value: Optional[float]
+    truck_damage: Optional[str]
+    product_damage: Optional[str]
+    product_damage_details: Optional[str]
+    injured_not_hospitalized: Optional[int]
+    injured_hospitalized: Optional[int]
+    fatalities: Optional[int]
+    injury_description: Optional[str]
+    other_party_full_name: Optional[str]
+    other_party_vehicle_plate: Optional[str]
+    other_party_company_name: Optional[str]
+    other_party_phone: Optional[str]
+    other_party_insurance_name: Optional[str]
+    other_party_claim_no: Optional[str]
+    claim_officer_full_name: Optional[str]
+    claim_officer_phone: Optional[str]
+    alcohol_test: Optional[str]
+    alcohol_test_result: Optional[float]
+    drug_test: Optional[str]
+    drug_test_result: Optional[str]
+    attachments: Optional[str]
 
     class Config:
         orm_mode = True
-        
 # ----------------------
 # Province
 # ----------------------

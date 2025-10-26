@@ -214,6 +214,11 @@ from sqlalchemy.orm import relationship
 from database import Base
 from datetime import datetime
 
+from datetime import datetime
+from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey
+from sqlalchemy.orm import relationship
+
+
 class AccidentCase(Base):
     __tablename__ = "accident_cases"
 
@@ -226,12 +231,11 @@ class AccidentCase(Base):
     department_id = Column(Integer, ForeignKey("departments.department_id"), nullable=True)
     client_id = Column(Integer, ForeignKey("clients.client_id"), nullable=True)
     origin_id = Column(Integer, ForeignKey("locations.location_id"), nullable=True)
-    reporter_id = Column(Integer, ForeignKey("users.employee_id"), nullable=True)
+    reporter_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     driver_id = Column(String(255), ForeignKey("masterdrivers.driver_id"), nullable=True)
     driver_role_id = Column(Integer, ForeignKey("driver_roles.driver_role_id"), nullable=True)
     vehicle_id_head = Column(Integer, ForeignKey("vehicles.vehicle_id"), nullable=True)
     vehicle_id_tail = Column(Integer, ForeignKey("vehicles.vehicle_id"), nullable=True)
-    province_id = Column(Integer, ForeignKey("provinces.province_id"), nullable=True)
     province_id = Column(Integer, ForeignKey("provinces.province_id"), nullable=True)
     district_id = Column(Integer, ForeignKey("districts.district_id"), nullable=True)
     sub_district_id = Column(Integer, ForeignKey("sub_districts.sub_district_id"), nullable=True)
@@ -269,16 +273,99 @@ class AccidentCase(Base):
     estimated_vehicle_damage_value = Column(Float, nullable=True)
     actual_goods_damage_value = Column(Float, nullable=True)
     actual_vehicle_damage_value = Column(Float, nullable=True)
-    alcohol_test_result= Column(Float(500), nullable=True)
-    drug_test_result= Column(String(500), nullable=True)
+
+    alcohol_test_result = Column(Float, nullable=True)
+    drug_test_result = Column(String(500), nullable=True)
     attachments = Column(String(500), nullable=True)
     casestatus = Column(String(500), nullable=True)
     priority = Column(String(500), nullable=True)
-    # relationships (optional if you want to join later)
+
+    # ──────────────────────────────
+    # 🔗 Relationships
+    # ──────────────────────────────
     site = relationship("Site", backref="accident_cases")
     department = relationship("Department", backref="accident_cases")
     client = relationship("Client", backref="accident_cases")
-    reporter = relationship("User", backref="reported_cases")
+    reporter = relationship("User", backref="reported_accidents")
+    driver = relationship("MasterDriver", backref="accident_cases")
+    driver_role = relationship("DriverRole", backref="accident_cases")
+    vehicle_head = relationship("Vehicle", foreign_keys=[vehicle_id_head])
+    vehicle_tail = relationship("Vehicle", foreign_keys=[vehicle_id_tail])
+    origin = relationship("Location", backref="accident_cases_origin")
+    province = relationship("Province", backref="accident_cases")
+    district = relationship("District", backref="accident_cases")
+    sub_district = relationship("SubDistrict", backref="accident_cases")
+
+    # ──────────────────────────────
+    # 📦 Serializer (JSON-ready)
+    # ──────────────────────────────
+    def to_dict(self):
+        return {
+            "accident_case_id": self.accident_case_id,
+            "document_no_ac": self.document_no_ac,
+
+            # ✅ Related names
+            "site_name": self.site.site_name_th if self.site else None,
+            "department_name": self.department.department_name_th if self.department else None,
+            "client_name": self.client.client_name if self.client else None,
+            "origin_name": self.origin.location_name if self.origin else None,
+            "reporter_name": f"{self.reporter.firstname} {self.reporter.lastname}" if self.reporter else None,
+            "driver_name": f"{self.driver.first_name} {self.driver.last_name}" if self.driver else None,
+            "driver_role_name": self.driver_role.role_name if self.driver_role else None,
+            "vehicle_head_plate": self.vehicle_head.vehicle_number_plate if self.vehicle_head else None,
+            "vehicle_tail_plate": self.vehicle_tail.vehicle_number_plate if self.vehicle_tail else None,
+
+            # 🕒 Dates
+            "record_datetime": self.record_datetime.isoformat() if self.record_datetime else None,
+            "incident_datetime": self.incident_datetime.isoformat() if self.incident_datetime else None,
+
+            # 📍 Locations
+            "province_name": self.province.province_name_th if self.province else None,
+            "district_name": self.district.district_name_th if self.district else None,
+            "sub_district_name": self.sub_district.sub_district_name_th if self.sub_district else None,
+            "case_location": self.case_location,
+            "police_station_area": self.police_station_area,
+            "destination": self.destination,
+
+            # 🚛 Damage & case details
+            "truck_damage": self.truck_damage,
+            "product_damage": self.product_damage,
+            "product_damage_details": self.product_damage_details,
+            "case_details": self.case_details,
+
+            # 🧍 Injury info
+            "injured_not_hospitalized": self.injured_not_hospitalized,
+            "injured_hospitalized": self.injured_hospitalized,
+            "fatalities": self.fatalities,
+            "injury_description": self.injury_description,
+
+            # 🚗 Other party
+            "other_party_full_name": self.other_party_full_name,
+            "other_party_vehicle_plate": self.other_party_vehicle_plate,
+            "other_party_company_name": self.other_party_company_name,
+            "other_party_phone": self.other_party_phone,
+            "other_party_insurance_name": self.other_party_insurance_name,
+            "other_party_claim_no": self.other_party_claim_no,
+            "claim_officer_full_name": self.claim_officer_full_name,
+            "claim_officer_phone": self.claim_officer_phone,
+
+            # 💸 Estimated & actual values
+            "estimated_goods_damage_value": self.estimated_goods_damage_value,
+            "estimated_vehicle_damage_value": self.estimated_vehicle_damage_value,
+            "actual_goods_damage_value": self.actual_goods_damage_value,
+            "actual_vehicle_damage_value": self.actual_vehicle_damage_value,
+
+            # 🧪 Test results
+            "alcohol_test": self.alcohol_test,
+            "alcohol_test_result": self.alcohol_test_result,
+            "drug_test": self.drug_test,
+            "drug_test_result": self.drug_test_result,
+
+            # 📎 Meta
+            "attachments": self.attachments,
+            "casestatus": self.casestatus,
+            "priority": self.priority,
+        }
     
 class Province(Base):
     __tablename__ = "provinces"
