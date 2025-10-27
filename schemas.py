@@ -149,6 +149,8 @@ class AccidentCaseUpdate(AccidentCaseBase):
 class AccidentCaseResponse(BaseModel):
     accident_case_id: int
     document_no_ac: str
+
+    # ✅ Related names
     site_name: Optional[str]
     department_name: Optional[str]
     client_name: Optional[str]
@@ -158,24 +160,32 @@ class AccidentCaseResponse(BaseModel):
     driver_role_name: Optional[str]
     vehicle_head_plate: Optional[str]
     vehicle_tail_plate: Optional[str]
+
+    # 🕒 Dates
     record_datetime: Optional[datetime]
     incident_datetime: Optional[datetime]
+
+    # 📍 Locations (🆕 added)
+    province_name: Optional[str]
+    district_name: Optional[str]
+    sub_district_name: Optional[str]
     case_location: Optional[str]
     police_station_area: Optional[str]
-    case_details: Optional[str]
-    priority: Optional[str]
-    casestatus: Optional[str]
-    estimated_goods_damage_value: Optional[float]
-    estimated_vehicle_damage_value: Optional[float]
-    actual_goods_damage_value: Optional[float]
-    actual_vehicle_damage_value: Optional[float]
+    destination: Optional[str]
+
+    # 🚛 Damage & case details
     truck_damage: Optional[str]
     product_damage: Optional[str]
     product_damage_details: Optional[str]
+    case_details: Optional[str]
+
+    # 🧍 Injury info
     injured_not_hospitalized: Optional[int]
     injured_hospitalized: Optional[int]
     fatalities: Optional[int]
     injury_description: Optional[str]
+
+    # 🚗 Other party
     other_party_full_name: Optional[str]
     other_party_vehicle_plate: Optional[str]
     other_party_company_name: Optional[str]
@@ -184,11 +194,23 @@ class AccidentCaseResponse(BaseModel):
     other_party_claim_no: Optional[str]
     claim_officer_full_name: Optional[str]
     claim_officer_phone: Optional[str]
+
+    # 💸 Estimated & actual values
+    estimated_goods_damage_value: Optional[float]
+    estimated_vehicle_damage_value: Optional[float]
+    actual_goods_damage_value: Optional[float]
+    actual_vehicle_damage_value: Optional[float]
+
+    # 🧪 Test results
     alcohol_test: Optional[str]
     alcohol_test_result: Optional[float]
     drug_test: Optional[str]
     drug_test_result: Optional[str]
+
+    # 📎 Meta
     attachments: Optional[str]
+    casestatus: Optional[str]
+    priority: Optional[str]
 
     class Config:
         orm_mode = True
