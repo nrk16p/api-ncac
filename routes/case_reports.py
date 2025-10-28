@@ -101,7 +101,7 @@ class CaseReportSchema(BaseModel):
 def calculate_priority(estimated_cost: float, actual_price: float) -> Optional[str]:
     value = actual_price if actual_price not in (None, 0) else estimated_cost
     if value in (None, 0):
-        return None
+        return "Minor"
     value = float(value)
     if value < 5000:
         return "Minor"

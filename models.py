@@ -252,6 +252,8 @@ class AccidentCase(Base):
     alcohol_test = Column(String(50), nullable=True)
     drug_test = Column(String(50), nullable=True)
     truck_damage = Column(String(255), nullable=True)
+    truck_damage_details = Column(String(255), nullable=True)
+
     product_damage = Column(String(255), nullable=True)
     product_damage_details = Column(String(500), nullable=True)
 
@@ -329,6 +331,8 @@ class AccidentCase(Base):
 
             # 🚛 Damage & case details
             "truck_damage": self.truck_damage,
+            "truck_damage_details": self.truck_damage_details,
+
             "product_damage": self.product_damage,
             "product_damage_details": self.product_damage_details,
             "case_details": self.case_details,

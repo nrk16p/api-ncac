@@ -102,6 +102,7 @@ class AccidentCaseBase(BaseModel):
     alcohol_test: Optional[str] = None
     drug_test: Optional[str] = None
     truck_damage: Optional[str] = None
+    truck_damage_details: Optional[str] = None
     product_damage: Optional[str] = None
     product_damage_details: Optional[str] = None
     injured_not_hospitalized: Optional[int] = 0
@@ -175,6 +176,8 @@ class AccidentCaseResponse(BaseModel):
 
     # 🚛 Damage & case details
     truck_damage: Optional[str]
+    truck_damage_details: Optional[str]
+
     product_damage: Optional[str]
     product_damage_details: Optional[str]
     case_details: Optional[str]
