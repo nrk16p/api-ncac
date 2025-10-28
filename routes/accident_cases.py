@@ -84,11 +84,11 @@ def calculate_priority(
         (drug_test_result and drug_test_result not in ["", "none", "ไม่ใส่ชนิดสารเสพติด"]) or
         fatalities >= 1):
         return "Crisis"
-    if (50001 <= total_damage <= 500000 or fatalities == 0):
+    if (50001 <= total_damage <= 500000 and fatalities == 0):
         return "Major"
-    if (5001 <= total_damage <= 50000 or injured_hospitalized >= 1 or fatalities == 0):
+    if (5001 <= total_damage <= 50000 or injured_hospitalized >= 1 and fatalities == 0):
         return "Significant"
-    if (total_damage <= 5000 or injured_not_hospitalized >= 1 or fatalities == 0):
+    if (total_damage <= 5000 and injured_not_hospitalized >= 1 and fatalities == 0):
         return "Minor"
     return "Minor"
 
