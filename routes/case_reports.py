@@ -224,12 +224,13 @@ def get_case_report(document_no: str, db: Session = Depends(get_db)):
     return r.to_dict()
 
 
-@router.put("/{case_id}")
-def update_case_report(case_id: int, payload: CaseReportSchema, db: Session = Depends(get_db)):
-    report = db.query(CaseReport).get(case_id)
+@router.put("/{document_no}")
+def update_case_report(document_no: str, payload: CaseReportSchema, db: Session = Depends(get_db)):
+    report = db.query(CaseReport).filter(CaseReport.document_no == document_no).first()
     if not report:
         raise HTTPException(status_code=404, detail="Case report not found")
 
+    # 🧩 Update core fields
     data = payload.dict(exclude_unset=True, exclude={"products"})
     for key, value in data.items():
         if key in ["record_date", "incident_date"]:
@@ -237,12 +238,24 @@ def update_case_report(case_id: int, payload: CaseReportSchema, db: Session = De
         else:
             setattr(report, key, value)
 
+    # 🧮 Recalculate and update priority (same rule as POST)
+    report.priority = calculate_priority(
+        report.estimated_cost,
+        report.actual_price
+    )
+
+    # 🧾 Update related products (if any)
     if payload.products is not None:
         upsert_products(db, report.case_id, [p.dict() for p in payload.products])
 
     db.commit()
-    return {"message": "Case report updated"}
+    db.refresh(report)
 
+    return {
+        "message": "Case report updated",
+        "document_no": document_no,
+        "priority": report.priority,
+    }
 
 @router.delete("/{case_id}")
 def delete_case_report(case_id: int, db: Session = Depends(get_db)):
