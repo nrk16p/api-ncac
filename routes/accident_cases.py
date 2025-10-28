@@ -201,9 +201,12 @@ def get_accident_cases(
     cases = query.order_by(models.AccidentCase.record_datetime.desc()).all()
     return [case.to_dict() for case in cases]
 
-
+#AC
 # -----------------------------
 # Update Case
+# -----------------------------
+# -----------------------------
+# Update Case by document_no_ac
 # -----------------------------
 @router.put("/{document_no_ac}", response_model=schemas.AccidentCaseResponse)
 def update_case(document_no_ac: str, payload: schemas.AccidentCaseUpdate, db: Session = Depends(get_db)):
