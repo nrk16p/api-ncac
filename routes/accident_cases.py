@@ -205,15 +205,22 @@ def get_accident_cases(
 # -----------------------------
 # Update Case
 # -----------------------------
-@router.put("/{case_id}", response_model=schemas.AccidentCaseResponse)
-def update_case(case_id: int, payload: schemas.AccidentCaseUpdate, db: Session = Depends(get_db)):
-    case = db.query(models.AccidentCase).get(case_id)
+@router.put("/{document_no_ac}", response_model=schemas.AccidentCaseResponse)
+def update_case(document_no_ac: str, payload: schemas.AccidentCaseUpdate, db: Session = Depends(get_db)):
+    """Update accident case using document_no_ac instead of numeric ID."""
+    case = (
+        db.query(models.AccidentCase)
+        .filter(models.AccidentCase.document_no_ac == document_no_ac)
+        .first()
+    )
     if not case:
         raise HTTPException(status_code=404, detail="Case not found")
 
+    # ✅ Update only fields provided in payload
     for key, value in payload.dict(exclude_unset=True, exclude={"priority", "document_no_ac"}).items():
         setattr(case, key, value)
 
+    # ✅ Recalculate priority
     case.priority = calculate_priority(
         case.estimated_goods_damage_value,
         case.estimated_vehicle_damage_value,
@@ -229,8 +236,6 @@ def update_case(case_id: int, payload: schemas.AccidentCaseUpdate, db: Session =
     db.commit()
     db.refresh(case)
     return case.to_dict()
-
-
 # -----------------------------
 # Delete Case
 # -----------------------------
