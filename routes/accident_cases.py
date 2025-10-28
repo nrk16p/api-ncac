@@ -211,19 +211,23 @@ def get_accident_cases(
 @router.put("/{document_no_ac}", response_model=schemas.AccidentCaseResponse)
 def update_case(document_no_ac: str, payload: schemas.AccidentCaseUpdate, db: Session = Depends(get_db)):
     """Update accident case using document_no_ac instead of numeric ID."""
+    # 🔍 Find case
     case = (
         db.query(models.AccidentCase)
         .filter(models.AccidentCase.document_no_ac == document_no_ac)
         .first()
     )
     if not case:
-        raise HTTPException(status_code=404, detail="Case not found")
+        raise HTTPException(status_code=404, detail=f"Case '{document_no_ac}' not found")
 
-    # ✅ Update only fields provided in payload
+    # 🧩 Update only provided fields (partial update)
     for key, value in payload.dict(exclude_unset=True, exclude={"priority", "document_no_ac"}).items():
+        # ✅ Auto-convert 0 → None for FK fields to avoid FK constraint errors
+        if key.endswith("_id") and value == 0:
+            value = None
         setattr(case, key, value)
 
-    # ✅ Recalculate priority
+    # ⚙️ Recalculate priority
     case.priority = calculate_priority(
         case.estimated_goods_damage_value,
         case.estimated_vehicle_damage_value,
@@ -236,8 +240,14 @@ def update_case(document_no_ac: str, payload: schemas.AccidentCaseUpdate, db: Se
         case.fatalities,
     )
 
-    db.commit()
-    db.refresh(case)
+    # 💾 Commit update safely
+    try:
+        db.commit()
+        db.refresh(case)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"Database error: {str(e)}")
+
     return case.to_dict()
 # -----------------------------
 # Delete Case
