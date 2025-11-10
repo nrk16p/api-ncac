@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Text, Numeric
+from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Text, Numeric,Date,TIMESTAMP, func
 from sqlalchemy.orm import relationship, validates
 from passlib.context import CryptContext
 from database import Base
@@ -138,6 +138,7 @@ class CaseReport(Base):
     cause = relationship("MasterCause", backref="case_reports")
     reporter = relationship("User", backref="case_reports")
     origin = relationship("Location", backref="case_reports_origin")  # ✅ added
+    investigation = relationship("CaseReportInvestigate", back_populates="case_report", uselist=False)
 
     products = relationship(
         "CaseProduct",
@@ -408,3 +409,26 @@ class SubDistrict(Base):
 
     # ✅ relationship to District
     district = relationship("District", back_populates="sub_districts")
+    
+    
+class CaseReportInvestigate(Base):
+    __tablename__ = "case_report_investigate"
+
+    investigate_id = Column(Integer, primary_key=True, index=True)
+    document_no = Column(String(50), ForeignKey("case_reports.document_no"), nullable=False)
+    root_cause_analysis = Column(Text)
+    corrective_action = Column(Text)
+    pic_contract = Column(Text)
+    plan_date = Column(Date)
+    action_completed_date = Column(Date)
+    claim_type = Column(Text)
+    insurance_claim = Column(Text)
+    product_resellable = Column(Text)
+    remaining_damage_cost = Column(Integer)
+    driver_cost = Column(Integer)
+    company_cost = Column(Integer)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    # Optional relationship
+    case_report = relationship("CaseReport", back_populates="investigation", uselist=False)

@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime,date
 
 # -----------------
 # Register
@@ -264,6 +264,33 @@ class DistrictResponse(DistrictBase):
     class Config:
         orm_mode = True
 
+
+class CaseReportInvestigateBase(BaseModel):
+    root_cause_analysis: Optional[str] = None
+    corrective_action: Optional[str] = None
+    pic_contract: Optional[str] = None
+    plan_date: Optional[date] = None
+    action_completed_date: Optional[date] = None
+    claim_type: Optional[str] = None
+    insurance_claim: Optional[str] = None
+    product_resellable: Optional[str] = None
+    remaining_damage_cost: Optional[int] = None
+    driver_cost: Optional[int] = None
+    company_cost: Optional[int] = None
+
+class CaseReportInvestigateCreate(CaseReportInvestigateBase):
+    pass
+
+class CaseReportInvestigateUpdate(CaseReportInvestigateBase):
+    pass
+
+class CaseReportInvestigateOut(CaseReportInvestigateBase):
+    investigate_id: int
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        orm_mode = True
 
 # ----------------------
 # SubDistrict
