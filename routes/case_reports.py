@@ -231,7 +231,42 @@ def get_case_report(document_no: str, db: Session = Depends(get_db)):
     if not r:
         raise HTTPException(status_code=404, detail="Case report not found")
     return r.to_dict()
+@router.get("/")
+def get_case_reports(
+    db: Session = Depends(get_db),
+    document_no: Optional[List[str]] = Query(None),
+    site_id: Optional[List[int]] = Query(None),
+    driver_id: Optional[List[str]] = Query(None),
+    casestatus: Optional[List[str]] = Query(None),
+    priority: Optional[List[str]] = Query(None),
+    start_date: Optional[str] = Query(None),
+    end_date: Optional[str] = Query(None),
+):
+    query = db.query(CaseReport)
 
+    if document_no:
+        query = query.filter(CaseReport.document_no.in_(document_no))
+    if site_id:
+        query = query.filter(CaseReport.site_id.in_(site_id))
+    if driver_id:
+        query = query.filter(CaseReport.driver_id.in_(driver_id))
+    if casestatus:
+        query = query.filter(CaseReport.casestatus.in_(casestatus))
+    if priority:
+        query = query.filter(CaseReport.priority.in_(priority))
+
+    if start_date and end_date:
+        start = parse_dt(start_date)
+        end = parse_dt(end_date)
+        if start and end:
+            end_next = end + timedelta(days=1)
+            query = query.filter(
+                CaseReport.record_date >= start,
+                CaseReport.record_date < end_next
+            )
+
+    reports = query.order_by(CaseReport.case_id.desc()).all()
+    return [r.to_dict() for r in reports]
 
 @router.put("/{document_no}")
 def update_case_report(document_no: str, payload: CaseReportSchema, db: Session = Depends(get_db)):
