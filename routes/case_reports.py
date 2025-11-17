@@ -1,15 +1,18 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional
 from pydantic import BaseModel
+
 from database import get_db
-from models import CaseReport, CaseProduct
-from datetime import timedelta
+from models import CaseReport, CaseProduct, CaseReportDoc   # 👈 ADDED IMPORT
 
 router = APIRouter(prefix="/case_reports", tags=["Case Reports"])
 
-# -------------------- Helpers --------------------
+# ============================================================
+# Helpers
+# ============================================================
+
 SITE_CODES = {
     2: "LB",
     3: "SB",
@@ -26,10 +29,11 @@ def generate_document_no(db: Session, site_id: int) -> str:
     yymm = now.strftime("%y%m")
 
     start_of_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    if now.month == 12:
-        next_month = now.replace(year=now.year + 1, month=1, day=1)
-    else:
-        next_month = now.replace(month=now.month + 1, day=1)
+    next_month = (
+        now.replace(year=now.year + 1, month=1, day=1)
+        if now.month == 12 else
+        now.replace(month=now.month + 1, day=1)
+    )
 
     count = (
         db.query(CaseReport)
@@ -42,6 +46,7 @@ def generate_document_no(db: Session, site_id: int) -> str:
     )
     return f"NC-{site_code}-{yymm}-{count+1:03d}"
 
+
 def parse_dt(val):
     if not val:
         return None
@@ -52,23 +57,64 @@ def parse_dt(val):
     except Exception:
         return None
 
+
 def upsert_products(db: Session, case_id: int, products_payload: Optional[List[dict]]):
     db.query(CaseProduct).filter_by(case_id=case_id).delete()
     for p in products_payload or []:
-        cp = CaseProduct(
+        db.add(CaseProduct(
             case_id=case_id,
             product_name=p.get("product_name"),
             amount=p.get("amount"),
             unit=p.get("unit"),
-        )
-        db.add(cp)
+        ))
 
 
-# -------------------- Schemas --------------------
+def upsert_docs(db: Session, case_id: int, docs_payload: Optional[List[dict]]):
+    db.query(CaseReportDoc).filter_by(case_id=case_id).delete()
+    for item in docs_payload or []:
+        db.add(CaseReportDoc(
+            case_id=case_id,
+            data=item   # JSON stored directly
+        ))
+
+# ============================================================
+# Schemas
+# ============================================================
+
 class ProductSchema(BaseModel):
     product_name: str
     amount: Optional[int] = None
     unit: Optional[str] = None
+
+
+# 👇 ADDED CORRECT DocItem schema
+class DocItem(BaseModel):
+    warning_doc: Optional[str] = None
+    warning_doc_no: Optional[str] = None
+    warning_doc_remark: Optional[str] = None
+
+    debt_doc: Optional[str] = None
+    debt_doc_no: Optional[str] = None
+    debt_doc_remark: Optional[str] = None
+
+    customer_invoice: Optional[str] = None
+    customer_invoice_no: Optional[str] = None
+    customer_invoice_remark: Optional[str] = None
+
+    Insurance_claim_doc: Optional[str] = None
+    Insurance_claim_doc_no: Optional[str] = None
+    Insurance_claim_doc_remark: Optional[str] = None
+
+    writeoff_doc: Optional[str] = None
+    writeoff_doc_remark: Optional[str] = None
+
+    damage_payment: Optional[str] = None
+    damage_payment_no: Optional[str] = None
+    damage_payment_remark: Optional[str] = None
+
+    account_attachment_no: Optional[str] = None
+    account_attachment_remark: Optional[str] = None
+
 
 class CaseReportSchema(BaseModel):
     document_no: Optional[str] = None
@@ -91,52 +137,55 @@ class CaseReportSchema(BaseModel):
     estimated_cost: Optional[float] = None
     actual_price: Optional[float] = None
     attachments: Optional[str] = None
-    casestatus: Optional[str] = "OPEN"
+    casestatus: Optional[str] = "Pending"
+
     products: Optional[List[ProductSchema]] = None
-    priority: Optional[List[ProductSchema]] = None
 
+    priority: Optional[str] = None        # 👈 FIXED (was List)
+    docs: Optional[List[DocItem]] = None  # 👈 FIXED
 
-    
+# ============================================================
+# Priority Calculator
+# ============================================================
 
 def calculate_priority(estimated_cost: float, actual_price: float) -> Optional[str]:
     value = actual_price if actual_price not in (None, 0) else estimated_cost
     if value in (None, 0):
         return "Minor"
-    value = float(value)
     if value < 5000:
         return "Minor"
-    elif 5000 <= value <= 50000:
+    if 5000 <= value <= 50000:
         return "Major"
-    else:
-        return "Crisis"
-# -------------------- Routes --------------------
+    return "Crisis"
+
+# ============================================================
+# Routes
+# ============================================================
+
 @router.post("/", status_code=201)
 def create_or_update_case_report(payload: CaseReportSchema, db: Session = Depends(get_db)):
     document_no = payload.document_no or generate_document_no(db, payload.site_id)
     report = db.query(CaseReport).filter_by(document_no=document_no).first()
 
     if report:
-        data = payload.dict(exclude_unset=True, exclude={"products"})
+        data = payload.dict(exclude_unset=True, exclude={"products", "docs"})
         for key, value in data.items():
             if key in ["record_date", "incident_date"]:
                 setattr(report, key, parse_dt(value))
             else:
                 setattr(report, key, value)
 
-        # 👇 recalc and persist in DB
         report.priority = calculate_priority(report.estimated_cost, report.actual_price)
 
         if payload.products is not None:
             upsert_products(db, report.case_id, [p.dict() for p in payload.products])
+        if payload.docs is not None:
+            upsert_docs(db, report.case_id, [d.dict() for d in payload.docs])
 
         db.commit()
-        return {
-            "message": "Case report updated",
-            "document_no": document_no,
-            "priority": report.priority,   # now comes from DB
-        }
+        return {"message": "Case report updated", "document_no": document_no, "priority": report.priority}
 
-    # --- Create new report ---
+    # Create
     report = CaseReport(
         document_no=document_no,
         site_id=payload.site_id,
@@ -158,67 +207,27 @@ def create_or_update_case_report(payload: CaseReportSchema, db: Session = Depend
         estimated_cost=payload.estimated_cost,
         actual_price=payload.actual_price,
         attachments=payload.attachments,
-        casestatus=payload.casestatus or "สร้างเอกสาร",
+        casestatus=payload.casestatus or "Pending",
     )
 
-    # 👇 persist on creation
     report.priority = calculate_priority(payload.estimated_cost, payload.actual_price)
 
     db.add(report)
     db.flush()
+
     if payload.products:
         upsert_products(db, report.case_id, [p.dict() for p in payload.products])
+    if payload.docs:
+        upsert_docs(db, report.case_id, [d.dict() for d in payload.docs])
+
     db.commit()
 
-    return {
-        "message": "Case report created",
-        "document_no": document_no,
-        "priority": report.priority,   # now saved in DB
-    }
-
-
-@router.get("/")
-def get_case_reports(
-    db: Session = Depends(get_db),
-    document_no: Optional[List[str]] = Query(None),
-    site_id: Optional[List[int]] = Query(None),
-    driver_id: Optional[List[str]] = Query(None),
-    casestatus: Optional[List[str]] = Query(None),
-    priority: Optional[List[str]] = Query(None),
-
-    start_date: Optional[str] = Query(None),
-    end_date: Optional[str] = Query(None),
-):
-    query = db.query(CaseReport)
-    if document_no:
-        query = query.filter(CaseReport.document_no.in_(document_no))
-    if site_id:
-        query = query.filter(CaseReport.site_id.in_(site_id))
-    if priority:
-        query = query.filter(CaseReport.priority.in_(priority))
-    if driver_id:
-        query = query.filter(CaseReport.driver_id.in_(driver_id))
-    if casestatus:
-        query = query.filter(CaseReport.casestatus.in_(casestatus))
-
-    if start_date and end_date:
-        start = parse_dt(start_date)
-        end = parse_dt(end_date)
-
-        if start and end:
-            # use half-open interval [start, end+1day)
-            end_next = end + timedelta(days=1)
-            query = query.filter(CaseReport.record_date >= start,
-                                CaseReport.record_date < end_next)
-
-
-    reports = query.order_by(CaseReport.case_id.desc()).all()
-    return [r.to_dict() for r in reports]
+    return {"message": "Case report created", "document_no": document_no, "priority": report.priority}
 
 
 @router.get("/{document_no}")
 def get_case_report(document_no: str, db: Session = Depends(get_db)):
-    r = db.query(CaseReport).filter(CaseReport.document_no == document_no).first()
+    r = db.query(CaseReport).filter_by(document_no=document_no).first()
     if not r:
         raise HTTPException(status_code=404, detail="Case report not found")
     return r.to_dict()
@@ -226,42 +235,24 @@ def get_case_report(document_no: str, db: Session = Depends(get_db)):
 
 @router.put("/{document_no}")
 def update_case_report(document_no: str, payload: CaseReportSchema, db: Session = Depends(get_db)):
-    report = db.query(CaseReport).filter(CaseReport.document_no == document_no).first()
+    report = db.query(CaseReport).filter_by(document_no=document_no).first()
     if not report:
         raise HTTPException(status_code=404, detail="Case report not found")
 
-    # 🧩 Update core fields
-    data = payload.dict(exclude_unset=True, exclude={"products"})
+    data = payload.dict(exclude_unset=True, exclude={"products", "docs"})
     for key, value in data.items():
         if key in ["record_date", "incident_date"]:
             setattr(report, key, parse_dt(value))
         else:
             setattr(report, key, value)
 
-    # 🧮 Recalculate and update priority (same rule as POST)
-    report.priority = calculate_priority(
-        report.estimated_cost,
-        report.actual_price
-    )
+    report.priority = calculate_priority(report.estimated_cost, report.actual_price)
 
-    # 🧾 Update related products (if any)
     if payload.products is not None:
         upsert_products(db, report.case_id, [p.dict() for p in payload.products])
+    if payload.docs is not None:
+        upsert_docs(db, report.case_id, [d.dict() for d in payload.docs])
 
     db.commit()
-    db.refresh(report)
+    return {"message": "Case report updated", "document_no": document_no, "priority": report.priority}
 
-    return {
-        "message": "Case report updated",
-        "document_no": document_no,
-        "priority": report.priority,
-    }
-
-@router.delete("/{case_id}")
-def delete_case_report(case_id: int, db: Session = Depends(get_db)):
-    report = db.query(CaseReport).get(case_id)
-    if not report:
-        raise HTTPException(status_code=404, detail="Case report not found")
-    db.delete(report)
-    db.commit()
-    return {"message": "Case report deleted"}

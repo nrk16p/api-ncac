@@ -265,32 +265,6 @@ class DistrictResponse(DistrictBase):
         orm_mode = True
 
 
-class CaseReportInvestigateBase(BaseModel):
-    root_cause_analysis: Optional[str] = None
-    corrective_action: Optional[str] = None
-    pic_contract: Optional[str] = None
-    plan_date: Optional[date] = None
-    action_completed_date: Optional[date] = None
-    claim_type: Optional[str] = None
-    insurance_claim: Optional[str] = None
-    product_resellable: Optional[str] = None
-    remaining_damage_cost: Optional[int] = None
-    driver_cost: Optional[int] = None
-    company_cost: Optional[int] = None
-
-class CaseReportInvestigateCreate(CaseReportInvestigateBase):
-    pass
-
-class CaseReportInvestigateUpdate(CaseReportInvestigateBase):
-    pass
-
-class CaseReportInvestigateOut(CaseReportInvestigateBase):
-    investigate_id: int
-    created_at: datetime
-    updated_at: datetime
-
-    class Config:
-        orm_mode = True
 
 # ----------------------
 # SubDistrict
@@ -324,3 +298,85 @@ class LocationResponse(LocationBase):
 
     class Config:
         orm_mode = True
+        
+# ============================================
+# Child Item Schema
+# ============================================
+class CorrectiveActionItem(BaseModel):
+    id: Optional[int] = None
+    corrective_action: Optional[str] = None
+    pic_contract: Optional[str] = None
+    plan_date: Optional[date] = None
+    action_completed_date: Optional[date] = None
+
+    class Config:
+        orm_mode = True
+
+
+# ============================================
+# Parent Base Schema
+# ============================================
+class CaseReportInvestigateBase(BaseModel):
+    root_cause_analysis: Optional[str] = None
+    claim_type: Optional[str] = None
+    insurance_claim: Optional[str] = None
+    product_resellable: Optional[str] = None
+    remaining_damage_cost: Optional[int] = None
+    driver_cost: Optional[int] = None
+    company_cost: Optional[int] = None
+
+
+# ============================================
+# Create Schema
+# ============================================
+class CaseReportInvestigateCreate(CaseReportInvestigateBase):
+    corrective_actions: Optional[List[CorrectiveActionItem]] = []
+
+
+# ============================================
+# Update Schema
+# ============================================
+class CaseReportInvestigateUpdate(CaseReportInvestigateBase):
+    corrective_actions: Optional[List[CorrectiveActionItem]] = None
+
+
+# ============================================
+# Output Schema
+# ============================================
+class CaseReportInvestigateOut(CaseReportInvestigateBase):
+    investigate_id: int
+    document_no: str
+    created_at: datetime
+    updated_at: datetime
+
+    corrective_actions: List[CorrectiveActionItem] = []
+
+    class Config:
+        orm_mode = True
+        
+class DocItem(BaseModel):
+    warning_doc: Optional[str] = None
+    warning_doc_no: Optional[str] = None
+    warning_doc_remark: Optional[str] = None
+
+    debt_doc: Optional[str] = None
+    debt_doc_no: Optional[str] = None
+    debt_doc_remark: Optional[str] = None
+
+    customer_invoice: Optional[str] = None
+    customer_invoice_no: Optional[str] = None
+    customer_invoice_remark: Optional[str] = None
+
+    Insurance_claim_doc: Optional[str] = None
+    Insurance_claim_doc_no: Optional[str] = None
+    Insurance_claim_doc_remark: Optional[str] = None
+
+    writeoff_doc: Optional[str] = None
+    writeoff_doc_remark: Optional[str] = None
+
+    damage_payment: Optional[str] = None
+    damage_payment_no: Optional[str] = None
+    damage_payment_remark: Optional[str] = None
+
+    account_attachment_no: Optional[str] = None
+    account_attachment_remark: Optional[str] = None
