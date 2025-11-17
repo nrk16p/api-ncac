@@ -1,9 +1,16 @@
 from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
+from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.staticfiles import StaticFiles
+
 from database import engine, Base
 import models
 
 # Create tables (dev convenience; use Alembic migrations in prod)
 Base.metadata.create_all(bind=engine)
+
+# Mount static for logo if needed
+# app.mount("/static", StaticFiles(directory="static"), name="static")
 
 from routes import (
     auth,
@@ -16,13 +23,20 @@ from routes import (
     driver_roles,
     masterdrivers,
     mastercauses,
-    case_reports, positions, position_levels , accident_cases 
-    , provinces, districts, sub_districts ,case_reports_investigate
+    case_reports,
+    positions,
+    position_levels,
+    accident_cases,
+    provinces,
+    districts,
+    sub_districts,
+    case_reports_investigate
 )
+
 app = FastAPI(
     title="NCAC API",
     version="1.1.0",
-        contact={
+    contact={
         "name": "Narongkorn A. (Plug)"
     },
     license_info={
@@ -102,11 +116,33 @@ Stores accounting & compliance documents in flexible JSON array:
 - Provincial location hierarchy
 
 ---
-
-
-
 """
 )
+
+# ------------------------------
+# ✅ Custom Swagger UI (Hide Schemas)
+# ------------------------------
+@app.get("/docs", include_in_schema=False)
+async def custom_swagger_ui():
+    html = get_swagger_ui_html(
+        openapi_url=app.openapi_url,
+        title="NCAC API Docs",
+        # swagger_favicon_url="/static/logo.png",  # optional logo
+    )
+    html.body += """
+    <style>
+        /* Hide schema section entirely */
+        .swagger-ui .models { display: none !important; }
+        .swagger-ui section.models { display: none !important; }
+        .opblock-tag-section .models-wrapper { display: none !important; }
+    </style>
+    """
+    return HTMLResponse(html.body)
+
+
+# ------------------------------
+# Routers
+# ------------------------------
 app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(clients.router)
