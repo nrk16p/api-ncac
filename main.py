@@ -22,6 +22,12 @@ from routes import (
 app = FastAPI(
     title="NCAC API",
     version="1.1.0",
+        contact={
+        "name": "Narongkorn A. (Plug)"
+    },
+    license_info={
+        "name": "MENA Transport Internal License"
+    },
     description="""
 ### 🚀 NCAC API — Near-Miss & Accident Case Management System
 
@@ -97,8 +103,7 @@ Stores accounting & compliance documents in flexible JSON array:
 
 ---
 
-## 📌 Current Version: 1.1.0  
-Refactored models, improved relationships, added `to_dict()`, fixed routers, added docs[] support, enhanced stability.
+
 
 """
 )
