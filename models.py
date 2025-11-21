@@ -519,7 +519,11 @@ class CaseReportCorrectiveAction(Base):
     pic_contract = Column(Text)
     plan_date = Column(Date)
     action_completed_date = Column(Date)
-
+    # ➕ NEW FIELDS
+    event_img = Column(String(500), nullable=True)
+    event_img_remark = Column(String(500), nullable=True)
+    account_attachment = Column(String(500), nullable=True)
+    
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
     updated_at = Column(
         TIMESTAMP(timezone=True),

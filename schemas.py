@@ -380,3 +380,7 @@ class DocItem(BaseModel):
 
     account_attachment_no: Optional[str] = None
     account_attachment_remark: Optional[str] = None
+    # ✅ NEW FIELDS
+    event_img: Optional[str] = None
+    event_img_remark: Optional[str] = None
+    account_attachment: Optional[str] = None
