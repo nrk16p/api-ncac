@@ -15,6 +15,7 @@ from sqlalchemy import (
     Float,
     func,
 )
+    # Note: indentation here stays as in your file; fix if needed
 from sqlalchemy.orm import relationship, validates
 from passlib.context import CryptContext
 from pydantic import BaseModel
@@ -210,6 +211,7 @@ class CaseReport(Base):
         back_populates="case_report",
         cascade="all, delete-orphan"
     )
+
     def to_dict(self):
         return {
             "case_id": self.case_id,
@@ -244,7 +246,7 @@ class CaseReport(Base):
                 {"product_name": p.product_name, "amount": p.amount, "unit": p.unit}
                 for p in self.products
             ],
-                    "docs": [d.data for d in self.docs] if self.docs else [],   # 👈 FIX ADDED
+            "docs": [d.data for d in self.docs] if self.docs else [],   # 👈 FIX ADDED
 
             "estimated_cost": str(self.estimated_cost) if self.estimated_cost else None,
             "actual_price": str(self.actual_price) if self.actual_price else None,
@@ -394,6 +396,11 @@ class AccidentCase(Base):
     province = relationship("Province", backref="accident_cases")
     district = relationship("District", backref="accident_cases")
     sub_district = relationship("SubDistrict", backref="accident_cases")
+    docs = relationship(
+        "AccidentCaseDoc",
+        back_populates="accident_case",
+        cascade="all, delete-orphan"
+    )
 
     def to_dict(self):
         return {
@@ -460,8 +467,10 @@ class AccidentCase(Base):
             "attachments": self.attachments,
             "casestatus": self.casestatus,
             "priority": self.priority,
-        }
 
+            # ✅ return only the inner "data" dict for each doc
+            "docs": [doc.data for doc in self.docs],
+        }
 
 # ======================================================
 # 🧾 CaseReportInvestigate + CorrectiveActions
@@ -519,11 +528,7 @@ class CaseReportCorrectiveAction(Base):
     pic_contract = Column(Text)
     plan_date = Column(Date)
     action_completed_date = Column(Date)
-    # ➕ NEW FIELDS
-    event_img = Column(String(500), nullable=True)
-    event_img_remark = Column(String(500), nullable=True)
-    account_attachment = Column(String(500), nullable=True)
-    
+
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
     updated_at = Column(
         TIMESTAMP(timezone=True),
@@ -536,6 +541,8 @@ class CaseReportCorrectiveAction(Base):
         "CaseReportInvestigate",
         back_populates="corrective_actions",
     )
+
+
 class CaseReportDoc(Base):
     __tablename__ = "case_report_docs"
 
@@ -548,3 +555,24 @@ class CaseReportDoc(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     case_report = relationship("CaseReport", back_populates="docs")
+
+
+class AccidentCaseDoc(Base):
+    __tablename__ = "accident_case_docs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # ✅ Use document_no_ac as FK (string), same logic as you requested
+    document_no_ac = Column(
+        String(50),
+        ForeignKey("accident_cases.document_no_ac", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    data = Column(JSONB, nullable=False)   # JSON data (same as CaseReportDoc)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationship back to AccidentCase
+    accident_case = relationship("AccidentCase", back_populates="docs")

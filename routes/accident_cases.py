@@ -8,7 +8,7 @@ import models, schemas
 router = APIRouter(prefix="/accident-cases", tags=["Accident Cases"])
 
 # -----------------------------
-# Static site mapping (keep using this)
+# Static site mapping
 # -----------------------------
 SITE_CODES = {
     1: "SB",
@@ -19,42 +19,29 @@ SITE_CODES = {
     6: "BP",
 }
 
-
 # -----------------------------
-# Generate Document Number
+# Generate unique document number
 # -----------------------------
 def generate_document_no_ac(db: Session, site_id: int) -> str:
-    """Generate a unique accident case document number based on SITE_CODES mapping."""
     site_code = SITE_CODES.get(site_id, "XX")
-
-    # All site_ids with the same code (LB, SB, BP)
     grouped_sites = [sid for sid, code in SITE_CODES.items() if code == site_code]
-
-    # Current month in YYMM format
     now = datetime.now(timezone.utc)
     yymm = now.strftime("%y%m")
 
-    # Define start and end of month
-    start_of_month = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
-    if now.month == 12:
-        next_month = datetime(now.year + 1, 1, 1, tzinfo=timezone.utc)
-    else:
-        next_month = datetime(now.year, now.month + 1, 1, tzinfo=timezone.utc)
+    prefix = f"AC-{site_code}-{yymm}-"
 
-    # Count existing records in this site group and month
-    count = (
-        db.query(models.AccidentCase)
-        .filter(
-            models.AccidentCase.site_id.in_(grouped_sites),
-            models.AccidentCase.record_datetime >= start_of_month,
-            models.AccidentCase.record_datetime < next_month,
-        )
-        .count()
+    last = (
+        db.query(models.AccidentCase.document_no_ac)
+        .filter(models.AccidentCase.document_no_ac.like(f"{prefix}%"))
+        .order_by(models.AccidentCase.document_no_ac.desc())
+        .first()
     )
-
-    running = f"{count + 1:03d}"  # 001, 002, ...
-    return f"AC-{site_code}-{yymm}-{running}"
-
+    if last and last[0]:
+        last_num = int(last[0].split("-")[-1])
+    else:
+        last_num = 0
+    new_num = last_num + 1
+    return f"{prefix}{new_num:03d}"
 
 # -----------------------------
 # Calculate Priority
@@ -80,9 +67,10 @@ def calculate_priority(
     injured_hospitalized = injured_hospitalized or 0
     fatalities = fatalities or 0
 
-    if (total_damage > 500000 or alcohol_test_result > 0 or
-        (drug_test_result and drug_test_result not in ["", "none", "ไม่ใส่ชนิดสารเสพติด"]) or
-        fatalities >= 1):
+    if (total_damage > 500000
+        or alcohol_test_result > 0
+        or (drug_test_result and drug_test_result not in ["", "none", "ไม่ใส่ชนิดสารเสพติด"])
+        or fatalities >= 1):
         return "Crisis"
     if (50001 <= total_damage <= 500000 and fatalities == 0):
         return "Major"
@@ -91,30 +79,31 @@ def calculate_priority(
     if (total_damage <= 5000 or injured_not_hospitalized >= 1 and fatalities == 0):
         return "Minor"
     return "Minor"
-## update
 
 # -----------------------------
-# Create Case
+# Create Case (with optional docs)
 # -----------------------------
 @router.post("/", response_model=schemas.AccidentCaseResponse, status_code=201)
-def create_case(payload: schemas.AccidentCaseCreate, db: Session = Depends(get_db)):
-    """Create a new accident case with auto-generated document number and priority."""
-    doc_no = generate_document_no_ac(db, payload.site_id)
+def create_case(payload: dict, db: Session = Depends(get_db)):
+    """Create accident case + optional docs section"""
+    case_data = schemas.AccidentCaseCreate(**payload)
+    docs_data = payload.get("docs")
 
+    doc_no = generate_document_no_ac(db, case_data.site_id)
     priority = calculate_priority(
-        payload.estimated_goods_damage_value,
-        payload.estimated_vehicle_damage_value,
-        payload.actual_goods_damage_value,
-        payload.actual_vehicle_damage_value,
-        payload.alcohol_test_result,
-        payload.drug_test_result,
-        payload.injured_not_hospitalized,
-        payload.injured_hospitalized,
-        payload.fatalities,
+        case_data.estimated_goods_damage_value,
+        case_data.estimated_vehicle_damage_value,
+        case_data.actual_goods_damage_value,
+        case_data.actual_vehicle_damage_value,
+        case_data.alcohol_test_result,
+        case_data.drug_test_result,
+        case_data.injured_not_hospitalized,
+        case_data.injured_hospitalized,
+        case_data.fatalities,
     )
 
     case = models.AccidentCase(
-        **payload.dict(exclude={"priority", "document_no_ac", "casestatus", "attachments"}),
+        **case_data.dict(exclude={"priority", "document_no_ac", "casestatus", "attachments"}),
         document_no_ac=doc_no,
         priority=priority,
         casestatus="OPEN",
@@ -122,15 +111,20 @@ def create_case(payload: schemas.AccidentCaseCreate, db: Session = Depends(get_d
     )
 
     db.add(case)
-    try:
+    db.commit()
+    db.refresh(case)
+
+    # ✅ auto-create AccidentCaseDoc if "docs" provided
+    if docs_data:
+        doc_record = models.AccidentCaseDoc(
+            document_no_ac=doc_no,
+            data=docs_data,
+        )
+        db.add(doc_record)
         db.commit()
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=400, detail=f"Database error: {str(e)}")
 
     db.refresh(case)
     return case.to_dict()
-
 
 # -----------------------------
 # Helper: Parse datetime
@@ -145,18 +139,17 @@ def parse_dt(val):
     except Exception:
         return None
 
-
 # -----------------------------
 # Get Cases with Filters
 # -----------------------------
 @router.get("/", response_model=List[schemas.AccidentCaseResponse])
 def get_accident_cases(
     db: Session = Depends(get_db),
-    document_no_ac: Optional[List[str]] = Query(None, description="Filter by document number(s)"),
-    site_id: Optional[List[int]] = Query(None, description="Filter by site ID(s)"),
-    priority: Optional[List[str]] = Query(None, description="Filter by priority(ies)"),
-    driver_id: Optional[List[str]] = Query(None, description="Filter by driver ID(s)"),
-    casestatus: Optional[List[str]] = Query(None, description="Filter by case status(es)"),
+    document_no_ac: Optional[List[str]] = Query(None),
+    site_id: Optional[List[int]] = Query(None),
+    priority: Optional[List[str]] = Query(None),
+    driver_id: Optional[List[str]] = Query(None),
+    casestatus: Optional[List[str]] = Query(None),
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
 ):
@@ -175,6 +168,7 @@ def get_accident_cases(
             joinedload(models.AccidentCase.province),
             joinedload(models.AccidentCase.district),
             joinedload(models.AccidentCase.sub_district),
+            joinedload(models.AccidentCase.docs),
         )
     )
 
@@ -201,33 +195,25 @@ def get_accident_cases(
     cases = query.order_by(models.AccidentCase.record_datetime.desc()).all()
     return [case.to_dict() for case in cases]
 
-#AC
-# -----------------------------
-# Update Case
-# -----------------------------
 # -----------------------------
 # Update Case by document_no_ac
 # -----------------------------
 @router.put("/{document_no_ac}", response_model=schemas.AccidentCaseResponse)
 def update_case(document_no_ac: str, payload: schemas.AccidentCaseUpdate, db: Session = Depends(get_db)):
-    """Update accident case using document_no_ac instead of numeric ID."""
-    # 🔍 Find case
     case = (
         db.query(models.AccidentCase)
         .filter(models.AccidentCase.document_no_ac == document_no_ac)
         .first()
     )
+
     if not case:
         raise HTTPException(status_code=404, detail=f"Case '{document_no_ac}' not found")
 
-    # 🧩 Update only provided fields (partial update)
     for key, value in payload.dict(exclude_unset=True, exclude={"priority", "document_no_ac"}).items():
-        # ✅ Auto-convert 0 → None for FK fields to avoid FK constraint errors
         if key.endswith("_id") and value == 0:
             value = None
         setattr(case, key, value)
 
-    # ⚙️ Recalculate priority
     case.priority = calculate_priority(
         case.estimated_goods_damage_value,
         case.estimated_vehicle_damage_value,
@@ -240,7 +226,6 @@ def update_case(document_no_ac: str, payload: schemas.AccidentCaseUpdate, db: Se
         case.fatalities,
     )
 
-    # 💾 Commit update safely
     try:
         db.commit()
         db.refresh(case)
@@ -249,6 +234,7 @@ def update_case(document_no_ac: str, payload: schemas.AccidentCaseUpdate, db: Se
         raise HTTPException(status_code=400, detail=f"Database error: {str(e)}")
 
     return case.to_dict()
+
 # -----------------------------
 # Delete Case
 # -----------------------------
@@ -259,4 +245,60 @@ def delete_case(case_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Case not found")
 
     db.delete(case)
+    db.commit()
+
+# -------------------------------------------------------------------
+# ⭐ NEW — CREATE / UPDATE AccidentCaseDoc USING document_no_ac
+# -------------------------------------------------------------------
+@router.post("/{document_no_ac}/docs", response_model=schemas.AccidentCaseDocSchema)
+def add_accident_case_doc(document_no_ac: str, payload: schemas.AccidentCaseDocData, db: Session = Depends(get_db)):
+    case = (
+        db.query(models.AccidentCase)
+        .filter(models.AccidentCase.document_no_ac == document_no_ac)
+        .first()
+    )
+
+    if not case:
+        raise HTTPException(status_code=404, detail="Accident case not found")
+
+    doc = models.AccidentCaseDoc(
+        document_no_ac=document_no_ac,
+        data=payload.dict()
+    )
+
+    db.add(doc)
+    db.commit()
+    db.refresh(doc)
+    return doc
+
+# -------------------------------------------------------------------
+# ⭐ NEW — GET all docs for a case
+# -------------------------------------------------------------------
+@router.get("/{document_no_ac}/docs", response_model=List[schemas.AccidentCaseDocSchema])
+def get_docs(document_no_ac: str, db: Session = Depends(get_db)):
+    docs = (
+        db.query(models.AccidentCaseDoc)
+        .filter(models.AccidentCaseDoc.document_no_ac == document_no_ac)
+        .all()
+    )
+    return docs
+
+# -------------------------------------------------------------------
+# ⭐ NEW — DELETE a doc
+# -------------------------------------------------------------------
+@router.delete("/{document_no_ac}/docs/{doc_id}", status_code=204)
+def delete_doc(document_no_ac: str, doc_id: int, db: Session = Depends(get_db)):
+    doc = (
+        db.query(models.AccidentCaseDoc)
+        .filter(
+            models.AccidentCaseDoc.document_no_ac == document_no_ac,
+            models.AccidentCaseDoc.id == doc_id,
+        )
+        .first()
+    )
+
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    db.delete(doc)
     db.commit()
