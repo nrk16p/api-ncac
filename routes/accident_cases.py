@@ -116,8 +116,8 @@ def create_case(payload: dict, db: Session = Depends(get_db)):
     db.refresh(case)
 
     # ✅ auto-create AccidentCaseDoc if "docs" provided
+    # ✅ auto-create AccidentCaseDoc if "docs" provided
     if docs_data:
-        # ensure always a list
         if isinstance(docs_data, dict):
             docs_data = [docs_data]
 

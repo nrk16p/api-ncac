@@ -1,5 +1,5 @@
 from pydantic import BaseModel, field_validator
-from typing import List, Optional, Union
+from typing import List, Optional, Union,Any
 from datetime import datetime
 
 # ============================================================
@@ -97,8 +97,7 @@ class AccidentCaseResponse(BaseModel):
     attachments: Optional[str] = None
     casestatus: Optional[str] = None
     priority: Optional[str] = None
-    docs: List[AccidentCaseDocSchema] = []  # ✅ matches model output
-
+    docs: Optional[List[dict[str, Any]]] = None
     class Config:
         orm_mode = True
 from pydantic import BaseModel
