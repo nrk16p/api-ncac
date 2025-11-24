@@ -100,16 +100,8 @@ class AccidentCase(Base):
             "attachments": self.attachments,
             "casestatus": self.casestatus,
             "priority": self.priority,
-            "docs": [
-                {
-                    "id": d.id,
-                    "document_no_ac": d.document_no_ac,
-                    "data": d.data,
-                    "created_at": d.created_at,
-                    "updated_at": d.updated_at,
-                }
-                for d in self.docs
-            ],
+            "docs": [doc.data for doc in self.docs],
+
         }
 
 
