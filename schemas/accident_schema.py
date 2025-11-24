@@ -90,7 +90,7 @@ class AccidentCaseCreate(BaseModel):
     injured_not_hospitalized: Optional[int]
     injured_hospitalized: Optional[int]
     fatalities: Optional[int]
-    docs: Optional[List[AccidentCaseDocSchema]] = []
+    docs: Optional[List[AccidentCaseDocSchema]] = []  # keep list form
 
 
 class AccidentCaseUpdate(BaseModel):
