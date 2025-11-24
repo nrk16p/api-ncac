@@ -1,5 +1,16 @@
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Text, Numeric, Date, TIMESTAMP, func
+from sqlalchemy import (
+    Column,
+    Integer,
+    String,
+    ForeignKey,
+    DateTime,
+    Text,
+    Numeric,
+    Date,
+    TIMESTAMP,
+    func,
+)
 from sqlalchemy.orm import relationship, validates
 from sqlalchemy.dialects.postgresql import JSONB
 from database import Base
@@ -7,6 +18,7 @@ from database import Base
 
 class CaseReport(Base):
     __tablename__ = "case_reports"
+
     case_id = Column(Integer, primary_key=True, autoincrement=True)
     document_no = Column(String(50), unique=True, nullable=False)
 
@@ -28,14 +40,26 @@ class CaseReport(Base):
     casestatus = Column(String(50))
     priority = Column(String(20))
 
-    # Relationships
+    # ✅ FIX: Add missing relationship to link with CaseReportInvestigate
+    investigation = relationship(
+        "CaseReportInvestigate",
+        back_populates="case_report",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+
+    # Existing relationships
     site = relationship("Site", backref="case_reports")
     department = relationship("Department", backref="case_reports")
     reporter = relationship("User", backref="case_reports")
     driver = relationship("MasterDriver", backref="case_reports")
     driver_role = relationship("DriverRole", backref="case_reports")
 
-    docs = relationship("CaseReportDoc", back_populates="case_report", cascade="all, delete-orphan")
+    docs = relationship(
+        "CaseReportDoc",
+        back_populates="case_report",
+        cascade="all, delete-orphan",
+    )
 
     def to_dict(self):
         return {
@@ -53,6 +77,7 @@ class CaseReport(Base):
 
 class CaseProduct(Base):
     __tablename__ = "case_products"
+
     case_product_id = Column(Integer, primary_key=True)
     case_id = Column(Integer, ForeignKey("case_reports.case_id"))
     product_name = Column(String(100))
@@ -68,6 +93,7 @@ class CaseProduct(Base):
 
 class CaseReportInvestigate(Base):
     __tablename__ = "case_report_investigate"
+
     investigate_id = Column(Integer, primary_key=True)
     document_no = Column(String(50), ForeignKey("case_reports.document_no"))
     root_cause_analysis = Column(Text)
@@ -75,11 +101,13 @@ class CaseReportInvestigate(Base):
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
     updated_at = Column(TIMESTAMP(timezone=True), onupdate=func.now())
 
+    # ✅ Match back_populates with CaseReport
     case_report = relationship("CaseReport", back_populates="investigation")
 
 
 class CaseReportCorrectiveAction(Base):
     __tablename__ = "case_report_corrective_actions"
+
     id = Column(Integer, primary_key=True)
     investigate_id = Column(Integer, ForeignKey("case_report_investigate.investigate_id"))
     corrective_action = Column(Text)
@@ -88,8 +116,10 @@ class CaseReportCorrectiveAction(Base):
 
 class CaseReportDoc(Base):
     __tablename__ = "case_report_docs"
+
     id = Column(Integer, primary_key=True)
     case_id = Column(Integer, ForeignKey("case_reports.case_id", ondelete="CASCADE"))
     data = Column(JSONB, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
+
     case_report = relationship("CaseReport", back_populates="docs")
