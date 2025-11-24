@@ -90,7 +90,7 @@ class AccidentCaseCreate(BaseModel):
     injured_not_hospitalized: Optional[int] = None
     injured_hospitalized: Optional[int] = None
     fatalities: Optional[int] = None
-    docs: Optional[List[AccidentCaseDocSchema]] = []  # ✅ list type retained
+    docs: Optional[AccidentCaseDocSchema] = None
 
 
 class AccidentCaseUpdate(BaseModel):
@@ -133,7 +133,7 @@ class AccidentCaseResponse(BaseModel):
     attachments: Optional[str] = None
     casestatus: Optional[str] = None
     priority: Optional[str] = None
-    docs: List[AccidentCaseDocSchema] = []
+    docs: Optional[AccidentCaseDocSchema] = None
 
     class Config:
         orm_mode = True
