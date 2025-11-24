@@ -69,7 +69,7 @@ class AccidentCaseCreate(BaseModel):
     client_id: Optional[int]
     origin_id: Optional[int]
     reporter_id: Optional[int]
-    driver_id: Optional[int]
+    driver_id: Optional[str]
     driver_role_id: Optional[int]
     vehicle_id_head: Optional[int]
     vehicle_id_tail: Optional[int]
