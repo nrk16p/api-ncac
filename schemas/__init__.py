@@ -31,7 +31,7 @@ from .accident_schema import (
     AccidentCaseUpdate,
     AccidentCaseResponse,
     AccidentCaseDocSchema,
-    AccidentCaseDocData,  # ✅ add this line
+    AccidentCaseDocData,
 )
 
 # ============================================================
@@ -42,10 +42,13 @@ from .site_schema import SiteCreate, SiteResponse
 from .client_schema import ClientCreate, ClientResponse
 from .location_schema import (
     ProvinceCreate,
+    ProvinceUpdate,        # ✅ added
     ProvinceResponse,
     DistrictCreate,
+    DistrictUpdate,        # ✅ added
     DistrictResponse,
     SubDistrictCreate,
+    SubDistrictUpdate,     # ✅ added
     SubDistrictResponse,
     LocationResponse,
 )
@@ -59,6 +62,10 @@ from .case_report_investigate_schema import (
     CaseReportInvestigateOut,
 )
 from .corrective_action_schema import CorrectiveActionItem
+
+# ============================================================
+# MASTER (VEHICLE / DRIVER / CAUSE)
+# ============================================================
 from .master_schema import (
     MasterDriverCreate,
     MasterDriverResponse,
