@@ -63,13 +63,17 @@ class AccidentCaseDocSchema(AccidentCaseDocData):
 # ============================================================
 # ACCIDENT CASE CREATE / UPDATE / RESPONSE
 # ============================================================
+from pydantic import BaseModel, field_validator
+from typing import List, Optional, Union
+from datetime import datetime
+
 class AccidentCaseCreate(BaseModel):
     site_id: int
     department_id: int
     client_id: Optional[int] = None
     origin_id: Optional[int] = None
     reporter_id: Optional[int] = None
-    driver_id: Optional[str] = None  # changed to str to support codes like 'MTM100'
+    driver_id: Optional[str] = None
     driver_role_id: Optional[int] = None
     vehicle_id_head: Optional[int] = None
     vehicle_id_tail: Optional[int] = None
@@ -79,7 +83,7 @@ class AccidentCaseCreate(BaseModel):
     record_datetime: datetime
     incident_datetime: datetime
     case_location: Optional[str] = None
-    destination: Optional[str] = None  # ✅ make optional
+    destination: Optional[str] = None
     case_details: Optional[str] = None
     estimated_goods_damage_value: Optional[float] = None
     estimated_vehicle_damage_value: Optional[float] = None
@@ -90,7 +94,15 @@ class AccidentCaseCreate(BaseModel):
     injured_not_hospitalized: Optional[int] = None
     injured_hospitalized: Optional[int] = None
     fatalities: Optional[int] = None
-    docs: Optional[AccidentCaseDocSchema] = None
+    docs: Optional[Union[List["AccidentCaseDocSchema"], "AccidentCaseDocSchema"]] = None
+
+    # ✅ Allow single-dict or list input
+    @field_validator("docs", mode="before")
+    @classmethod
+    def ensure_list(cls, v):
+        if isinstance(v, dict):
+            return [v]
+        return v
 
 
 class AccidentCaseUpdate(BaseModel):
