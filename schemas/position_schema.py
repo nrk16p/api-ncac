@@ -2,35 +2,30 @@ from pydantic import BaseModel
 from typing import Optional
 
 
-# ============================================================
-# POSITION LEVEL
-# ============================================================
 class PositionLevelBase(BaseModel):
     level_name: str
 
-class PositionLevelCreate(PositionLevelBase):
-    pass
 
-class PositionLevel(PositionLevelBase):
+class PositionLevelResponse(PositionLevelBase):
     position_level_id: int
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
-# ============================================================
-# POSITION
-# ============================================================
 class PositionBase(BaseModel):
     position_name_th: str
     position_name_en: str
-    position_level_id: Optional[int]
+    position_level_id: int
 
-class PositionCreate(PositionBase):
-    pass
 
 class Position(PositionBase):
+    pass
+
+
+class PositionResponse(PositionBase):
     position_id: int
-    level: Optional[PositionLevel] = None
+    level: Optional[PositionLevelResponse] = None
+
     class Config:
-        orm_mode = True
+        from_attributes = True

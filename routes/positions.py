@@ -6,7 +6,7 @@ import models, schemas
 router = APIRouter(prefix="/positions", tags=["Positions"])
 
 
-@router.post("/", response_model=schemas.Position)
+@router.post("/", response_model=schemas.PositionResponse)
 def create_position(payload: schemas.PositionCreate, db: Session = Depends(get_db)):
     new_position = models.Position(**payload.dict())
     db.add(new_position)
