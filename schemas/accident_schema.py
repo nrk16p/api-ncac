@@ -2,57 +2,67 @@ from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime
 
+# ============================================================
+# ACCIDENT CASE DOC DATA
+# ============================================================
+class AccidentCaseDocData(BaseModel):
+    warning_doc: Optional[str] = None
+    warning_doc_no: Optional[str] = None
+    warning_doc_remark: Optional[str] = None
+    debt_doc: Optional[str] = None
+    debt_doc_no: Optional[str] = None
+    debt_doc_remark: Optional[str] = None
+    quotation_doc: Optional[str] = None
+    quotation_doc_remark: Optional[str] = None
+    customer_invoice: Optional[str] = None
+    customer_invoice_no: Optional[str] = None
+    customer_invoice_remark: Optional[str] = None
+    Insurance_claim_doc: Optional[str] = None
+    Insurance_claim_doc_no: Optional[str] = None
+    Insurance_claim_doc_remark: Optional[str] = None
+    record_doc: Optional[str] = None
+    record_doc_remark: Optional[str] = None
+    medical_doc: Optional[str] = None
+    medical_doc_remark: Optional[str] = None
+    writeoff_doc: Optional[str] = None
+    writeoff_doc_remark: Optional[str] = None
+    damage_payment: Optional[str] = None
+    damage_payment_no: Optional[str] = None
+    damage_payment_remark: Optional[str] = None
+    legal_doc: Optional[str] = None
+    legal_doc_remark: Optional[str] = None
+    account_attachment: Optional[str] = None
+    account_attachment_no: Optional[str] = None
+    account_attachment_remark: Optional[str] = None
+    investigate_doc: Optional[str] = None
+    investigate_doc_remark: Optional[str] = None
 
-class AccidentCaseDocSchema(BaseModel):
-    warning_doc: Optional[str]
-    warning_doc_no: Optional[str]
-    warning_doc_remark: Optional[str]
-    debt_doc: Optional[str]
-    debt_doc_no: Optional[str]
-    debt_doc_remark: Optional[str]
-    quotation_doc: Optional[str]
-    quotation_doc_remark: Optional[str]
-    customer_invoice: Optional[str]
-    customer_invoice_no: Optional[str]
-    customer_invoice_remark: Optional[str]
-    Insurance_claim_doc: Optional[str]
-    Insurance_claim_doc_no: Optional[str]
-    Insurance_claim_doc_remark: Optional[str]
-    record_doc: Optional[str]
-    record_doc_remark: Optional[str]
-    medical_doc: Optional[str]
-    medical_doc_remark: Optional[str]
-    writeoff_doc: Optional[str]
-    writeoff_doc_remark: Optional[str]
-    damage_payment: Optional[str]
-    damage_payment_no: Optional[str]
-    damage_payment_remark: Optional[str]
-    legal_doc: Optional[str]
-    legal_doc_remark: Optional[str]
-    account_attachment: Optional[str]
-    account_attachment_no: Optional[str]
-    account_attachment_remark: Optional[str]
-    investigate_doc: Optional[str]
-    investigate_doc_remark: Optional[str]
+    # 🆕 Extended fields
+    account_attachment_sold: Optional[str] = None
+    account_attachment_sold_no: Optional[str] = None
+    account_attachment_sold_remark: Optional[str] = None
+    account_attachment_insurance: Optional[str] = None
+    account_attachment_insurance_no: Optional[str] = None
+    account_attachment_insurance_remark: Optional[str] = None
+    account_attachment_driver: Optional[str] = None
+    account_attachment_driver_no: Optional[str] = None
+    account_attachment_driver_remark: Optional[str] = None
+    account_attachment_company: Optional[str] = None
+    account_attachment_company_no: Optional[str] = None
+    account_attachment_company_remark: Optional[str] = None
 
-    # 🆕 Extra attachment groups
-    account_attachment_sold: Optional[str]
-    account_attachment_sold_no: Optional[str]
-    account_attachment_sold_remark: Optional[str]
-    account_attachment_insurance: Optional[str]
-    account_attachment_insurance_no: Optional[str]
-    account_attachment_insurance_remark: Optional[str]
-    account_attachment_driver: Optional[str]
-    account_attachment_driver_no: Optional[str]
-    account_attachment_driver_remark: Optional[str]
-    account_attachment_company: Optional[str]
-    account_attachment_company_no: Optional[str]
-    account_attachment_company_remark: Optional[str]
 
+# ============================================================
+# ACCIDENT CASE DOC SCHEMA
+# ============================================================
+class AccidentCaseDocSchema(AccidentCaseDocData):
     class Config:
         orm_mode = True
 
 
+# ============================================================
+# ACCIDENT CASE CREATE / UPDATE / RESPONSE
+# ============================================================
 class AccidentCaseCreate(BaseModel):
     site_id: int
     department_id: int
