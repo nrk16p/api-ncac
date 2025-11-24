@@ -17,7 +17,7 @@ def create_position(payload: schemas.PositionCreate, db: Session = Depends(get_d
 from sqlalchemy.orm import joinedload
 
 
-@router.get("/", response_model=list[schemas.Position])
+@router.get("/", response_model=list[schemas.PositionResponse])
 def get_positions(db: Session = Depends(get_db)):
     return (
         db.query(models.Position)
