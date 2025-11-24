@@ -173,6 +173,7 @@ class AccidentCaseDocData(BaseModel):
     account_attachment_remark: Optional[str] = None
     investigate_doc: Optional[str] = None
     investigate_doc_remark: Optional[str] = None
+    # 🆕 Added new fields
     account_attachment_sold: Optional[str] = None
     account_attachment_sold_no: Optional[str] = None
     account_attachment_sold_remark: Optional[str] = None
@@ -220,7 +221,22 @@ class AccidentCaseDocSchema(BaseModel):
     account_attachment_remark: Optional[str] = None
     investigate_doc: Optional[str] = None
     investigate_doc_remark: Optional[str] = None
+    # 🆕 Added new fields
+    account_attachment_sold: Optional[str] = None
+    account_attachment_sold_no: Optional[str] = None
+    account_attachment_sold_remark: Optional[str] = None
 
+    account_attachment_insurance: Optional[str] = None
+    account_attachment_insurance_no: Optional[str] = None
+    account_attachment_insurance_remark: Optional[str] = None
+
+    account_attachment_driver: Optional[str] = None
+    account_attachment_driver_no: Optional[str] = None
+    account_attachment_driver_remark: Optional[str] = None
+
+    account_attachment_company: Optional[str] = None
+    account_attachment_company_no: Optional[str] = None
+    account_attachment_company_remark: Optional[str] = None
     class Config:
         orm_mode = True
 
