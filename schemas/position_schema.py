@@ -19,7 +19,7 @@ class PositionBase(BaseModel):
     position_level_id: int
 
 
-class Position(PositionBase):
+class PositionCreate(PositionBase):
     pass
 
 
