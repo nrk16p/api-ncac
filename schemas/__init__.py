@@ -31,6 +31,7 @@ from .accident_schema import (
     AccidentCaseUpdate,
     AccidentCaseResponse,
     AccidentCaseDocSchema,
+    AccidentCaseDocData,  # ✅ add this line
 )
 
 # ============================================================
