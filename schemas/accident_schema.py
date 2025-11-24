@@ -1,61 +1,17 @@
-from pydantic import BaseModel
-from typing import List, Optional
+from pydantic import BaseModel, field_validator
+from typing import List, Optional, Union
 from datetime import datetime
 
 # ============================================================
-# ACCIDENT CASE DOC DATA
+# ACCIDENT CASE DOC SCHEMAS
 # ============================================================
-class AccidentCaseDocData(BaseModel):
-    warning_doc: Optional[str] = None
-    warning_doc_no: Optional[str] = None
-    warning_doc_remark: Optional[str] = None
-    debt_doc: Optional[str] = None
-    debt_doc_no: Optional[str] = None
-    debt_doc_remark: Optional[str] = None
-    quotation_doc: Optional[str] = None
-    quotation_doc_remark: Optional[str] = None
-    customer_invoice: Optional[str] = None
-    customer_invoice_no: Optional[str] = None
-    customer_invoice_remark: Optional[str] = None
-    Insurance_claim_doc: Optional[str] = None
-    Insurance_claim_doc_no: Optional[str] = None
-    Insurance_claim_doc_remark: Optional[str] = None
-    record_doc: Optional[str] = None
-    record_doc_remark: Optional[str] = None
-    medical_doc: Optional[str] = None
-    medical_doc_remark: Optional[str] = None
-    writeoff_doc: Optional[str] = None
-    writeoff_doc_remark: Optional[str] = None
-    damage_payment: Optional[str] = None
-    damage_payment_no: Optional[str] = None
-    damage_payment_remark: Optional[str] = None
-    legal_doc: Optional[str] = None
-    legal_doc_remark: Optional[str] = None
-    account_attachment: Optional[str] = None
-    account_attachment_no: Optional[str] = None
-    account_attachment_remark: Optional[str] = None
-    investigate_doc: Optional[str] = None
-    investigate_doc_remark: Optional[str] = None
+class AccidentCaseDocSchema(BaseModel):
+    id: Optional[int] = None
+    document_no_ac: Optional[str] = None
+    data: dict
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
-    # 🆕 Extended fields
-    account_attachment_sold: Optional[str] = None
-    account_attachment_sold_no: Optional[str] = None
-    account_attachment_sold_remark: Optional[str] = None
-    account_attachment_insurance: Optional[str] = None
-    account_attachment_insurance_no: Optional[str] = None
-    account_attachment_insurance_remark: Optional[str] = None
-    account_attachment_driver: Optional[str] = None
-    account_attachment_driver_no: Optional[str] = None
-    account_attachment_driver_remark: Optional[str] = None
-    account_attachment_company: Optional[str] = None
-    account_attachment_company_no: Optional[str] = None
-    account_attachment_company_remark: Optional[str] = None
-
-
-# ============================================================
-# ACCIDENT CASE DOC SCHEMA
-# ============================================================
-class AccidentCaseDocSchema(AccidentCaseDocData):
     class Config:
         orm_mode = True
 
@@ -63,10 +19,6 @@ class AccidentCaseDocSchema(AccidentCaseDocData):
 # ============================================================
 # ACCIDENT CASE CREATE / UPDATE / RESPONSE
 # ============================================================
-from pydantic import BaseModel, field_validator
-from typing import List, Optional, Union
-from datetime import datetime
-
 class AccidentCaseCreate(BaseModel):
     site_id: int
     department_id: int
@@ -94,9 +46,9 @@ class AccidentCaseCreate(BaseModel):
     injured_not_hospitalized: Optional[int] = None
     injured_hospitalized: Optional[int] = None
     fatalities: Optional[int] = None
-    docs: Optional[Union[List["AccidentCaseDocSchema"], "AccidentCaseDocSchema"]] = None
+    docs: Optional[Union[List[AccidentCaseDocSchema], dict]] = None
 
-    # ✅ Allow single-dict or list input
+    # ✅ Allow single dict or list
     @field_validator("docs", mode="before")
     @classmethod
     def ensure_list(cls, v):
@@ -145,7 +97,7 @@ class AccidentCaseResponse(BaseModel):
     attachments: Optional[str] = None
     casestatus: Optional[str] = None
     priority: Optional[str] = None
-    docs: Optional[AccidentCaseDocSchema] = None
+    docs: List[AccidentCaseDocSchema] = []  # ✅ matches model output
 
     class Config:
         orm_mode = True

@@ -39,7 +39,6 @@ class AccidentCase(Base):
     actual_goods_damage_value = Column(Float)
     actual_vehicle_damage_value = Column(Float)
 
-    # ✅ These must exist for your JSON payload
     injured_not_hospitalized = Column(Integer, default=0)
     injured_hospitalized = Column(Integer, default=0)
     fatalities = Column(Integer, default=0)
@@ -48,7 +47,7 @@ class AccidentCase(Base):
     casestatus = Column(String(500))
     priority = Column(String(500))
 
-    # ✅ Relationships
+    # Relationships
     site = relationship("Site")
     department = relationship("Department")
     client = relationship("Client")
@@ -72,16 +71,45 @@ class AccidentCase(Base):
         return {
             "accident_case_id": self.accident_case_id,
             "document_no_ac": self.document_no_ac,
-            "vehicle_truckno": self.vehicle_truckno,
+            "site_name": self.site.site_name_th if self.site else None,
+            "department_name": self.department.department_name_th if self.department else None,
+            "client_name": self.client.client_name if self.client else None,
+            "origin_name": self.origin.location_name if self.origin else None,
+            "reporter_name": f"{self.reporter.firstname} {self.reporter.lastname}" if self.reporter else None,
+            "driver_name": f"{self.driver.first_name} {self.driver.last_name}" if self.driver else None,
+            "driver_role_name": self.driver_role.role_name if self.driver_role else None,
+            "vehicle_head_plate": self.vehicle_head.vehicle_number_plate if self.vehicle_head else None,
+            "vehicle_tail_plate": self.vehicle_tail.vehicle_number_plate if self.vehicle_tail else None,
+            "record_datetime": self.record_datetime,
+            "incident_datetime": self.incident_datetime,
+            "province_name": self.province.province_name_th if self.province else None,
+            "district_name": self.district.district_name_th if self.district else None,
+            "sub_district_name": self.sub_district.sub_district_name_th if self.sub_district else None,
             "case_location": self.case_location,
+            "police_station_area": self.police_station_area,
+            "destination": self.destination,
+            "truck_damage": None,
+            "product_damage": None,
             "case_details": self.case_details,
-            "injured_not_hospitalized": self.injured_not_hospitalized,
-            "injured_hospitalized": self.injured_hospitalized,
-            "fatalities": self.fatalities,
+            "estimated_goods_damage_value": self.estimated_goods_damage_value,
+            "estimated_vehicle_damage_value": self.estimated_vehicle_damage_value,
+            "actual_goods_damage_value": self.actual_goods_damage_value,
+            "actual_vehicle_damage_value": self.actual_vehicle_damage_value,
+            "alcohol_test_result": self.alcohol_test_result,
+            "drug_test_result": self.drug_test_result,
             "attachments": self.attachments,
             "casestatus": self.casestatus,
             "priority": self.priority,
-            "docs": [doc.data for doc in self.docs],
+            "docs": [
+                {
+                    "id": d.id,
+                    "document_no_ac": d.document_no_ac,
+                    "data": d.data,
+                    "created_at": d.created_at,
+                    "updated_at": d.updated_at,
+                }
+                for d in self.docs
+            ],
         }
 
 
