@@ -62,3 +62,8 @@ class User(Base):
 
     def check_password(self, password: str) -> bool:
         return pwd_context.verify(password, self.password_hash)
+class Client(Base):
+    __tablename__ = "clients"
+    client_id = Column(Integer, primary_key=True, index=True)
+    client_name = Column(String(255), nullable=False)
+    contact_info = Column(String(255))

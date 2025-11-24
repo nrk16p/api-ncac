@@ -1,4 +1,4 @@
-from .user_model import User, Position, Department, Site, PositionLevel
+from .user_model import User, Position, Department, Site, PositionLevel, Client
 from .master_model import MasterDriver, MasterCause, DriverRole, Vehicle
 from .location_model import Province, District, SubDistrict, Location
 from .case_report_model import (
