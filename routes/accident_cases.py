@@ -104,7 +104,7 @@ def create_case(payload: dict, db: Session = Depends(get_db)):
     )
 
     case = models.AccidentCase(
-        **case_data.dict(exclude={"priority", "document_no_ac", "casestatus", "attachments"}),
+        **case_data.dict(exclude={"priority", "document_no_ac", "casestatus", "attachments", "docs"}),
         document_no_ac=doc_no,
         priority=priority,
         casestatus="OPEN",
@@ -115,19 +115,13 @@ def create_case(payload: dict, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(case)
 
-    # ✅ auto-create AccidentCaseDoc if "docs" provided
-    # ✅ auto-create AccidentCaseDoc if "docs" provided
-    if docs_data:
-        if isinstance(docs_data, dict):
-            docs_data = [docs_data]
+    # ✅ Create docs separately
+    docs_data = case_data.docs or []
+    for doc in docs_data:
+        doc_record = models.AccidentCaseDoc(document_no_ac=doc_no, data=doc)
+        db.add(doc_record)
 
-        for doc in docs_data:
-            doc_record = models.AccidentCaseDoc(
-                document_no_ac=doc_no,
-                data=doc,
-            )
-            db.add(doc_record)
-        db.commit()
+    db.commit()
 
     db.refresh(case)
     return case.to_dict()
