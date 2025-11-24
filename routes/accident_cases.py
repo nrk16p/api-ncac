@@ -117,11 +117,16 @@ def create_case(payload: dict, db: Session = Depends(get_db)):
 
     # ✅ auto-create AccidentCaseDoc if "docs" provided
     if docs_data:
-        doc_record = models.AccidentCaseDoc(
-            document_no_ac=doc_no,
-            data=docs_data,
-        )
-        db.add(doc_record)
+        # ensure always a list
+        if isinstance(docs_data, dict):
+            docs_data = [docs_data]
+
+        for doc in docs_data:
+            doc_record = models.AccidentCaseDoc(
+                document_no_ac=doc_no,
+                data=doc,
+            )
+            db.add(doc_record)
         db.commit()
 
     db.refresh(case)
