@@ -107,7 +107,7 @@ def create_case(payload: dict, db: Session = Depends(get_db)):
         **case_data.dict(exclude={"priority", "document_no_ac", "casestatus", "attachments", "docs"}),
         document_no_ac=doc_no,
         priority=priority,
-        casestatus="OPEN",
+        casestatus="Pending",
         attachments=f"https://mena-safety-ncac.vercel.app/nc-form?doc={doc_no}",
     )
 
