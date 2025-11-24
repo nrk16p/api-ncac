@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 from database import get_db
 import models, schemas
+from schemas.accident_schema import AccidentCaseDocData
 
 router = APIRouter(prefix="/accident-cases", tags=["Accident Cases"])
 
