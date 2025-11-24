@@ -302,3 +302,36 @@ def delete_doc(document_no_ac: str, doc_id: int, db: Session = Depends(get_db)):
 
     db.delete(doc)
     db.commit()
+
+
+# -------------------------------------------------------------------
+# ⭐ NEW — GET single accident case by document_no_ac
+# -------------------------------------------------------------------
+@router.get("/{document_no_ac}", response_model=schemas.AccidentCaseResponse)
+def get_accident_case(document_no_ac: str, db: Session = Depends(get_db)):
+    """Get one accident case with related nested docs"""
+    case = (
+        db.query(models.AccidentCase)
+        .options(
+            joinedload(models.AccidentCase.site),
+            joinedload(models.AccidentCase.department),
+            joinedload(models.AccidentCase.client),
+            joinedload(models.AccidentCase.origin),
+            joinedload(models.AccidentCase.reporter),
+            joinedload(models.AccidentCase.driver),
+            joinedload(models.AccidentCase.driver_role),
+            joinedload(models.AccidentCase.vehicle_head),
+            joinedload(models.AccidentCase.vehicle_tail),
+            joinedload(models.AccidentCase.province),
+            joinedload(models.AccidentCase.district),
+            joinedload(models.AccidentCase.sub_district),
+            joinedload(models.AccidentCase.docs),
+        )
+        .filter(models.AccidentCase.document_no_ac == document_no_ac)
+        .first()
+    )
+
+    if not case:
+        raise HTTPException(status_code=404, detail=f"Case '{document_no_ac}' not found")
+
+    return case.to_dict()
