@@ -51,3 +51,14 @@ class LocationResponse(LocationBase):
     location_id: int
     class Config:
         from_attributes = True
+# Province
+class ProvinceUpdate(ProvinceBase):
+    pass
+
+# District
+class DistrictUpdate(DistrictBase):
+    pass
+
+# SubDistrict
+class SubDistrictUpdate(SubDistrictBase):
+    pass
