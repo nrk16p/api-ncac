@@ -19,6 +19,8 @@ class DistrictBase(BaseModel):
     district_name_th: str
     district_name_en: Optional[str] = None
     province_id: int
+    district_code: Optional[str] = None  # ✅ NEW
+
 
 class DistrictCreate(DistrictBase):
     pass

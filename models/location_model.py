@@ -17,6 +17,8 @@ class District(Base):
     province_id = Column(Integer, ForeignKey("provinces.province_id"))
     district_name_th = Column(String(100), nullable=False)
     district_name_en = Column(String(100))
+    district_code = Column(String(20), unique=True, nullable=True)  # ✅ NEW
+
     province = relationship("Province", back_populates="districts")
     sub_districts = relationship("SubDistrict", back_populates="district")
 
