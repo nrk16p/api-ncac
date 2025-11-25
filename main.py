@@ -35,7 +35,7 @@ from routes import (
 
 app = FastAPI(
     title="NCAC API",
-    version="1.1.1",
+    version="1.1.2",
     contact={
         "name": "Narongkorn A. (Plug)"
     },
