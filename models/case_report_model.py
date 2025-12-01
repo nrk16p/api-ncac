@@ -160,6 +160,14 @@ class CaseReportInvestigate(Base):
     case_report = relationship("CaseReport", back_populates="investigation")
 
 
+    # ✅ Add this relationship
+    corrective_actions = relationship(
+        "CaseReportCorrectiveAction",
+        back_populates="investigate",
+        cascade="all, delete-orphan",
+    )
+
+
 class CaseReportCorrectiveAction(Base):
     __tablename__ = "case_report_corrective_actions"
 
@@ -169,6 +177,10 @@ class CaseReportCorrectiveAction(Base):
     plan_date = Column(Date)
     pic_contract = Column(Text)
     action_completed_date = Column(Date)
+
+
+    # ✅ Back reference
+    investigate = relationship("CaseReportInvestigate", back_populates="corrective_actions")
 
 
 class CaseReportDoc(Base):
