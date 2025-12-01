@@ -34,3 +34,12 @@ class Vehicle(Base):
     truck_no = Column(String(50), nullable=False)
     vehicle_number_plate = Column(String(50), nullable=False)
     plate_type = Column(String(50), nullable=False)
+
+class Client(Base):
+    __tablename__ = "clients"
+
+    client_id = Column(Integer, primary_key=True, index=True)
+    client_name = Column(String(255), nullable=False)
+    contact_info = Column(Text)
+
+
