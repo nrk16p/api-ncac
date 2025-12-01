@@ -231,7 +231,7 @@ def get_case_report(document_no: str, db: Session = Depends(get_db)):
     if not r:
         raise HTTPException(status_code=404, detail="Case report not found")
     return r.to_dict()
-@router.get("/")
+@router.get("")
 def get_case_reports(
     db: Session = Depends(get_db),
     document_no: Optional[List[str]] = Query(None),
