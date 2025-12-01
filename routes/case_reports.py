@@ -162,7 +162,7 @@ def calculate_priority(estimated_cost: float, actual_price: float) -> Optional[s
 # Routes
 # ============================================================
 
-@router.post("/", status_code=201)
+@router.post("", status_code=201)
 def create_or_update_case_report(payload: CaseReportSchema, db: Session = Depends(get_db)):
     document_no = payload.document_no or generate_document_no(db, payload.site_id)
     report = db.query(CaseReport).filter_by(document_no=document_no).first()
