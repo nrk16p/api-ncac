@@ -28,10 +28,12 @@ class CaseReport(Base):
     driver_id = Column(Integer, ForeignKey("masterdrivers.driver_id"))
     reporter_id = Column(Integer, ForeignKey("users.id"))
     driver_role_id = Column(Integer, ForeignKey("driver_roles.driver_role_id"))
-    # ✅ Newly added columns v2
     origin_id = Column(Integer, ForeignKey("locations.location_id"), nullable=True)
-    vehicle_id_head = Column(Integer, nullable=True)
-    vehicle_id_tail = Column(Integer, nullable=True)
+
+    # ✅ Fixed
+    vehicle_id_head = Column(Integer, ForeignKey("vehicles.vehicle_id"), nullable=True)
+    vehicle_id_tail = Column(Integer, ForeignKey("vehicles.vehicle_id"), nullable=True)
+
     vehicle_truckno = Column(String(50), nullable=True)
     incident_cause_id = Column(Integer, ForeignKey("mastercauses.cause_id"), nullable=True)
 
@@ -46,36 +48,25 @@ class CaseReport(Base):
     casestatus = Column(String(50))
     priority = Column(String(20))
 
-    # ✅ FIX: Add missing relationship to link with CaseReportInvestigate
+    # ✅ Relationships
+    site = relationship("Site", backref="case_reports")
+    department = relationship("Department", backref="case_reports")
+    reporter = relationship("User", backref="case_reports")
+    driver = relationship("MasterDriver", backref="case_reports")
+    driver_role = relationship("DriverRole", backref="case_reports")
+    client = relationship("Client", backref="case_reports")
+    incident_cause = relationship("MasterCause", backref="case_reports")
+    vehicle_head = relationship("Vehicle", foreign_keys=[vehicle_id_head], backref="head_cases")
+    vehicle_tail = relationship("Vehicle", foreign_keys=[vehicle_id_tail], backref="tail_cases")
+    products = relationship("CaseProduct", backref="case_report", cascade="all, delete-orphan")
+
     investigation = relationship(
         "CaseReportInvestigate",
         back_populates="case_report",
         uselist=False,
         cascade="all, delete-orphan",
     )
-
-    # Existing relationships
-    site = relationship("Site", backref="case_reports")
-    department = relationship("Department", backref="case_reports")
-    reporter = relationship("User", backref="case_reports")
-    driver = relationship("MasterDriver", backref="case_reports")
-    driver_role = relationship("DriverRole", backref="case_reports")
-    # Vehicle relationships
-    vehicle_head = relationship("Vehicle", foreign_keys="[CaseReport.vehicle_id_head]", backref="head_cases")
-    vehicle_tail = relationship("Vehicle", foreign_keys="[CaseReport.vehicle_id_tail]", backref="tail_cases")
-    
-    # Cause relationship
-    incident_cause = relationship("MasterCause", backref="case_reports")
-    
-    # Client relationship
-    client = relationship("Client", backref="case_reports")
-    
-
-    docs = relationship(
-        "CaseReportDoc",
-        back_populates="case_report",
-        cascade="all, delete-orphan",
-    )
+    docs = relationship("CaseReportDoc", back_populates="case_report", cascade="all, delete-orphan")
     #update version
     def to_dict(self):
         return {
