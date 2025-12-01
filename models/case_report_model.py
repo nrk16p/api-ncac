@@ -48,7 +48,7 @@ class CaseReport(Base):
     casestatus = Column(String(50))
     priority = Column(String(20))
 
-    # ✅ Relationships
+    # ✅ RelationshipsUPDATE
     site = relationship("Site", backref="case_reports")
     department = relationship("Department", backref="case_reports")
     reporter = relationship("User", backref="case_reports")
