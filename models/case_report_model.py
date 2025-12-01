@@ -66,7 +66,7 @@ class CaseReport(Base):
         back_populates="case_report",
         cascade="all, delete-orphan",
     )
-
+    #update version
     def to_dict(self):
         return {
             "case_id": self.case_id,
