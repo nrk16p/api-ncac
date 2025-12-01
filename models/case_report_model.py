@@ -71,12 +71,34 @@ class CaseReport(Base):
         return {
             "case_id": self.case_id,
             "document_no": self.document_no,
-            "site_name": self.site.site_name_th if self.site else None,
-            "department_name": self.department.department_name_th if self.department else None,
-            "reporter_name": f"{self.reporter.firstname} {self.reporter.lastname}" if self.reporter else None,
+            "site": self.site.site_name_th if self.site else None,
+            "department": self.department.department_name_th if self.department else None,
+            "client": self.client.client_name if hasattr(self, "client") and self.client else None,
+            "vehicle_head": self.vehicle_head.vehicle_number_plate if hasattr(self, "vehicle_head") and self.vehicle_head else None,
+            "vehicle_tail": self.vehicle_tail.vehicle_number_plate if hasattr(self, "vehicle_tail") and self.vehicle_tail else None,
+            "vehicle_truckno": self.vehicle_truckno,
+            "driver": f"{self.driver.first_name} {self.driver.last_name}" if self.driver else None,
+            "driver_role": self.driver_role.role_name if self.driver_role else None,
+            "incident_cause": self.incident_cause.cause_name if hasattr(self, "incident_cause") and self.incident_cause else None,
+            "reporter": f"{self.reporter.firstname} {self.reporter.lastname}" if self.reporter else None,
+            "record_date": self.record_date.isoformat() if self.record_date else None,
+            "incident_date": self.incident_date.isoformat() if self.incident_date else None,
+            "case_location": self.case_location,
+            "destination": self.destination,
             "case_details": self.case_details,
-            "priority": self.priority,
+            "products": [
+                {
+                    "product_name": p.product_name,
+                    "amount": float(p.amount) if p.amount is not None else None,
+                    "unit": p.unit
+                }
+                for p in getattr(self, "products", [])
+            ],
+            "estimated_cost": f"{self.estimated_cost:.2f}" if self.estimated_cost is not None else None,
+            "actual_price": f"{self.actual_price:.2f}" if self.actual_price is not None else None,
+            "attachments": self.attachments,
             "casestatus": self.casestatus,
+            "priority": self.priority,
             "docs": [d.data for d in self.docs],
         }
 
