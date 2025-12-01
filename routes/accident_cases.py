@@ -84,7 +84,7 @@ def calculate_priority(
 # -----------------------------
 # Create Case (with optional docs)
 # -----------------------------
-@router.post("/", response_model=schemas.AccidentCaseResponse, status_code=201)
+@router.post("", response_model=schemas.AccidentCaseResponse, status_code=201)
 def create_case(payload: dict, db: Session = Depends(get_db)):
     """Create accident case + optional docs section"""
     case_data = schemas.AccidentCaseCreate(**payload)
@@ -142,7 +142,7 @@ def parse_dt(val):
 # -----------------------------
 # Get Cases with Filters
 # -----------------------------
-@router.get("/", response_model=List[schemas.AccidentCaseResponse])
+@router.get("", response_model=List[schemas.AccidentCaseResponse])
 def get_accident_cases(
     db: Session = Depends(get_db),
     document_no_ac: Optional[List[str]] = Query(None),
