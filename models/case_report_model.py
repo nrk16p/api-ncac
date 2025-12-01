@@ -159,6 +159,8 @@ class CaseReportCorrectiveAction(Base):
     investigate_id = Column(Integer, ForeignKey("case_report_investigate.investigate_id"))
     corrective_action = Column(Text)
     plan_date = Column(Date)
+    pic_contract = Column(Text)
+    action_completed_date = Column(Date)
 
 
 class CaseReportDoc(Base):
