@@ -28,7 +28,7 @@ class CaseReport(Base):
     driver_id = Column(Integer, ForeignKey("masterdrivers.driver_id"))
     reporter_id = Column(Integer, ForeignKey("users.id"))
     driver_role_id = Column(Integer, ForeignKey("driver_roles.driver_role_id"))
-    # ✅ Newly added columns
+    # ✅ Newly added columns v2
     origin_id = Column(Integer, ForeignKey("locations.location_id"), nullable=True)
     vehicle_id_head = Column(Integer, nullable=True)
     vehicle_id_tail = Column(Integer, nullable=True)
