@@ -33,6 +33,8 @@ class CaseReport(Base):
     vehicle_id_head = Column(Integer, nullable=True)
     vehicle_id_tail = Column(Integer, nullable=True)
     vehicle_truckno = Column(String(50), nullable=True)
+    incident_cause_id = Column(Integer, ForeignKey("incident_causes.id"), nullable=True)
+
     record_date = Column(DateTime)
     incident_date = Column(DateTime)
     case_location = Column(String(255))
