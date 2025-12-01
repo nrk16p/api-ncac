@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, ForeignKey,Text
+from sqlalchemy import Column, Integer, String, ForeignKey
 from sqlalchemy.orm import relationship
 from database import Base
 
@@ -35,16 +35,6 @@ class Vehicle(Base):
     vehicle_number_plate = Column(String(50), nullable=False)
     plate_type = Column(String(50), nullable=False)
 
-class Client(Base):
-    __tablename__ = "clients"
 
-    client_id = Column(Integer, primary_key=True, index=True)
-    client_name = Column(String(255), nullable=False)
-    contact_info = Column(Text)
-
-    case_reports = relationship("CaseReport", back_populates="client")
-
-    def __repr__(self):
-        return f"<Client(id={self.client_id}, name='{self.client_name}')>"
 
 
