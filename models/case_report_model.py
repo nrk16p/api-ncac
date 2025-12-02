@@ -59,7 +59,7 @@ class CaseReport(Base):
     vehicle_head = relationship("Vehicle", foreign_keys=[vehicle_id_head], backref="head_cases")
     vehicle_tail = relationship("Vehicle", foreign_keys=[vehicle_id_tail], backref="tail_cases")
     products = relationship("CaseProduct", backref="case_report", cascade="all, delete-orphan")
-    origin = relationship("Location", backref="case_reports_origin")
+    origin = relationship("Location", backref="case_report")
 
     investigation = relationship(
         "CaseReportInvestigate",
