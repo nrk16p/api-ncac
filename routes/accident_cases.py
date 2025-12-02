@@ -8,9 +8,9 @@ from schemas.accident_schema import AccidentCaseDocData
 
 router = APIRouter(prefix="/accident-cases", tags=["Accident Cases"])
 
-# -----------------------------
-# Static site mapping
-# -----------------------------
+# -----------------------------------------------------
+# SITE CODE MAPPING
+# -----------------------------------------------------
 SITE_CODES = {
     1: "SB",
     2: "LB",
@@ -20,15 +20,13 @@ SITE_CODES = {
     6: "BP",
 }
 
-# -----------------------------
-# Generate unique document number
-# -----------------------------
+# -----------------------------------------------------
+# DOCUMENT NUMBER GENERATOR
+# -----------------------------------------------------
 def generate_document_no_ac(db: Session, site_id: int) -> str:
     site_code = SITE_CODES.get(site_id, "XX")
-    grouped_sites = [sid for sid, code in SITE_CODES.items() if code == site_code]
     now = datetime.now(timezone.utc)
     yymm = now.strftime("%y%m")
-
     prefix = f"AC-{site_code}-{yymm}-"
 
     last = (
@@ -37,16 +35,13 @@ def generate_document_no_ac(db: Session, site_id: int) -> str:
         .order_by(models.AccidentCase.document_no_ac.desc())
         .first()
     )
-    if last and last[0]:
-        last_num = int(last[0].split("-")[-1])
-    else:
-        last_num = 0
-    new_num = last_num + 1
-    return f"{prefix}{new_num:03d}"
 
-# -----------------------------
-# Calculate Priority
-# -----------------------------
+    last_num = int(last[0].split("-")[-1]) if last and last[0] else 0
+    return f"{prefix}{last_num + 1:03d}"
+
+# -----------------------------------------------------
+# PRIORITY CALCULATION
+# -----------------------------------------------------
 def calculate_priority(
     estimated_goods_damage_value: Optional[float],
     estimated_vehicle_damage_value: Optional[float],
@@ -56,8 +51,8 @@ def calculate_priority(
     drug_test_result: Optional[str],
     injured_not_hospitalized: Optional[int],
     injured_hospitalized: Optional[int],
-    fatalities: Optional[int]
-) -> Optional[str]:
+    fatalities: Optional[int],
+) -> str:
     estimate = (estimated_goods_damage_value or 0) + (estimated_vehicle_damage_value or 0)
     actual = (actual_goods_damage_value or 0) + (actual_vehicle_damage_value or 0)
     total_damage = actual if actual else estimate
@@ -68,32 +63,33 @@ def calculate_priority(
     injured_hospitalized = injured_hospitalized or 0
     fatalities = fatalities or 0
 
-    # 🧠 NEW SAFE VALUES
-    safe_values = ["", "none", "negative", "ไม่ใส่ชนิดสารเสพติด"]
+    safe_drug_values = {"", "none", "negative", "ไม่ใส่ชนิดสารเสพติด"}
 
+    # --- Priority Logic ---
     if (
         total_damage > 500000
         or alcohol_test_result > 0
-        or (drug_test_result and drug_test_result not in safe_values)
+        or (drug_test_result and drug_test_result not in safe_drug_values)
         or fatalities >= 1
     ):
         return "Crisis"
-    if 5001 <= total_damage <= 500000 and fatalities == 0 or injured_hospitalized >= 1:
+    elif 50001 <= total_damage <= 500000 and fatalities == 0:
         return "Major"
-    if (total_damage <= 5000) or (injured_not_hospitalized >= 1 and fatalities == 0):
+    elif (5001 <= total_damage <= 50000) or (injured_hospitalized >= 1 and fatalities == 0):
+        return "Significant"
+    elif (total_damage <= 5000) or (injured_not_hospitalized >= 1 and fatalities == 0):
         return "Minor"
-    return "Minor"
+    else:
+        return "Minor"
 
-# -----------------------------
-# Create Case (with optional docs)
-# -----------------------------
+# -----------------------------------------------------
+# CREATE CASE
+# -----------------------------------------------------
 @router.post("", response_model=schemas.AccidentCaseResponse, status_code=201)
 def create_case(payload: dict, db: Session = Depends(get_db)):
-    """Create accident case + optional docs section"""
     case_data = schemas.AccidentCaseCreate(**payload)
-    docs_data = payload.get("docs")
-
     doc_no = generate_document_no_ac(db, case_data.site_id)
+
     priority = calculate_priority(
         case_data.estimated_goods_damage_value,
         case_data.estimated_vehicle_damage_value,
@@ -118,20 +114,16 @@ def create_case(payload: dict, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(case)
 
-    # ✅ Create docs separately
-    docs_data = case_data.docs or []
-    for doc in docs_data:
-        doc_record = models.AccidentCaseDoc(document_no_ac=doc_no, data=doc)
-        db.add(doc_record)
-
+    # Create documents if any
+    for doc in case_data.docs or []:
+        db.add(models.AccidentCaseDoc(document_no_ac=doc_no, data=doc))
     db.commit()
 
-    db.refresh(case)
     return case.to_dict()
 
-# -----------------------------
-# Helper: Parse datetime
-# -----------------------------
+# -----------------------------------------------------
+# DATETIME PARSER
+# -----------------------------------------------------
 def parse_dt(val):
     if not val:
         return None
@@ -142,9 +134,9 @@ def parse_dt(val):
     except Exception:
         return None
 
-# -----------------------------
-# Get Cases with Filters
-# -----------------------------
+# -----------------------------------------------------
+# LIST CASES (FILTERABLE)
+# -----------------------------------------------------
 @router.get("", response_model=List[schemas.AccidentCaseResponse])
 def get_accident_cases(
     db: Session = Depends(get_db),
@@ -156,23 +148,20 @@ def get_accident_cases(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
 ):
-    query = (
-        db.query(models.AccidentCase)
-        .options(
-            joinedload(models.AccidentCase.site),
-            joinedload(models.AccidentCase.department),
-            joinedload(models.AccidentCase.client),
-            joinedload(models.AccidentCase.origin),
-            joinedload(models.AccidentCase.reporter),
-            joinedload(models.AccidentCase.driver),
-            joinedload(models.AccidentCase.driver_role),
-            joinedload(models.AccidentCase.vehicle_head),
-            joinedload(models.AccidentCase.vehicle_tail),
-            joinedload(models.AccidentCase.province),
-            joinedload(models.AccidentCase.district),
-            joinedload(models.AccidentCase.sub_district),
-            joinedload(models.AccidentCase.docs),
-        )
+    query = db.query(models.AccidentCase).options(
+        joinedload(models.AccidentCase.site),
+        joinedload(models.AccidentCase.department),
+        joinedload(models.AccidentCase.client),
+        joinedload(models.AccidentCase.origin),
+        joinedload(models.AccidentCase.reporter),
+        joinedload(models.AccidentCase.driver),
+        joinedload(models.AccidentCase.driver_role),
+        joinedload(models.AccidentCase.vehicle_head),
+        joinedload(models.AccidentCase.vehicle_tail),
+        joinedload(models.AccidentCase.province),
+        joinedload(models.AccidentCase.district),
+        joinedload(models.AccidentCase.sub_district),
+        joinedload(models.AccidentCase.docs),
     )
 
     if document_no_ac:
@@ -185,10 +174,8 @@ def get_accident_cases(
         query = query.filter(models.AccidentCase.driver_id.in_(driver_id))
     if casestatus:
         query = query.filter(models.AccidentCase.casestatus.in_(casestatus))
-
     if start_date and end_date:
-        start = parse_dt(start_date)
-        end = parse_dt(end_date)
+        start, end = parse_dt(start_date), parse_dt(end_date)
         if start and end:
             query = query.filter(
                 models.AccidentCase.record_datetime >= start,
@@ -198,33 +185,23 @@ def get_accident_cases(
     cases = query.order_by(models.AccidentCase.record_datetime.desc()).all()
     return [case.to_dict() for case in cases]
 
-# -----------------------------
-# Update Case by document_no_ac
-# -----------------------------
+# -----------------------------------------------------
+# UPDATE CASE
+# -----------------------------------------------------
 @router.put("/{document_no_ac}", response_model=schemas.AccidentCaseResponse)
 def update_case(document_no_ac: str, payload: schemas.AccidentCaseUpdate, db: Session = Depends(get_db)):
-    # 🔍 1. Fetch the case
-    case = (
-        db.query(models.AccidentCase)
-        .filter(models.AccidentCase.document_no_ac == document_no_ac)
-        .first()
-    )
-
+    case = db.query(models.AccidentCase).filter(models.AccidentCase.document_no_ac == document_no_ac).first()
     if not case:
         raise HTTPException(status_code=404, detail=f"Case '{document_no_ac}' not found")
 
-    # 🧱 2. Apply updates dynamically
     update_data = payload.dict(exclude_unset=True, exclude={"priority", "document_no_ac"})
     for key, value in update_data.items():
-        # Convert 0 → None for *_id fields
         if key.endswith("_id") and value == 0:
             value = None
         setattr(case, key, value)
 
-    # 🧠 3. Flush changes to make them visible to SQLAlchemy
     db.flush()
 
-    # ⚖️ 4. Recalculate priority using updated data
     case.priority = calculate_priority(
         case.estimated_goods_damage_value,
         case.estimated_vehicle_damage_value,
@@ -237,7 +214,6 @@ def update_case(document_no_ac: str, payload: schemas.AccidentCaseUpdate, db: Se
         case.fatalities,
     )
 
-    # 💾 5. Commit & refresh
     try:
         db.commit()
         db.refresh(case)
@@ -245,84 +221,54 @@ def update_case(document_no_ac: str, payload: schemas.AccidentCaseUpdate, db: Se
         db.rollback()
         raise HTTPException(status_code=400, detail=f"Database error: {str(e)}")
 
-    # ✅ 6. Return updated dict
     return case.to_dict()
 
-# -----------------------------
-# Delete Case
-# -----------------------------
+# -----------------------------------------------------
+# DELETE CASE
+# -----------------------------------------------------
 @router.delete("/{case_id}", status_code=204)
 def delete_case(case_id: int, db: Session = Depends(get_db)):
-    case = db.query(models.AccidentCase).get(case_id)
+    case = db.get(models.AccidentCase, case_id)
     if not case:
         raise HTTPException(status_code=404, detail="Case not found")
-
     db.delete(case)
     db.commit()
 
-# -------------------------------------------------------------------
-# ⭐ NEW — CREATE / UPDATE AccidentCaseDoc USING document_no_ac
-# -------------------------------------------------------------------
+# -----------------------------------------------------
+# DOCS MANAGEMENT
+# -----------------------------------------------------
 @router.post("/{document_no_ac}/docs", response_model=schemas.AccidentCaseDocSchema)
 def add_accident_case_doc(document_no_ac: str, payload: schemas.AccidentCaseDocData, db: Session = Depends(get_db)):
-    case = (
-        db.query(models.AccidentCase)
-        .filter(models.AccidentCase.document_no_ac == document_no_ac)
-        .first()
-    )
-
+    case = db.query(models.AccidentCase).filter(models.AccidentCase.document_no_ac == document_no_ac).first()
     if not case:
         raise HTTPException(status_code=404, detail="Accident case not found")
 
-    doc = models.AccidentCaseDoc(
-        document_no_ac=document_no_ac,
-        data=payload.dict()
-    )
-
+    doc = models.AccidentCaseDoc(document_no_ac=document_no_ac, data=payload.dict())
     db.add(doc)
     db.commit()
     db.refresh(doc)
     return doc
 
-# -------------------------------------------------------------------
-# ⭐ NEW — GET all docs for a case
-# -------------------------------------------------------------------
 @router.get("/{document_no_ac}/docs", response_model=List[schemas.AccidentCaseDocSchema])
 def get_docs(document_no_ac: str, db: Session = Depends(get_db)):
-    docs = (
-        db.query(models.AccidentCaseDoc)
-        .filter(models.AccidentCaseDoc.document_no_ac == document_no_ac)
-        .all()
-    )
-    return docs
+    return db.query(models.AccidentCaseDoc).filter(models.AccidentCaseDoc.document_no_ac == document_no_ac).all()
 
-# -------------------------------------------------------------------
-# ⭐ NEW — DELETE a doc
-# -------------------------------------------------------------------
 @router.delete("/{document_no_ac}/docs/{doc_id}", status_code=204)
 def delete_doc(document_no_ac: str, doc_id: int, db: Session = Depends(get_db)):
-    doc = (
-        db.query(models.AccidentCaseDoc)
-        .filter(
-            models.AccidentCaseDoc.document_no_ac == document_no_ac,
-            models.AccidentCaseDoc.id == doc_id,
-        )
-        .first()
-    )
-
+    doc = db.query(models.AccidentCaseDoc).filter(
+        models.AccidentCaseDoc.document_no_ac == document_no_ac,
+        models.AccidentCaseDoc.id == doc_id
+    ).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
-
     db.delete(doc)
     db.commit()
 
-
-# -------------------------------------------------------------------
-# ⭐ NEW — GET single accident case by document_no_ac
-# -------------------------------------------------------------------
+# -----------------------------------------------------
+# GET SINGLE CASE
+# -----------------------------------------------------
 @router.get("/{document_no_ac}", response_model=schemas.AccidentCaseResponse)
 def get_accident_case(document_no_ac: str, db: Session = Depends(get_db)):
-    """Get one accident case with related nested docs"""
     case = (
         db.query(models.AccidentCase)
         .options(
