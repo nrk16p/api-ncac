@@ -4,19 +4,34 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from database import Base
 
+from datetime import datetime
+from sqlalchemy import (
+    Column,
+    Integer,
+    String,
+    Float,
+    DateTime,
+    Text,
+    Numeric,
+    ForeignKey,
+)
+from sqlalchemy.orm import relationship
+from database import Base
+
+
 class AccidentCase(Base):
     __tablename__ = "accident_cases"
 
     accident_case_id = Column(Integer, primary_key=True, index=True)
     document_no_ac = Column(String(50), unique=True, nullable=False, index=True)
 
-    # --- Foreign keys ---
+    # --- Foreign Keys ---
     site_id = Column(Integer, ForeignKey("sites.site_id"))
     department_id = Column(Integer, ForeignKey("departments.department_id"))
     client_id = Column(Integer, ForeignKey("clients.client_id"))
     origin_id = Column(Integer, ForeignKey("locations.location_id"))
     reporter_id = Column(Integer, ForeignKey("users.id"))
-    driver_id = Column(String(255), ForeignKey("masterdrivers.driver_id"))
+    driver_id = Column(Text, ForeignKey("masterdrivers.driver_id"))
     driver_role_id = Column(Integer, ForeignKey("driver_roles.driver_role_id"))
     vehicle_id_head = Column(Integer, ForeignKey("vehicles.vehicle_id"))
     vehicle_id_tail = Column(Integer, ForeignKey("vehicles.vehicle_id"))
@@ -24,53 +39,53 @@ class AccidentCase(Base):
     district_id = Column(Integer, ForeignKey("districts.district_id"))
     sub_district_id = Column(Integer, ForeignKey("sub_districts.sub_district_id"))
 
-    # --- Core info ---
-    record_datetime = Column(DateTime, default=datetime.utcnow)
-    incident_datetime = Column(DateTime)
+    # --- Core Information ---
+    record_datetime = Column(DateTime(timezone=True), default=datetime.utcnow)
+    incident_datetime = Column(DateTime(timezone=True))
     destination = Column(String(255))
     case_location = Column(String(255))
     police_station_area = Column(String(255))
     vehicle_truckno = Column(String(50))
-    case_details = Column(String(500))
+    case_details = Column(Text)
 
     # --- Tests ---
-    alcohol_test = Column(String(255))
-    drug_test = Column(String(255))
+    alcohol_test = Column(Text)
+    drug_test = Column(Text)
     alcohol_test_result = Column(Float)
-    drug_test_result = Column(Float)
+    drug_test_result = Column(String(255))
 
-    # --- Damage details ---
-    truck_damage = Column(String(255))
-    truck_damage_details = Column(String(500))
-    product_damage = Column(String(255))
-    product_damage_details = Column(String(500))
-    estimated_goods_damage_value = Column(Float)
-    estimated_vehicle_damage_value = Column(Float)
-    actual_goods_damage_value = Column(Float)
-    actual_vehicle_damage_value = Column(Float)
+    # --- Damage Information ---
+    truck_damage = Column(Text)
+    truck_damage_details = Column(Text)
+    product_damage = Column(Text)
+    product_damage_details = Column(Text)
+    estimated_goods_damage_value = Column(Numeric(12, 2))
+    estimated_vehicle_damage_value = Column(Numeric(12, 2))
+    actual_goods_damage_value = Column(Numeric(12, 2))
+    actual_vehicle_damage_value = Column(Numeric(12, 2))
 
-    # --- Injury ---
+    # --- Injury Information ---
     injured_not_hospitalized = Column(Integer, default=0)
     injured_hospitalized = Column(Integer, default=0)
     fatalities = Column(Integer, default=0)
-    injury_description = Column(String(500))
+    injury_description = Column(Text)
 
-    # --- Other Party Info ---
+    # --- Other Party Information ---
     other_party_full_name = Column(String(255))
-    other_party_vehicle_plate = Column(String(100))
+    other_party_vehicle_plate = Column(String(50))
     other_party_company_name = Column(String(255))
-    other_party_phone = Column(String(50))
+    other_party_phone = Column(String(20))
     other_party_insurance_name = Column(String(255))
-    other_party_claim_no = Column(String(100))
+    other_party_claim_no = Column(String(50))
 
-    # --- Claim Officer Info ---
+    # --- Claim Officer Information ---
     claim_officer_full_name = Column(String(255))
-    claim_officer_phone = Column(String(50))
+    claim_officer_phone = Column(String(20))
 
-    # --- Other ---
-    attachments = Column(String(500))
-    casestatus = Column(String(500))
-    priority = Column(String(500))
+    # --- Other Info ---
+    attachments = Column(Text)
+    casestatus = Column(String(255))
+    priority = Column(String(255))
 
     # --- Relationships ---
     site = relationship("Site")
@@ -145,6 +160,7 @@ class AccidentCase(Base):
             "priority": self.priority,
             "docs": [doc.data for doc in self.docs],
         }
+
 
 
 class AccidentCaseDoc(Base):
