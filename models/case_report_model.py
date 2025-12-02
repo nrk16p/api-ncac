@@ -173,16 +173,47 @@ class CaseReportInvestigate(Base):
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
     updated_at = Column(TIMESTAMP(timezone=True), onupdate=func.now())
 
-    # ✅ Match back_populates with CaseReport
+    # ✅ Relationship back to CaseReport
     case_report = relationship("CaseReport", back_populates="investigation")
 
-
-    # ✅ Add this relationship
+    # ✅ Relationship to corrective actions
     corrective_actions = relationship(
         "CaseReportCorrectiveAction",
         back_populates="investigate",
         cascade="all, delete-orphan",
     )
+
+    # ✅ NEW METHOD
+    def to_dict(self):
+        return {
+            "investigate_id": self.investigate_id,
+            "document_no": self.document_no,
+            "root_cause_analysis": self.root_cause_analysis,
+            "claim_type": self.claim_type,
+            "insurance_claim": self.insurance_claim,
+            "product_resellable": self.product_resellable,
+            "remaining_damage_cost": self.remaining_damage_cost,
+            "driver_cost": self.driver_cost,
+            "company_cost": self.company_cost,
+            "event_img": self.event_img,
+            "event_img_remark": self.event_img_remark,
+            "account_attachment": self.account_attachment,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+
+            # 🔹 Include corrective actions if any
+            "corrective_actions": [
+                {
+                    "id": c.id,
+                    "corrective_action": c.corrective_action,
+                    "plan_date": c.plan_date.isoformat() if c.plan_date else None,
+                    "pic_contract": c.pic_contract,
+                    "action_completed_date": c.action_completed_date.isoformat()
+                    if c.action_completed_date else None,
+                }
+                for c in getattr(self, "corrective_actions", [])
+            ],
+        }
 
 
 class CaseReportCorrectiveAction(Base):
