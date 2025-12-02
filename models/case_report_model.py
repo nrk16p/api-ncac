@@ -81,12 +81,7 @@ class CaseReport(Base):
             "origin_name": getattr(self.origin, "location_name", None),
             "incident_cause": getattr(self.incident_cause, "cause_name", None),
     
-            # 🔹 Foreign Key IDs (for edit forms)
-            "site_id": self.site_id,
-            "department_id": self.department_id,
-            "client_id": self.client_id,
-            "origin_id": self.origin_id,
-            "incident_cause_id": self.incident_cause_id,
+
     
             # 🔹 Vehicle details
             "vehicle_head_plate": getattr(self.vehicle_head, "vehicle_number_plate", None),
