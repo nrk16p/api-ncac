@@ -89,31 +89,10 @@ class ProductSchema(BaseModel):
 
 # 👇 ADDED CORRECT DocItem schema
 class DocItem(BaseModel):
-    warning_doc: Optional[str] = None
-    warning_doc_no: Optional[str] = None
-    warning_doc_remark: Optional[str] = None
+    data: dict
 
-    debt_doc: Optional[str] = None
-    debt_doc_no: Optional[str] = None
-    debt_doc_remark: Optional[str] = None
-
-    customer_invoice: Optional[str] = None
-    customer_invoice_no: Optional[str] = None
-    customer_invoice_remark: Optional[str] = None
-
-    Insurance_claim_doc: Optional[str] = None
-    Insurance_claim_doc_no: Optional[str] = None
-    Insurance_claim_doc_remark: Optional[str] = None
-
-    writeoff_doc: Optional[str] = None
-    writeoff_doc_remark: Optional[str] = None
-
-    damage_payment: Optional[str] = None
-    damage_payment_no: Optional[str] = None
-    damage_payment_remark: Optional[str] = None
-
-    account_attachment_no: Optional[str] = None
-    account_attachment_remark: Optional[str] = None
+    class Config:
+        orm_mode = True
 
 
 class CaseReportSchema(BaseModel):
