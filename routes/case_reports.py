@@ -89,10 +89,51 @@ class ProductSchema(BaseModel):
 
 # 👇 ADDED CORRECT DocItem schema
 class DocItem(BaseModel):
-    data: dict
+    # 🧾 Existing document types
+    warning_doc: Optional[str] = None
+    warning_doc_no: Optional[str] = None
+    warning_doc_remark: Optional[str] = None
+
+    debt_doc: Optional[str] = None
+    debt_doc_no: Optional[str] = None
+    debt_doc_remark: Optional[str] = None
+
+    customer_invoice: Optional[str] = None
+    customer_invoice_no: Optional[str] = None
+    customer_invoice_remark: Optional[str] = None
+
+    Insurance_claim_doc: Optional[str] = None
+    Insurance_claim_doc_no: Optional[str] = None
+    Insurance_claim_doc_remark: Optional[str] = None
+
+    writeoff_doc: Optional[str] = None
+    writeoff_doc_remark: Optional[str] = None
+
+    damage_payment: Optional[str] = None
+    damage_payment_no: Optional[str] = None
+    damage_payment_remark: Optional[str] = None
+
+    account_attachment_no: Optional[str] = None
+    account_attachment_remark: Optional[str] = None
+
+    # 🆕 Added fields from your new payload
+    event_img: Optional[str] = None
+    event_img_remark: Optional[str] = None
+
+    account_attachment_sell: Optional[str] = None
+    account_attachment_sell_remark: Optional[str] = None
+
+    account_attachment_insurance: Optional[str] = None
+    account_attachment_insurance_remark: Optional[str] = None
+
+    account_attachment_pjs_pay: Optional[str] = None
+    account_attachment_pjs_pay_remark: Optional[str] = None
+
+    account_attachment_company_pay: Optional[str] = None
+    account_attachment_company_pay_remark: Optional[str] = None
 
     class Config:
-        orm_mode = True
+        extra = "allow"   # ✅ Allow future dynamic fields safely
 
 
 class CaseReportSchema(BaseModel):
