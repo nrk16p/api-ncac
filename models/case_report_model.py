@@ -59,6 +59,7 @@ class CaseReport(Base):
     vehicle_head = relationship("Vehicle", foreign_keys=[vehicle_id_head], backref="head_cases")
     vehicle_tail = relationship("Vehicle", foreign_keys=[vehicle_id_tail], backref="tail_cases")
     products = relationship("CaseProduct", backref="case_report", cascade="all, delete-orphan")
+    origin = relationship("Location", backref="case_reports_origin")
 
     investigation = relationship(
         "CaseReportInvestigate",
@@ -77,6 +78,7 @@ class CaseReport(Base):
             "site": self.site.site_name_th if self.site else None,
             "department": self.department.department_name_th if self.department else None,
             "client": self.client.client_name if hasattr(self, "client") and self.client else None,
+            "origin_name": self.origin.location_name_th if getattr(self, "origin", None) else None, 
     
             # 🔹 Vehicle details
             "vehicle_head": self.vehicle_head.vehicle_number_plate if getattr(self, "vehicle_head", None) else None,
