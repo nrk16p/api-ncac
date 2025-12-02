@@ -1,8 +1,11 @@
 import os
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker, declarative_base
 from dotenv import load_dotenv
 
+# -------------------------------------------------------
+# LOAD ENVIRONMENT VARIABLES
+# -------------------------------------------------------
 load_dotenv()
 
 # -------------------------------------------------------
@@ -28,6 +31,25 @@ engine = create_engine(
 )
 
 # -------------------------------------------------------
+# APPLY DATABASE-LEVEL TIMEOUTS (PostgreSQL)
+# -------------------------------------------------------
+@event.listens_for(engine, "connect")
+def set_postgres_timeout(dbapi_connection, connection_record):
+    """Set safe timeouts for every new DB connection."""
+    cursor = dbapi_connection.cursor()
+
+    # ⏱️ Maximum duration for any query (e.g., 60 seconds)
+    cursor.execute("SET statement_timeout = 60000;")
+
+    # 💤 Maximum idle time in transaction before PostgreSQL kills the session (e.g., 60 seconds)
+    cursor.execute("SET idle_in_transaction_session_timeout = 60000;")
+
+    # 🧹 Optional: terminate session if backend becomes idle for too long (PostgreSQL ≥ 14)
+    # cursor.execute("SET idle_session_timeout = 300000;")  # 5 minutes
+
+    cursor.close()
+
+# -------------------------------------------------------
 # SESSION FACTORY
 # -------------------------------------------------------
 SessionLocal = sessionmaker(
@@ -45,7 +67,10 @@ Base = declarative_base()
 # FASTAPI DEPENDENCY
 # -------------------------------------------------------
 def get_db():
-    """Database session generator for FastAPI dependency"""
+    """
+    Database session generator for FastAPI dependency.
+    Ensures session is closed after request is processed.
+    """
     db = SessionLocal()
     try:
         yield db
