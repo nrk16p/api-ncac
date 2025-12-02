@@ -71,6 +71,7 @@ class AccidentCaseDocSchema(BaseModel):
 # ============================================================
 class AccidentCaseCreate(BaseModel):
     # 🔹 Basic & Foreign Keys
+    document_no_ac: str = None
     site_id: int
     department_id: int
     client_id: Optional[int] = None
