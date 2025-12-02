@@ -78,7 +78,7 @@ class CaseReport(Base):
             "site": self.site.site_name_th if self.site else None,
             "department": self.department.department_name_th if self.department else None,
             "client": self.client.client_name if hasattr(self, "client") and self.client else None,
-            "origin_name": self.origin.location_name_th if getattr(self, "origin", None) else None, 
+            "origin_name": self.origin.location_name if getattr(self, "origin", None) else None, 
     
             # 🔹 Vehicle details
             "vehicle_head": self.vehicle_head.vehicle_number_plate if getattr(self, "vehicle_head", None) else None,
