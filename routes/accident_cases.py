@@ -78,10 +78,8 @@ def calculate_priority(
         or fatalities >= 1
     ):
         return "Crisis"
-    if 50001 <= total_damage <= 500000 and fatalities == 0:
+    if 5001 <= total_damage <= 500000 and fatalities == 0 or injured_hospitalized >= 1:
         return "Major"
-    if (5001 <= total_damage <= 50000) or (injured_hospitalized >= 1 and fatalities == 0):
-        return "Significant"
     if (total_damage <= 5000) or (injured_not_hospitalized >= 1 and fatalities == 0):
         return "Minor"
     return "Minor"
