@@ -200,6 +200,7 @@ def get_accident_cases(
 # -----------------------------
 @router.put("/{document_no_ac}", response_model=schemas.AccidentCaseResponse)
 def update_case(document_no_ac: str, payload: schemas.AccidentCaseUpdate, db: Session = Depends(get_db)):
+    # 🔍 1. Fetch the case
     case = (
         db.query(models.AccidentCase)
         .filter(models.AccidentCase.document_no_ac == document_no_ac)
@@ -209,11 +210,18 @@ def update_case(document_no_ac: str, payload: schemas.AccidentCaseUpdate, db: Se
     if not case:
         raise HTTPException(status_code=404, detail=f"Case '{document_no_ac}' not found")
 
-    for key, value in payload.dict(exclude_unset=True, exclude={"priority", "document_no_ac"}).items():
+    # 🧱 2. Apply updates dynamically
+    update_data = payload.dict(exclude_unset=True, exclude={"priority", "document_no_ac"})
+    for key, value in update_data.items():
+        # Convert 0 → None for *_id fields
         if key.endswith("_id") and value == 0:
             value = None
         setattr(case, key, value)
 
+    # 🧠 3. Flush changes to make them visible to SQLAlchemy
+    db.flush()
+
+    # ⚖️ 4. Recalculate priority using updated data
     case.priority = calculate_priority(
         case.estimated_goods_damage_value,
         case.estimated_vehicle_damage_value,
@@ -226,6 +234,7 @@ def update_case(document_no_ac: str, payload: schemas.AccidentCaseUpdate, db: Se
         case.fatalities,
     )
 
+    # 💾 5. Commit & refresh
     try:
         db.commit()
         db.refresh(case)
@@ -233,6 +242,7 @@ def update_case(document_no_ac: str, payload: schemas.AccidentCaseUpdate, db: Se
         db.rollback()
         raise HTTPException(status_code=400, detail=f"Database error: {str(e)}")
 
+    # ✅ 6. Return updated dict
     return case.to_dict()
 
 # -----------------------------
