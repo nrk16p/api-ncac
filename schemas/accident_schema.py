@@ -70,6 +70,8 @@ class AccidentCaseDocSchema(BaseModel):
 # ACCIDENT CASE CREATE / UPDATE / RESPONSE
 # ============================================================
 class AccidentCaseCreate(BaseModel):
+    # 🔹 Basic & Foreign Keys
+    document_no_ac: str
     site_id: int
     department_id: int
     client_id: Optional[int] = None
@@ -79,25 +81,59 @@ class AccidentCaseCreate(BaseModel):
     driver_role_id: Optional[int] = None
     vehicle_id_head: Optional[int] = None
     vehicle_id_tail: Optional[int] = None
+    vehicle_truckno: Optional[str] = None
+
+    # 🔹 Date & Location
+    record_datetime: datetime
+    incident_datetime: datetime
     province_id: Optional[int] = None
     district_id: Optional[int] = None
     sub_district_id: Optional[int] = None
-    record_datetime: datetime
-    incident_datetime: datetime
     case_location: Optional[str] = None
+    police_station_area: Optional[str] = None
     destination: Optional[str] = None
+
+    # 🔹 Case & Damage Info
     case_details: Optional[str] = None
+    truck_damage: Optional[str] = None
+    truck_damage_details: Optional[str] = None
+    product_damage: Optional[str] = None
+    product_damage_details: Optional[str] = None
+
+    # 🔹 Test Results
+    alcohol_test: Optional[str] = None
+    alcohol_test_result: Optional[float] = None
+    drug_test: Optional[str] = None
+    drug_test_result: Optional[str] = None
+
+    # 🔹 Damage Values
     estimated_goods_damage_value: Optional[float] = None
     estimated_vehicle_damage_value: Optional[float] = None
     actual_goods_damage_value: Optional[float] = None
     actual_vehicle_damage_value: Optional[float] = None
-    alcohol_test_result: Optional[float] = None
-    drug_test_result: Optional[str] = None
+
+    # 🔹 Injury Info
     injured_not_hospitalized: Optional[int] = None
     injured_hospitalized: Optional[int] = None
     fatalities: Optional[int] = None
+    injury_description: Optional[str] = None
 
-    # ✅ FIX: docs now accept list of plain dictionaries
+    # 🔹 Other Party Info
+    other_party_full_name: Optional[str] = None
+    other_party_vehicle_plate: Optional[str] = None
+    other_party_company_name: Optional[str] = None
+    other_party_phone: Optional[str] = None
+    other_party_insurance_name: Optional[str] = None
+    other_party_claim_no: Optional[str] = None
+    claim_officer_full_name: Optional[str] = None
+    claim_officer_phone: Optional[str] = None
+
+    # 🔹 Attachments & Status
+    attachments: Optional[str] = None
+    casestatus: Optional[str] = None
+    priority: Optional[str] = None
+
+    # 🔹 Documents
     docs: Optional[List[dict]] = None
 
     @field_validator("docs", mode="before")
@@ -107,6 +143,8 @@ class AccidentCaseCreate(BaseModel):
             return [v]
         return v
 
+    class Config:
+        from_attributes = True  # ✅ Pydantic v2 compatible
 
 class AccidentCaseUpdate(BaseModel):
     case_location: Optional[str] = None
