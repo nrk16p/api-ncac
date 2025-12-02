@@ -74,26 +74,37 @@ class CaseReport(Base):
             "case_id": self.case_id,
             "document_no": self.document_no,
     
-            # 🔹 Linked names
-            "site": self.site.site_name_th if self.site else None,
-            "department": self.department.department_name_th if self.department else None,
-            "client": self.client.client_name if hasattr(self, "client") and self.client else None,
-            "origin_name": self.origin.location_name if getattr(self, "origin", None) else None, 
+            # 🔹 Linked Names
+            "site_name": getattr(self.site, "site_name_th", None),
+            "department_name": getattr(self.department, "department_name_th", None),
+            "client_name": getattr(self.client, "client_name", None),
+            "origin_name": getattr(self.origin, "location_name", None),
+            "incident_cause": getattr(self.incident_cause, "cause_name", None),
+    
+            # 🔹 Foreign Key IDs (for edit forms)
+            "site_id": self.site_id,
+            "department_id": self.department_id,
+            "client_id": self.client_id,
+            "origin_id": self.origin_id,
+            "incident_cause_id": self.incident_cause_id,
     
             # 🔹 Vehicle details
-            "vehicle_head": self.vehicle_head.vehicle_number_plate if getattr(self, "vehicle_head", None) else None,
-            "vehicle_tail": self.vehicle_tail.vehicle_number_plate if getattr(self, "vehicle_tail", None) else None,
+            "vehicle_head_plate": getattr(self.vehicle_head, "vehicle_number_plate", None),
+            "vehicle_tail_plate": getattr(self.vehicle_tail, "vehicle_number_plate", None),
             "vehicle_truckno": self.vehicle_truckno,
     
             # 🔹 Driver info
-            "driver": f"{self.driver.first_name} {self.driver.last_name}" if self.driver else None,
-            "driver_role": self.driver_role.role_name if self.driver_role else None,
+            "driver_name": (
+                f"{getattr(self.driver, 'first_name', '')} {getattr(self.driver, 'last_name', '')}".strip()
+                if self.driver else None
+            ),
+            "driver_role_name": getattr(self.driver_role, "role_name", None),
     
-            # 🔹 Cause of incident (from mastercauses)
-            "incident_cause": self.incident_cause.cause_name if getattr(self, "incident_cause", None) else None,
-    
-            # 🔹 Reporter
-            "reporter": f"{self.reporter.firstname} {self.reporter.lastname}" if self.reporter else None,
+            # 🔹 Reporter info
+            "reporter_name": (
+                f"{getattr(self.reporter, 'firstname', '')} {getattr(self.reporter, 'lastname', '')}".strip()
+                if self.reporter else None
+            ),
     
             # 🔹 Dates & details
             "record_date": self.record_date.isoformat() if self.record_date else None,
@@ -112,17 +123,21 @@ class CaseReport(Base):
                 for p in getattr(self, "products", [])
             ],
     
-            # 🔹 Cost info
-            "estimated_cost": f"{self.estimated_cost:.2f}" if self.estimated_cost is not None else None,
-            "actual_price": f"{self.actual_price:.2f}" if self.actual_price is not None else None,
+            # 🔹 Cost info (keep as float)
+            "estimated_cost": float(self.estimated_cost) if self.estimated_cost is not None else None,
+            "actual_price": float(self.actual_price) if self.actual_price is not None else None,
+    
+            # 🔹 Investigation (if any)
+            "investigation": self.investigation.to_dict() if getattr(self, "investigation", None) else None,
     
             # 🔹 Misc
             "attachments": self.attachments,
             "casestatus": self.casestatus,
             "priority": self.priority,
-            "docs": [d.data for d in self.docs],
+    
+            # 🔹 Documents (related)
+            "docs": [d.data for d in self.docs] if getattr(self, "docs", None) else [],
         }
-
 
 class CaseProduct(Base):
     __tablename__ = "case_products"
