@@ -119,6 +119,8 @@ class AccidentCaseUpdate(BaseModel):
 class AccidentCaseResponse(BaseModel):
     accident_case_id: int
     document_no_ac: str
+
+    # 🔹 Linked Entities
     site_name: Optional[str] = None
     department_name: Optional[str] = None
     client_name: Optional[str] = None
@@ -128,6 +130,8 @@ class AccidentCaseResponse(BaseModel):
     driver_role_name: Optional[str] = None
     vehicle_head_plate: Optional[str] = None
     vehicle_tail_plate: Optional[str] = None
+
+    # 🔹 Date & Location Info
     record_datetime: Optional[datetime] = None
     incident_datetime: Optional[datetime] = None
     province_name: Optional[str] = None
@@ -136,19 +140,49 @@ class AccidentCaseResponse(BaseModel):
     case_location: Optional[str] = None
     police_station_area: Optional[str] = None
     destination: Optional[str] = None
+
+    # 🔹 Damage & Case Details
     truck_damage: Optional[str] = None
+    truck_damage_details: Optional[str] = None
     product_damage: Optional[str] = None
+    product_damage_details: Optional[str] = None
     case_details: Optional[str] = None
+
+    # 🔹 Injury Details
+    injured_not_hospitalized: Optional[int] = None
+    injured_hospitalized: Optional[int] = None
+    fatalities: Optional[int] = None
+    injury_description: Optional[str] = None
+
+    # 🔹 Other Party Info
+    other_party_full_name: Optional[str] = None
+    other_party_vehicle_plate: Optional[str] = None
+    other_party_company_name: Optional[str] = None
+    other_party_phone: Optional[str] = None
+    other_party_insurance_name: Optional[str] = None
+    other_party_claim_no: Optional[str] = None
+    claim_officer_full_name: Optional[str] = None
+    claim_officer_phone: Optional[str] = None
+
+    # 🔹 Test Results
+    alcohol_test: Optional[str] = None
+    alcohol_test_result: Optional[float] = None
+    drug_test: Optional[str] = None
+    drug_test_result: Optional[str] = None
+
+    # 🔹 Cost Info
     estimated_goods_damage_value: Optional[float] = None
     estimated_vehicle_damage_value: Optional[float] = None
     actual_goods_damage_value: Optional[float] = None
     actual_vehicle_damage_value: Optional[float] = None
-    alcohol_test_result: Optional[float] = None
-    drug_test_result: Optional[str] = None
+
+    # 🔹 Attachments & Status
     attachments: Optional[str] = None
     casestatus: Optional[str] = None
     priority: Optional[str] = None
+
+    # 🔹 Related Documents
     docs: Optional[List[dict[str, Any]]] = None
 
     class Config:
-        from_attributes = True  # ✅ updated for Pydantic v2
+        from_attributes = True  # ✅ Pydantic v2 compatible
