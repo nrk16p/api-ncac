@@ -10,6 +10,7 @@ class AccidentCase(Base):
     accident_case_id = Column(Integer, primary_key=True, index=True)
     document_no_ac = Column(String(50), unique=True, nullable=False, index=True)
 
+    # --- Foreign keys ---
     site_id = Column(Integer, ForeignKey("sites.site_id"))
     department_id = Column(Integer, ForeignKey("departments.department_id"))
     client_id = Column(Integer, ForeignKey("clients.client_id"))
@@ -23,6 +24,7 @@ class AccidentCase(Base):
     district_id = Column(Integer, ForeignKey("districts.district_id"))
     sub_district_id = Column(Integer, ForeignKey("sub_districts.sub_district_id"))
 
+    # --- Core info ---
     record_datetime = Column(DateTime, default=datetime.utcnow)
     incident_datetime = Column(DateTime)
     destination = Column(String(255))
@@ -31,23 +33,46 @@ class AccidentCase(Base):
     vehicle_truckno = Column(String(50))
     case_details = Column(String(500))
 
+    # --- Tests ---
+    alcohol_test = Column(String(255))
+    drug_test = Column(String(255))
     alcohol_test_result = Column(Float)
-    drug_test_result = Column(String(500))
+    drug_test_result = Column(Float)
 
+    # --- Damage details ---
+    truck_damage = Column(String(255))
+    truck_damage_details = Column(String(500))
+    product_damage = Column(String(255))
+    product_damage_details = Column(String(500))
     estimated_goods_damage_value = Column(Float)
     estimated_vehicle_damage_value = Column(Float)
     actual_goods_damage_value = Column(Float)
     actual_vehicle_damage_value = Column(Float)
 
+    # --- Injury ---
     injured_not_hospitalized = Column(Integer, default=0)
     injured_hospitalized = Column(Integer, default=0)
     fatalities = Column(Integer, default=0)
+    injury_description = Column(String(500))
 
+    # --- Other Party Info ---
+    other_party_full_name = Column(String(255))
+    other_party_vehicle_plate = Column(String(100))
+    other_party_company_name = Column(String(255))
+    other_party_phone = Column(String(50))
+    other_party_insurance_name = Column(String(255))
+    other_party_claim_no = Column(String(100))
+
+    # --- Claim Officer Info ---
+    claim_officer_full_name = Column(String(255))
+    claim_officer_phone = Column(String(50))
+
+    # --- Other ---
     attachments = Column(String(500))
     casestatus = Column(String(500))
     priority = Column(String(500))
 
-    # Relationships
+    # --- Relationships ---
     site = relationship("Site")
     department = relationship("Department")
     client = relationship("Client")
@@ -67,6 +92,7 @@ class AccidentCase(Base):
         cascade="all, delete-orphan"
     )
 
+    # --- Serializer ---
     def to_dict(self):
         return {
             "accident_case_id": self.accident_case_id,
@@ -88,20 +114,36 @@ class AccidentCase(Base):
             "case_location": self.case_location,
             "police_station_area": self.police_station_area,
             "destination": self.destination,
-            "truck_damage": None,
-            "product_damage": None,
+            "vehicle_truckno": self.vehicle_truckno,
             "case_details": self.case_details,
+            "alcohol_test": self.alcohol_test,
+            "drug_test": self.drug_test,
+            "alcohol_test_result": self.alcohol_test_result,
+            "drug_test_result": self.drug_test_result,
+            "truck_damage": self.truck_damage,
+            "truck_damage_details": self.truck_damage_details,
+            "product_damage": self.product_damage,
+            "product_damage_details": self.product_damage_details,
             "estimated_goods_damage_value": self.estimated_goods_damage_value,
             "estimated_vehicle_damage_value": self.estimated_vehicle_damage_value,
             "actual_goods_damage_value": self.actual_goods_damage_value,
             "actual_vehicle_damage_value": self.actual_vehicle_damage_value,
-            "alcohol_test_result": self.alcohol_test_result,
-            "drug_test_result": self.drug_test_result,
+            "injured_not_hospitalized": self.injured_not_hospitalized,
+            "injured_hospitalized": self.injured_hospitalized,
+            "fatalities": self.fatalities,
+            "injury_description": self.injury_description,
+            "other_party_full_name": self.other_party_full_name,
+            "other_party_vehicle_plate": self.other_party_vehicle_plate,
+            "other_party_company_name": self.other_party_company_name,
+            "other_party_phone": self.other_party_phone,
+            "other_party_insurance_name": self.other_party_insurance_name,
+            "other_party_claim_no": self.other_party_claim_no,
+            "claim_officer_full_name": self.claim_officer_full_name,
+            "claim_officer_phone": self.claim_officer_phone,
             "attachments": self.attachments,
             "casestatus": self.casestatus,
             "priority": self.priority,
             "docs": [doc.data for doc in self.docs],
-
         }
 
 
