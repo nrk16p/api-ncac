@@ -189,19 +189,48 @@ def get_accident_cases(
 # UPDATE CASE
 # -----------------------------------------------------
 @router.put("/{document_no_ac}", response_model=schemas.AccidentCaseResponse)
-def update_case(document_no_ac: str, payload: schemas.AccidentCaseUpdate, db: Session = Depends(get_db)):
-    case = db.query(models.AccidentCase).filter(models.AccidentCase.document_no_ac == document_no_ac).first()
+def update_case(document_no_ac: str, payload: dict, db: Session = Depends(get_db)):
+    """
+    Update a case by document_no_ac, safely handling both normal fields and docs.
+    """
+    case = (
+        db.query(models.AccidentCase)
+        .filter(models.AccidentCase.document_no_ac == document_no_ac)
+        .first()
+    )
     if not case:
         raise HTTPException(status_code=404, detail=f"Case '{document_no_ac}' not found")
 
-    update_data = payload.dict(exclude_unset=True, exclude={"priority", "document_no_ac"})
-    for key, value in update_data.items():
+    # ✅ Handle docs separately
+    docs_data = payload.get("docs", None)
+    if docs_data:
+        # Delete existing docs for this case
+        db.query(models.AccidentCaseDoc).filter(
+            models.AccidentCaseDoc.document_no_ac == document_no_ac
+        ).delete(synchronize_session=False)
+
+        # Insert new docs
+        for doc in docs_data:
+            new_doc = models.AccidentCaseDoc(
+                document_no_ac=document_no_ac,
+                data=doc
+            )
+            db.add(new_doc)
+
+    # ✅ Update other fields
+    update_fields = {
+        k: v for k, v in payload.items()
+        if k not in {"priority", "document_no_ac", "docs"}
+    }
+
+    for key, value in update_fields.items():
         if key.endswith("_id") and value == 0:
             value = None
         setattr(case, key, value)
 
     db.flush()
 
+    # ✅ Recalculate priority
     case.priority = calculate_priority(
         case.estimated_goods_damage_value,
         case.estimated_vehicle_damage_value,
