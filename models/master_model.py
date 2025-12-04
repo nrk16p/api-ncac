@@ -27,6 +27,8 @@ class MasterCause(Base):
     cause_id = Column(Integer, primary_key=True, index=True)
     cause_name = Column(String(255), nullable=False)
     description = Column(String(255))
+    site_id = Column(Integer)
+
 
 
 class Vehicle(Base):
