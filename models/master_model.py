@@ -7,6 +7,7 @@ class DriverRole(Base):
     __tablename__ = "driver_roles"
     driver_role_id = Column(Integer, primary_key=True, index=True)
     role_name = Column(String(100), nullable=False)
+    site_id = Column(Integer)
 
 
 class MasterDriver(Base):
