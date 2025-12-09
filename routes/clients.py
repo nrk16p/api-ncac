@@ -19,7 +19,7 @@ class ClientResponse(BaseModel):
     client_id: int
     client_name: str
     contact_info: Optional[str] = None
-    site_id = int
+    site_id = Optional[int] = None
     class Config:
         orm_mode = True
 
