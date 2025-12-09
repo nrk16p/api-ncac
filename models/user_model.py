@@ -67,3 +67,4 @@ class Client(Base):
     client_id = Column(Integer, primary_key=True, index=True)
     client_name = Column(String(255), nullable=False)
     contact_info = Column(String(255))
+    site_id = Column(Integer)
