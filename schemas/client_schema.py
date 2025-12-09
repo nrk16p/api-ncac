@@ -10,5 +10,7 @@ class ClientCreate(ClientBase):
 
 class ClientResponse(ClientBase):
     client_id: int
+    site_id: int
+
     class Config:
         from_attributes = True
