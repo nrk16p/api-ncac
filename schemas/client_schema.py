@@ -4,6 +4,7 @@ from typing import Optional
 class ClientBase(BaseModel):
     client_name: str
     contact_info: Optional[str] = None
+    site_id: int
 
 class ClientCreate(ClientBase):
     pass
