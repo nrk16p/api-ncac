@@ -10,6 +10,7 @@ router = APIRouter(prefix="/clients", tags=["Clients"])
 class ClientCreate(BaseModel):
     client_name: str
     contact_info: Optional[str] = None
+    site_id: Optional[int] = None
 
 class ClientUpdate(BaseModel):
     client_name: Optional[str] = None
