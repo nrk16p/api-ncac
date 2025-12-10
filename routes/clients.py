@@ -15,6 +15,7 @@ class ClientCreate(BaseModel):
 class ClientUpdate(BaseModel):
     client_name: Optional[str] = None
     contact_info: Optional[str] = None
+    site_id: Optional[int] = None
 
 class ClientResponse(BaseModel):
     client_id: int
