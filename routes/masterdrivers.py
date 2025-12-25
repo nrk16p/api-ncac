@@ -32,7 +32,7 @@ def create_driver(payload: MasterDriverCreate, db: Session = Depends(get_db)):
         first_name=payload.first_name,
         last_name=payload.last_name,
         site_id=payload.site_id,
-        driver_role_id=payload.driver_role_id
+        driver_role_id=payload.driver_role_id , driver_id=payload.driver_id
     )
     db.add(d)
     db.commit()
