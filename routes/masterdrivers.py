@@ -18,6 +18,8 @@ class MasterDriverCreate(MasterDriverBase):
     last_name: str
     site_id: int
     driver_role_id: int
+    driver_id: str
+
 
 class MasterDriverResponse(MasterDriverBase):
     driver_id: str
