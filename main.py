@@ -30,7 +30,8 @@ from routes import (
     provinces,
     districts,
     sub_districts,
-    case_reports_investigate
+    case_reports_investigate,
+    form_routes
 )
 
 app = FastAPI(
@@ -161,6 +162,7 @@ app.include_router(provinces.router)
 app.include_router(districts.router)
 app.include_router(sub_districts.router)
 app.include_router(case_reports_investigate.router)
+app.include_router(form_routes.router)
 
 
 @app.get("/")
