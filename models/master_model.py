@@ -74,6 +74,7 @@ class FormQuestion(Base):
     question_name = Column(String(100), nullable=False)
     question_label = Column(String(255), nullable=False)
     question_type = Column(String(30), nullable=False)
+
     is_required = Column(Boolean, default=False)
     sort_order = Column(Integer, default=0)
     created_at = Column(TIMESTAMP, default=datetime.utcnow)
@@ -92,6 +93,8 @@ class FormQuestionOption(Base):
     question_id = Column(Integer, ForeignKey("form_questions.id", ondelete="CASCADE"))
     option_value = Column(String(100), nullable=False)
     option_label = Column(String(255), nullable=False)
+    option_filter = Column(String(100), nullable=True)   # 👈 ADD THIS
+
     sort_order = Column(Integer, default=0)
 
     question = relationship("FormQuestion", back_populates="options")

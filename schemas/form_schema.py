@@ -2,12 +2,15 @@ from pydantic import BaseModel
 from typing import List, Optional, Union
 from datetime import datetime
 
+
 # -------------------------
 # OPTIONS
 # -------------------------
 class FormOptionCreate(BaseModel):
     option_value: str
     option_label: str
+    option_filter: str | None = None
+
     sort_order: Optional[int] = 0
 
 # -------------------------
@@ -38,7 +41,7 @@ class FormMasterCreate(BaseModel):
 # -------------------------
 class FormSubmissionValueCreate(BaseModel):
     question_id: int
-    value_text: Optional[str] = None
+    value_text: Union[str, List[str], None] = None   # 👈 accept array
     value_number: Optional[float] = None
     value_date: Optional[datetime] = None
     value_boolean: Optional[bool] = None

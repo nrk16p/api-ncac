@@ -1,0 +1,16 @@
+{
+	"folders": [
+		{
+			"path": "../../fuel-control-center"
+		},
+		{
+			"path": "../../cal_engine_on"
+		},
+		{
+			"path": "../../task"
+		},
+		{
+			"path": ".."
+		}
+	]
+}

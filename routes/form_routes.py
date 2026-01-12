@@ -1,21 +1,27 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
+from datetime import datetime
+
 from database import get_db
 from models.master_model import (
     FormMaster, FormQuestion, FormQuestionOption,
-    FormSubmission, FormSubmissionValue
+    FormSubmission, FormSubmissionValue, FormSequence
 )
 from schemas.form_schema import FormMasterCreate, FormSubmissionCreate
-from datetime import datetime
-from sqlalchemy.exc import IntegrityError
-from models.master_model import FormSequence
 
 router = APIRouter(prefix="/forms", tags=["Forms"])
+
+
+# ============================================================
+# Helper: Generate Business Form ID
+# Format: <FORM_CODE>-<YEAR>-<0001>
+# ============================================================
 def generate_form_id(db: Session, form_code: str) -> str:
     year = datetime.utcnow().year
 
     try:
-        # 🔒 Lock the sequence row for update (prevents race conditions)
+        # Lock row to avoid race condition
         seq = (
             db.query(FormSequence)
             .filter(
@@ -26,7 +32,6 @@ def generate_form_id(db: Session, form_code: str) -> str:
             .first()
         )
 
-        # If no sequence yet → create one
         if not seq:
             seq = FormSequence(
                 form_code=form_code,
@@ -34,18 +39,21 @@ def generate_form_id(db: Session, form_code: str) -> str:
                 last_number=0
             )
             db.add(seq)
-            db.flush()   # ensure row exists before increment
+            db.flush()
 
-        # Increment running number
         seq.last_number += 1
         running = str(seq.last_number).zfill(4)
 
         return f"{form_code}-{year}-{running}"
 
-    except IntegrityError:
+    except IntegrityError as e:
         db.rollback()
-        raise
+        raise e
 
+
+# ============================================================
+# Create Form Master
+# ============================================================
 @router.post("/master")
 def create_form_master(payload: FormMasterCreate, db: Session = Depends(get_db)):
     exist = db.query(FormMaster).filter(FormMaster.form_code == payload.form_code).first()
@@ -56,8 +64,8 @@ def create_form_master(payload: FormMasterCreate, db: Session = Depends(get_db))
         form_type=payload.form_type,
         form_code=payload.form_code,
         form_name=payload.form_name,
-        form_status=payload.form_status,      # ✅ COMMA HERE
-        need_approval=payload.need_approval   # ✅ NEXT FIELD
+        form_status=payload.form_status,
+        need_approval=payload.need_approval
     )
     db.add(form)
     db.flush()
@@ -74,12 +82,14 @@ def create_form_master(payload: FormMasterCreate, db: Session = Depends(get_db))
         db.add(question)
         db.flush()
 
+        # Only dropdown & multiselect need options
         if q.question_type in ["dropdown", "multiselect"]:
             for opt in q.options:
                 option = FormQuestionOption(
                     question_id=question.id,
                     option_value=opt.option_value,
                     option_label=opt.option_label,
+                    option_filter=opt.option_filter,   # 👈 SAVE FILTER
                     sort_order=opt.sort_order
                 )
                 db.add(option)
@@ -88,6 +98,9 @@ def create_form_master(payload: FormMasterCreate, db: Session = Depends(get_db))
     return {"message": "Form template created", "form_code": form.form_code}
 
 
+# ============================================================
+# Get Form Template
+# ============================================================
 @router.get("/{form_code}")
 def get_form(form_code: str, db: Session = Depends(get_db)):
     form = db.query(FormMaster).filter(FormMaster.form_code == form_code).first()
@@ -99,6 +112,7 @@ def get_form(form_code: str, db: Session = Depends(get_db)):
         "form_code": form.form_code,
         "form_name": form.form_name,
         "form_status": form.form_status,
+        "need_approval": form.need_approval,
         "questions": [
             {
                 "id": q.id,
@@ -107,13 +121,18 @@ def get_form(form_code: str, db: Session = Depends(get_db)):
                 "type": q.question_type,
                 "required": q.is_required,
                 "options": [
-                    {"value": o.option_value, "label": o.option_label}
+                    {"value": o.option_value, "label": o.option_label ,  "filter": o.option_filter }
                     for o in q.options
                 ]
-            } for q in sorted(form.questions, key=lambda x: x.sort_order)
+            }
+            for q in sorted(form.questions, key=lambda x: x.sort_order)
         ]
     }
 
+
+# ============================================================
+# Submit Form
+# ============================================================
 @router.post("/submit")
 def submit_form(payload: FormSubmissionCreate, db: Session = Depends(get_db)):
     form = db.query(FormMaster).filter(FormMaster.form_code == payload.form_code).first()
@@ -140,7 +159,7 @@ def submit_form(payload: FormSubmissionCreate, db: Session = Depends(get_db)):
         )
 
         db.add(submission)
-        db.flush()   # 🔑 MUST generate submission.id
+        db.flush()   # Must generate submission.id
 
         if not submission.id:
             raise Exception("submission.id not generated")
@@ -154,8 +173,47 @@ def submit_form(payload: FormSubmissionCreate, db: Session = Depends(get_db)):
                     detail=f"Missing required field: {q.question_label}"
                 )
 
-        # 5️⃣ Save values
+        # 5️⃣ Validate and save values
         for v in payload.values:
+            q = db.query(FormQuestion).filter(FormQuestion.id == v.question_id).first()
+            if not q:
+                raise HTTPException(status_code=400, detail=f"Invalid question_id {v.question_id}")
+
+            # TEXT / LONGTEXT
+            if q.question_type in ["text", "longtext"]:
+                if q.is_required and not v.value_text:
+                    raise HTTPException(status_code=400, detail=f"{q.question_label} is required")
+
+            # DROPDOWN
+            elif q.question_type == "dropdown":
+                if q.is_required and not v.value_text:
+                    raise HTTPException(status_code=400, detail=f"{q.question_label} is required")
+
+            # MULTISELECT
+            elif q.question_type == "multiselect":
+                if q.is_required and not v.value_text:
+                    raise HTTPException(status_code=400, detail=f"{q.question_label} must select at least one option")
+                if isinstance(v.value_text, list):
+                    v.value_text = ",".join(v.value_text)
+
+            # CHECKBOX (single true/false only)
+            elif q.question_type == "checkbox":
+                if v.value_boolean is None:
+                    raise HTTPException(status_code=400, detail=f"{q.question_label} must be true or false")
+
+            # NUMBER / INT
+            elif q.question_type in ["number", "int"]:
+                if q.is_required and v.value_number is None:
+                    raise HTTPException(status_code=400, detail=f"{q.question_label} must be a number")
+
+            # DATE / DATETIME
+            elif q.question_type in ["date", "datetime"]:
+                if q.is_required and not v.value_date:
+                    raise HTTPException(status_code=400, detail=f"{q.question_label} must be a date")
+
+            else:
+                raise HTTPException(status_code=400, detail=f"Unsupported question type: {q.question_type}")
+
             record = FormSubmissionValue(
                 submission_id=submission.id,
                 question_id=v.question_id,
@@ -178,15 +236,20 @@ def submit_form(payload: FormSubmissionCreate, db: Session = Depends(get_db)):
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
-    
+
+
+# ============================================================
+# Update Form Status
+# ============================================================
 @router.patch("/{form_code}/status")
-def update_form_status(form_code: str, status: str, db: Session = Depends(get_db)):
+def update_form_status(
+    form_code: str,
+    status: str = Query(..., regex="^(Draft|Active|Archived|Inactive)$"),
+    db: Session = Depends(get_db)
+):
     form = db.query(FormMaster).filter(FormMaster.form_code == form_code).first()
     if not form:
         raise HTTPException(status_code=404, detail="Form not found")
-
-    if status not in ["Draft", "Active", "Archived"]:
-        raise HTTPException(status_code=400, detail="Invalid status")
 
     form.form_status = status
     db.commit()
@@ -197,6 +260,10 @@ def update_form_status(form_code: str, status: str, db: Session = Depends(get_db
         "form_status": form.form_status
     }
 
+
+# ============================================================
+# Get Submission by ID
+# ============================================================
 @router.get("/submission/{submission_id}")
 def get_submission(submission_id: int, db: Session = Depends(get_db)):
     submission = db.query(FormSubmission).filter(FormSubmission.id == submission_id).first()
@@ -205,7 +272,7 @@ def get_submission(submission_id: int, db: Session = Depends(get_db)):
 
     return {
         "submission_id": submission.id,
-        "form_id": submission.form_id,   # ✅ BUSINESS ID
+        "form_id": submission.form_id,
         "form_code": submission.form.form_code,
         "status_approve": submission.status_approve,
         "created_at": submission.created_at,
