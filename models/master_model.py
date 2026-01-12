@@ -1,7 +1,8 @@
 from sqlalchemy import Column, Integer, String, ForeignKey,Text, Boolean,TIMESTAMP, Numeric, UniqueConstraint
 from sqlalchemy.orm import relationship
 from database import Base
-    
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text, func
+
 
 class DriverRole(Base):
     __tablename__ = "driver_roles"
@@ -55,14 +56,18 @@ class FormMaster(Base):
     form_code = Column(String(50), unique=True, nullable=False)
     form_name = Column(String(255))
     form_status = Column(String(20), default="Draft")
-
-    need_approval = Column(Boolean, default=True)   # ✅ MUST EXIST
-
+    need_approval = Column(Boolean, default=True)
     created_at = Column(TIMESTAMP, default=datetime.utcnow)
 
     questions = relationship("FormQuestion", back_populates="form", cascade="all, delete")
     submissions = relationship("FormSubmission", back_populates="form")
 
+    # ✅ ต้องมี back_populates = "form_master"
+    approval_rules = relationship(
+        "FormApprovalRule",
+        back_populates="form_master",
+        cascade="all, delete-orphan"
+    )
 # =========================
 # FORM QUESTIONS
 # =========================
@@ -106,22 +111,24 @@ class FormQuestionOption(Base):
 class FormSubmission(Base):
     __tablename__ = "form_submissions"
 
-    id = Column(Integer, primary_key=True, index=True, autoincrement=True)  # ✅ MUST AUTOINCREMENT
+    id = Column(Integer, primary_key=True, index=True)
+    form_master_id = Column(Integer, ForeignKey("form_masters.id"), nullable=False)
 
-    form_master_id = Column(Integer, ForeignKey("form_masters.id"))
+    form_id = Column(String(80), unique=True, index=True, nullable=False)
+    status_approve = Column(String(30), default="In Progress", nullable=False)
 
-    form_id = Column(String(100), unique=True, index=True)   # ✅ BUSINESS ID
+    current_approval_level = Column(Integer, nullable=False, default=1)  # ✅ NEW
 
-    created_at = Column(TIMESTAMP, default=datetime.utcnow)
-    updated_at = Column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_by = Column(String(50), nullable=True)  # employee_id (varchar)
+    updated_by = Column(String(50), nullable=True)  # employee_id (varchar)
 
-    created_by = Column(String(50), nullable=True)   # employee_id
-    updated_by = Column(String(50), nullable=True)   # employee_id
-
-    status_approve = Column(String(20), default="In Progress")
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
     form = relationship("FormMaster", back_populates="submissions")
-    values = relationship("FormSubmissionValue", back_populates="submission", cascade="all, delete")
+    values = relationship("FormSubmissionValue", back_populates="submission", cascade="all, delete-orphan")
+
+    approval_logs = relationship("FormApprovalLog", back_populates="submission", cascade="all, delete-orphan")  # ✅ NEW
 
 
 
@@ -158,3 +165,42 @@ class FormSequence(Base):
         UniqueConstraint("form_code", "year", name="uq_form_code_year"),
     )
 
+class FormApprovalLog(Base):
+    __tablename__ = "form_approval_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    submission_id = Column(Integer, ForeignKey("form_submissions.id"), nullable=False)
+
+    level_no = Column(Integer, nullable=False)
+    action = Column(String(20), nullable=False)  # SUBMITTED / APPROVED / REJECTED
+
+    action_by = Column(Integer, ForeignKey("users.id"), nullable=False)  # FK to users.id
+    remark = Column(Text, nullable=True)
+
+    action_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+    submission = relationship("FormSubmission", back_populates="approval_logs")
+    actor = relationship("User")  # optional: allows submission.approval_logs[i].actor.username
+
+
+class FormApprovalRule(Base):
+    __tablename__ = "form_approval_rules"
+
+    id = Column(Integer, primary_key=True)
+    form_master_id = Column(Integer, ForeignKey("form_masters.id"), nullable=False)
+
+    creator_min = Column(Integer, nullable=False)
+    creator_max = Column(Integer, nullable=False)
+
+    level_no = Column(Integer, nullable=False)
+    approve_by_type = Column(String(30), nullable=False)
+
+    approve_by_min = Column(Integer, nullable=False)
+    approve_by_max = Column(Integer, nullable=False)
+
+    same_department = Column(Boolean, default=False)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # ✅ ต้องมีบรรทัดนี้
+    form_master = relationship("FormMaster", back_populates="approval_rules")

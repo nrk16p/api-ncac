@@ -51,3 +51,36 @@ class FormSubmissionCreate(BaseModel):
     created_by: str            # employee_id from FE
     updated_by: str | None = None
     values: List[FormSubmissionValueCreate]
+
+
+class FormApprovalRuleBase(BaseModel):
+    form_code: str
+    level_no: int
+    approve_by_type: str           # e.g. "position_level"
+    approve_by_value: int          # e.g. 5
+    same_department: bool = False
+    is_active: bool = True
+
+class FormApprovalRuleCreate(BaseModel):
+    form_code: str
+    level_no: int
+
+    # Creator mapping
+    creator_min: int
+    creator_max: int
+
+    # Approver policy
+    approve_by_type: str  # "position_level" | "position_level_range" | "auto"
+    approve_by_value: Optional[int] = None
+    approve_by_min: Optional[int] = None
+    approve_by_max: Optional[int] = None
+
+    same_department: Optional[bool] = False
+    is_active: Optional[bool] = True
+    
+class FormApprovalRuleUpdate(BaseModel):
+    level_no: Optional[int] = None
+    approve_by_type: Optional[str] = None
+    approve_by_value: Optional[int] = None
+    same_department: Optional[bool] = None
+    is_active: Optional[bool] = None
