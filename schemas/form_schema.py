@@ -84,3 +84,9 @@ class FormApprovalRuleUpdate(BaseModel):
     approve_by_value: Optional[int] = None
     same_department: Optional[bool] = None
     is_active: Optional[bool] = None
+
+class FormResponse(BaseModel):
+    form_id: str
+    status_approve:str
+    created_by: str
+    created_at:datetime

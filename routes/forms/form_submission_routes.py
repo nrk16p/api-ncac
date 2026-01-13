@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException ,Query
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
-from datetime import datetime
+from datetime import datetime, timedelta
+from typing import List, Optional
 
 from database import get_db
 from models.master_model import (
@@ -9,7 +10,7 @@ from models.master_model import (
     FormSubmissionValue, FormSequence, FormApprovalRule
 )
 from models import User, Position
-from schemas.form_schema import FormSubmissionCreate
+from schemas.form_schema import FormSubmissionCreate ,FormResponse
 
 router = APIRouter(prefix="/forms", tags=["Forms - Submission"])
 
@@ -33,6 +34,15 @@ def generate_form_id(db: Session, form_code: str) -> str:
     seq.last_number += 1
     return f"{form_code}-{year}-{str(seq.last_number).zfill(4)}"
 
+def parse_dt(val):
+    if not val:
+        return None
+    if isinstance(val, datetime):
+        return val
+    try:
+        return datetime.fromisoformat(val)
+    except Exception:
+        return None
 
 def get_employee_position_level(db: Session, employee_id: str) -> int | None:
     user = db.query(User).filter(User.employee_id == employee_id).first()
@@ -162,3 +172,26 @@ def submit_form(payload: FormSubmissionCreate, db: Session = Depends(get_db)):
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
+# -------------------------
+# 🔹 Read
+# -------------------------
+@router.get("/", response_model=List[FormResponse])
+def get_form(
+    db: Session = Depends(get_db),
+    employee_id:Optional[str]= Query(None),
+    start_date: Optional[str] = Query(None),
+    end_date: Optional[str] = Query(None)):
+
+    query = db.query(FormSubmission)
+    if employee_id is not None:
+        query = query.filter(FormSubmission.created_by == employee_id)
+    if start_date and end_date:
+        start = parse_dt(start_date)
+        end = parse_dt(end_date)
+        if start and end:
+            end_next = end + timedelta(days=1)
+            query = query.filter(
+                FormSubmission.created_at >= start,
+                FormSubmission.created_at < end_next
+            )
+    return query.all()
