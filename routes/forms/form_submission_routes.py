@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException ,Query
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session,joinedload
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime, timedelta
 from typing import List, Optional
@@ -10,7 +10,7 @@ from models.master_model import (
     FormSubmissionValue, FormSequence, FormApprovalRule
 )
 from models import User, Position
-from schemas.form_schema import FormSubmissionCreate ,FormResponse
+from schemas.form_schema import FormSubmissionCreate ,FormResponse,FormValueResponse
 
 router = APIRouter(prefix="/forms", tags=["Forms - Submission"])
 
@@ -178,20 +178,73 @@ def submit_form(payload: FormSubmissionCreate, db: Session = Depends(get_db)):
 @router.get("/", response_model=List[FormResponse])
 def get_form(
     db: Session = Depends(get_db),
-    employee_id:Optional[str]= Query(None),
+    employee_id: Optional[str] = Query(None),
+    form_id: Optional[str] = Query(None),
     start_date: Optional[str] = Query(None),
-    end_date: Optional[str] = Query(None)):
+    end_date: Optional[str] = Query(None),
+):
 
-    query = db.query(FormSubmission)
-    if employee_id is not None:
+    query = (
+        db.query(FormSubmission)
+        .options(
+            joinedload(FormSubmission.form),
+            joinedload(FormSubmission.values)
+                .joinedload(FormSubmissionValue.question),
+        )
+    )
+
+    # 🔎 filter by employee
+    if employee_id:
         query = query.filter(FormSubmission.created_by == employee_id)
+
+    # 🔎 filter by form_id
+    if form_id:
+        query = query.filter(FormSubmission.form_id == form_id)
+
+    # 📅 filter by date range (created_at)
     if start_date and end_date:
         start = parse_dt(start_date)
         end = parse_dt(end_date)
         if start and end:
-            end_next = end + timedelta(days=1)
+            end_next = end + timedelta(days=1)   # รวมทั้งวันสุดท้าย
             query = query.filter(
                 FormSubmission.created_at >= start,
                 FormSubmission.created_at < end_next
             )
-    return query.all()
+
+    results = query.all()
+
+    # 🔁 FLATTEN RESPONSE
+    output = []
+    for sub in results:
+        item = {
+            "form_id": sub.form_id,
+            "status_approve": sub.status_approve,
+            "created_by": sub.created_by,
+            "created_at": sub.created_at,
+
+            # 👇 flatten form
+            "form_type": sub.form.form_type if sub.form else None,
+            "form_code": sub.form.form_code if sub.form else None,
+            "form_name": sub.form.form_name if sub.form else None,
+
+            "values": []
+        }
+
+        for v in sub.values:
+            item["values"].append({
+                "question_id": v.question_id,
+                "value_text": v.value_text,
+                "value_number": v.value_number,
+                "value_date": v.value_date,
+                "value_boolean": v.value_boolean,
+
+                # 👇 flatten question
+                "question_name": v.question.question_name if v.question else None,
+                "question_label": v.question.question_label if v.question else None,
+                "question_type": v.question.question_type if v.question else None,
+            })
+
+        output.append(item)
+
+    return output

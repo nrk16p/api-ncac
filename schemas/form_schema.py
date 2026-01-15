@@ -39,6 +39,31 @@ class FormMasterCreate(BaseModel):
 # -------------------------
 # SUBMISSION
 # -------------------------
+class FormQuestionOut(BaseModel):
+    id: int
+    question_name: str
+    question_label: str
+    question_type: str
+
+    class Config:
+        orm_mode = True
+class FormValueResponse(BaseModel):
+    question_id: int
+    value_text: Optional[str]
+    value_number: Optional[float]
+    value_date: Optional[datetime]
+    value_boolean: Optional[bool]
+
+    # 👇 flatten จาก question
+    question_name: Optional[str]
+    question_label: Optional[str]
+    question_type: Optional[str]
+
+    class Config:
+        orm_mode = True
+
+
+
 class FormSubmissionValueCreate(BaseModel):
     question_id: int
     value_text: Union[str, List[str], None] = None   # 👈 accept array
@@ -85,8 +110,30 @@ class FormApprovalRuleUpdate(BaseModel):
     same_department: Optional[bool] = None
     is_active: Optional[bool] = None
 
+
+class FormMasterOut(BaseModel):
+    id: int
+    form_type: str
+    form_code: str
+    form_name: str
+
+    class Config:
+        orm_mode = True
+
+
 class FormResponse(BaseModel):
     form_id: str
-    status_approve:str
+    status_approve: str
     created_by: str
-    created_at:datetime
+    created_at: datetime
+
+    # 👇 flatten จาก form_master
+    form_type: Optional[str]
+    form_code: Optional[str]
+    form_name: Optional[str]
+
+    values: List[FormValueResponse] = []
+
+    class Config:
+        orm_mode = True
+
