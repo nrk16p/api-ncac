@@ -317,13 +317,20 @@ def reject_submission(
 # ============================================================
 # 📜 Get Approval Logs (filter by employee_id)
 # ============================================================
-@router.get("/logs")
+# ============================================================
+# 📜 Get Approval Logs (filter by employee_id) + form_id
+# ============================================================
+@router.get("/approve-logs")
 def get_approval_logs(
     employee_id: str | None = Query(None),
     db: Session = Depends(get_db)
 ):
-    # join กับ users เพื่อสามารถ filter ด้วย employee_id และส่งกลับค่าได้
-    query = db.query(FormApprovalLog, User).join(User, FormApprovalLog.action_by == User.id)
+    # join กับ users และ submissions เพื่อเอา form_id
+    query = (
+        db.query(FormApprovalLog, User, FormSubmission)
+        .join(User, FormApprovalLog.action_by == User.id)
+        .join(FormSubmission, FormApprovalLog.submission_id == FormSubmission.id)
+    )
 
     if employee_id:
         query = query.filter(User.employee_id == employee_id)
@@ -334,12 +341,13 @@ def get_approval_logs(
         {
             "id": log.id,
             "submission_id": log.submission_id,
+            "form_id": submission.form_id,     # ✅ เพิ่ม form_id
             "level_no": log.level_no,
             "action": log.action,
             "user_id": user.id,
-            "employee_id": user.employee_id,   # 👈 ส่งให้ frontend
+            "employee_id": user.employee_id,
             "remark": log.remark,
-            "action_at":log.action_at
+            "action_at": log.action_at
         }
-        for log, user in rows
+        for log, user, submission in rows
     ]
