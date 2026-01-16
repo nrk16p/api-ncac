@@ -123,6 +123,7 @@ class FormMasterOut(BaseModel):
 
 class FormResponse(BaseModel):
     form_id: str
+    status: Optional[str]                 # ✅ NEW
     status_approve: str
     created_by: str
     created_at: datetime

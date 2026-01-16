@@ -116,6 +116,7 @@ class FormSubmission(Base):
 
     form_id = Column(String(80), unique=True, index=True, nullable=False)
     status_approve = Column(String(30), default="In Progress", nullable=False)
+    status = Column(String(30), default="Open")
 
     current_approval_level = Column(Integer, nullable=False, default=1)  # ✅ NEW
 
@@ -129,6 +130,7 @@ class FormSubmission(Base):
     values = relationship("FormSubmissionValue", back_populates="submission", cascade="all, delete-orphan")
 
     approval_logs = relationship("FormApprovalLog", back_populates="submission", cascade="all, delete-orphan")  # ✅ NEW
+    logs = relationship("FormSubmissionLog", back_populates="submission", cascade="all, delete-orphan")
 
 
 
@@ -204,3 +206,19 @@ class FormApprovalRule(Base):
 
     # ✅ ต้องมีบรรทัดนี้
     form_master = relationship("FormMaster", back_populates="approval_rules")
+
+class FormSubmissionLog(Base):
+    __tablename__ = "form_submission_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    submission_id = Column(Integer, ForeignKey("form_submissions.id"), nullable=False)
+
+    action = Column(String(50), nullable=False)       # CREATE / UPDATE / APPROVE / REJECT
+    field_name = Column(String(50), nullable=True)    # status, status_approve, etc.
+    old_value = Column(Text, nullable=True)
+    new_value = Column(Text, nullable=True)
+
+    action_by = Column(String(50), nullable=True)     # employee_id
+    action_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+    submission = relationship("FormSubmission", back_populates="logs")

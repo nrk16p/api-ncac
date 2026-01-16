@@ -260,3 +260,34 @@ def reject_submission(
         "submission_id": submission.id,
         "status": submission.status_approve
     }
+# ============================================================
+# 📜 Get Approval Logs by form_id
+# ============================================================
+# ============================================================
+# 📜 Get Approval Logs (filter by employee_id)
+# ============================================================
+@router.get("/logs")
+def get_approval_logs(
+    employee_id: str | None = Query(None),
+    db: Session = Depends(get_db)
+):
+    query = db.query(FormApprovalLog)
+
+    # 🔎 Filter by employee_id (action_by)
+    if employee_id:
+        query = query.filter(FormApprovalLog.action_by == employee_id)
+
+    logs = query.order_by(FormApprovalLog.created_at.desc()).all()
+
+    return [
+        {
+            "id": log.id,
+            "submission_id": log.submission_id,
+            "level_no": log.level_no,
+            "action": log.action,
+            "action_by": log.action_by,
+            "remark": log.remark,
+            "created_at": log.created_at
+        }
+        for log in logs
+    ]

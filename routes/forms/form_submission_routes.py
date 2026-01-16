@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException ,Query
-from sqlalchemy.orm import Session,joinedload
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime, timedelta
 from typing import List, Optional
@@ -7,13 +7,36 @@ from typing import List, Optional
 from database import get_db
 from models.master_model import (
     FormMaster, FormQuestion, FormSubmission,
-    FormSubmissionValue, FormSequence, FormApprovalRule
+    FormSubmissionValue, FormSequence, FormApprovalRule, FormSubmissionLog
 )
 from models import User, Position
-from schemas.form_schema import FormSubmissionCreate ,FormResponse,FormValueResponse
+from schemas.form_schema import FormSubmissionCreate, FormResponse, FormValueResponse 
 
 router = APIRouter(prefix="/forms", tags=["Forms - Submission"])
 
+# ----------------------------
+# LOG: Status Change
+# ----------------------------
+def log_status_change(
+    db: Session,
+    submission_id: int,
+    old_status: str,
+    new_status: str,
+    action_by: str,
+):
+    # ถ้าไม่ได้เปลี่ยนค่า ไม่ต้อง log
+    if old_status == new_status:
+        return
+
+    log = FormSubmissionLog(
+        submission_id=submission_id,
+        action="STATUS_CHANGE",
+        field_name="status",
+        old_value=old_status,
+        new_value=new_status,
+        action_by=action_by,
+    )
+    db.add(log)
 
 # ----------------------------
 # Helpers
@@ -50,7 +73,6 @@ def get_employee_position_level(db: Session, employee_id: str) -> int | None:
         return None
     pos = db.query(Position).filter(Position.position_id == user.position_id).first()
     return pos.position_level_id if pos else None
-
 
 def determine_initial_approval(db: Session, form_id: int, creator_level: int | None):
     """
@@ -103,20 +125,31 @@ def submit_form(payload: FormSubmissionCreate, db: Session = Depends(get_db)):
         creator_level = get_employee_position_level(db, payload.created_by)
 
         if not form.need_approval:
-            status, current_level = "Approved", None
+            status_approve, current_level = "Approved", None
         else:
-            status, current_level = determine_initial_approval(db, form.id, creator_level)
+            status_approve, current_level = determine_initial_approval(db, form.id, creator_level)
 
+        # 🔹 CREATE SUBMISSION (STATUS = Open)
         submission = FormSubmission(
             form_master_id=form.id,
             form_id=form_id,
             created_by=payload.created_by,
             updated_by=payload.updated_by or payload.created_by,
-            status_approve=status,
+            status="Open",                         # ✅ Workflow: Open on create
+            status_approve=status_approve,
             current_approval_level=current_level
         )
         db.add(submission)
         db.flush()
+
+        # 🔹 LOG: Open (Create)
+        log_status_change(
+            db=db,
+            submission_id=submission.id,
+            old_status=None,
+            new_status="Open",
+            action_by=payload.created_by
+        )
 
         submitted = {v.question_id: v for v in payload.values}
         for q in form.questions:
@@ -165,6 +198,7 @@ def submit_form(payload: FormSubmissionCreate, db: Session = Depends(get_db)):
             "message": "Form submitted",
             "submission_id": submission.id,
             "form_id": submission.form_id,
+            "status": submission.status,
             "status_approve": submission.status_approve,
             "current_approval_level": submission.current_approval_level
         }
@@ -172,6 +206,57 @@ def submit_form(payload: FormSubmissionCreate, db: Session = Depends(get_db)):
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# -------------------------
+# 🔹 Update STATUS (Workflow)
+# -------------------------
+@router.put("/{submission_id}/status")
+def update_status(
+    submission_id: int,
+    new_status: str = Query(..., regex="^(Open|In-Progress|Done|Backlog)$"),
+    employee_id: str = Query(...),
+    db: Session = Depends(get_db),
+):
+    """
+    Workflow:
+    1. Open         -> create
+    2. In-Progress  -> user starts working
+    3. Done         -> close
+    4. Backlog      -> send back to queue
+    """
+
+    submission = db.query(FormSubmission).filter(FormSubmission.id == submission_id).first()
+    if not submission:
+        raise HTTPException(status_code=404, detail="Submission not found")
+
+    try:
+        old_status = submission.status
+        submission.status = new_status
+        submission.updated_by = employee_id
+
+        # 🔹 LOG: only when status changed
+        log_status_change(
+            db=db,
+            submission_id=submission.id,
+            old_status=old_status,
+            new_status=new_status,
+            action_by=employee_id
+        )
+
+        db.commit()
+        return {
+            "message": "Status updated",
+            "submission_id": submission.id,
+            "old_status": old_status,
+            "new_status": new_status
+        }
+
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # -------------------------
 # 🔹 Read
 # -------------------------
@@ -206,7 +291,7 @@ def get_form(
         start = parse_dt(start_date)
         end = parse_dt(end_date)
         if start and end:
-            end_next = end + timedelta(days=1)   # รวมทั้งวันสุดท้าย
+            end_next = end + timedelta(days=1)
             query = query.filter(
                 FormSubmission.created_at >= start,
                 FormSubmission.created_at < end_next
@@ -219,6 +304,7 @@ def get_form(
     for sub in results:
         item = {
             "form_id": sub.form_id,
+            "status": sub.status,
             "status_approve": sub.status_approve,
             "created_by": sub.created_by,
             "created_at": sub.created_at,
@@ -248,3 +334,28 @@ def get_form(
         output.append(item)
 
     return output
+@router.get("/{form_id}/logs")
+def get_logs_by_form_id_path(
+    form_id: str,
+    db: Session = Depends(get_db),
+):
+    logs = (
+        db.query(FormSubmissionLog)
+        .join(FormSubmission, FormSubmission.id == FormSubmissionLog.submission_id)
+        .filter(FormSubmission.form_id == form_id)
+        .order_by(FormSubmissionLog.action_at.asc())
+        .all()
+    )
+
+    return [
+        {
+            "form_id": form_id,
+            "action": log.action,
+            "field_name": log.field_name,
+            "old_value": log.old_value,
+            "new_value": log.new_value,
+            "action_by": log.action_by,
+            "action_at": log.action_at,
+        }
+        for log in logs
+    ]
