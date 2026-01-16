@@ -23,6 +23,13 @@ def get_employee_position_level(db: Session, employee_id: str) -> int | None:
 
 
 # ============================================================
+# Helper: employee_id -> User (PK)
+# ============================================================
+def get_user_by_employee_id(db: Session, employee_id: str) -> User | None:
+    return db.query(User).filter(User.employee_id == employee_id).first()
+
+
+# ============================================================
 # Helper: หา rule ที่ใช้ได้ตาม creator_level + level_no
 # ============================================================
 def get_applicable_rule(
@@ -91,7 +98,16 @@ def get_pending_approvals(
         if rule.approve_by_type == "position_level_range":
             if rule.approve_by_min <= user_level <= rule.approve_by_max:
                 if rule.same_department:
-                    approver = db.query(User).filter(User.employee_id == employee_id).first()
+                    approver = get_user_by_employee_id(db, employee_id)
+                    if requester and approver and requester.department_id == approver.department_id:
+                        can_approve = True
+                else:
+                    can_approve = True
+
+        elif rule.approve_by_type == "position_level":
+            if user_level == rule.approve_by_value:
+                if rule.same_department:
+                    approver = get_user_by_employee_id(db, employee_id)
                     if requester and approver and requester.department_id == approver.department_id:
                         can_approve = True
                 else:
@@ -117,7 +133,7 @@ def get_pending_approvals(
 @router.post("/{submission_id}/approve")
 def approve_submission(
     submission_id: int,
-    employee_id: str = Query(...),
+    employee_id: str = Query(...),   # ⬅ คงพารามิเตอร์เดิม
     remark: str | None = None,
     db: Session = Depends(get_db)
 ):
@@ -128,11 +144,15 @@ def approve_submission(
     if submission.status_approve != "In Progress":
         raise HTTPException(status_code=400, detail="Submission is not in approvable state")
 
+    # หา requester
     requester = db.query(User).filter(User.employee_id == submission.created_by).first()
     if not requester or not requester.position_id:
         raise HTTPException(status_code=400, detail="Requester has no position")
 
     pos_req = db.query(Position).filter(Position.position_id == requester.position_id).first()
+    if not pos_req:
+        raise HTTPException(status_code=400, detail="Requester position not found")
+
     creator_level = pos_req.position_level_id
 
     rule = get_applicable_rule(
@@ -144,16 +164,22 @@ def approve_submission(
     if not rule:
         raise HTTPException(status_code=400, detail="Approval rule not found")
 
+    # 🔁 แปลง employee_id -> users.id
+    approver = get_user_by_employee_id(db, employee_id)
+    if not approver:
+        raise HTTPException(status_code=404, detail="Approver not found")
+
     user_level = get_employee_position_level(db, employee_id)
     if not user_level:
         raise HTTPException(status_code=403, detail="User has no position level")
 
+    # 🔐 ตรวจสิทธิ์ (รองรับทั้ง position_level และ position_level_range)
     can_approve = False
+
     if rule.approve_by_type == "position_level":
         if user_level == rule.approve_by_value:
             if rule.same_department:
-                approver = db.query(User).filter(User.employee_id == employee_id).first()
-                if approver and requester.department_id == approver.department_id:
+                if requester.department_id == approver.department_id:
                     can_approve = True
             else:
                 can_approve = True
@@ -161,8 +187,7 @@ def approve_submission(
     elif rule.approve_by_type == "position_level_range":
         if rule.approve_by_min <= user_level <= rule.approve_by_max:
             if rule.same_department:
-                approver = db.query(User).filter(User.employee_id == employee_id).first()
-                if approver and requester.department_id == approver.department_id:
+                if requester.department_id == approver.department_id:
                     can_approve = True
             else:
                 can_approve = True
@@ -170,15 +195,17 @@ def approve_submission(
     if not can_approve:
         raise HTTPException(status_code=403, detail="You are not authorized to approve this submission")
 
+    # 📝 บันทึก log (ใช้ users.id ให้ตรง FK)
     log = FormApprovalLog(
         submission_id=submission.id,
         level_no=submission.current_approval_level,
         action="APPROVED",
-        action_by=employee_id,
+        action_by=approver.id,   # ✅
         remark=remark
     )
     db.add(log)
 
+    # ➡️ ไปขั้นถัดไปหรือปิดงาน
     next_rule = get_applicable_rule(
         db=db,
         form_master_id=submission.form_master_id,
@@ -208,7 +235,7 @@ def approve_submission(
 @router.post("/{submission_id}/reject")
 def reject_submission(
     submission_id: int,
-    employee_id: str = Query(...),
+    employee_id: str = Query(...),   # ⬅ คงพารามิเตอร์เดิม
     remark: str = Query(...),
     db: Session = Depends(get_db)
 ):
@@ -224,6 +251,9 @@ def reject_submission(
         raise HTTPException(status_code=400, detail="Requester has no position")
 
     pos_req = db.query(Position).filter(Position.position_id == requester.position_id).first()
+    if not pos_req:
+        raise HTTPException(status_code=400, detail="Requester position not found")
+
     creator_level = pos_req.position_level_id
 
     rule = get_applicable_rule(
@@ -235,16 +265,28 @@ def reject_submission(
     if not rule:
         raise HTTPException(status_code=400, detail="Approval rule not found")
 
+    approver = get_user_by_employee_id(db, employee_id)
+    if not approver:
+        raise HTTPException(status_code=404, detail="Approver not found")
+
     user_level = get_employee_position_level(db, employee_id)
     if not user_level:
         raise HTTPException(status_code=403, detail="User has no position level")
 
     can_reject = False
+
     if rule.approve_by_type == "position_level":
         if user_level == rule.approve_by_value:
             if rule.same_department:
-                approver = db.query(User).filter(User.employee_id == employee_id).first()
-                if approver and requester.department_id == approver.department_id:
+                if requester.department_id == approver.department_id:
+                    can_reject = True
+            else:
+                can_reject = True
+
+    elif rule.approve_by_type == "position_level_range":
+        if rule.approve_by_min <= user_level <= rule.approve_by_max:
+            if rule.same_department:
+                if requester.department_id == approver.department_id:
                     can_reject = True
             else:
                 can_reject = True
@@ -256,7 +298,7 @@ def reject_submission(
         submission_id=submission.id,
         level_no=submission.current_approval_level,
         action="REJECTED",
-        action_by=employee_id,
+        action_by=approver.id,   # ✅
         remark=remark
     )
     db.add(log)
@@ -269,9 +311,8 @@ def reject_submission(
         "submission_id": submission.id,
         "status": submission.status_approve
     }
-# ============================================================
-# 📜 Get Approval Logs by form_id
-# ============================================================
+
+
 # ============================================================
 # 📜 Get Approval Logs (filter by employee_id)
 # ============================================================
@@ -280,13 +321,13 @@ def get_approval_logs(
     employee_id: str | None = Query(None),
     db: Session = Depends(get_db)
 ):
-    query = db.query(FormApprovalLog)
+    # join กับ users เพื่อสามารถ filter ด้วย employee_id และส่งกลับค่าได้
+    query = db.query(FormApprovalLog, User).join(User, FormApprovalLog.action_by == User.id)
 
-    # 🔎 Filter by employee_id (action_by)
     if employee_id:
-        query = query.filter(FormApprovalLog.action_by == employee_id)
+        query = query.filter(User.employee_id == employee_id)
 
-    logs = query.order_by(FormApprovalLog.created_at.desc()).all()
+    rows = query.order_by(FormApprovalLog.created_at.desc()).all()
 
     return [
         {
@@ -294,9 +335,10 @@ def get_approval_logs(
             "submission_id": log.submission_id,
             "level_no": log.level_no,
             "action": log.action,
-            "action_by": log.action_by,
+            "user_id": user.id,
+            "employee_id": user.employee_id,   # 👈 ส่งให้ frontend
             "remark": log.remark,
             "created_at": log.created_at
         }
-        for log in logs
+        for log, user in rows
     ]
