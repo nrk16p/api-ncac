@@ -158,6 +158,15 @@ def approve_submission(
             else:
                 can_approve = True
 
+    elif rule.approve_by_type == "position_level_range":
+        if rule.approve_by_min <= user_level <= rule.approve_by_max:
+            if rule.same_department:
+                approver = db.query(User).filter(User.employee_id == employee_id).first()
+                if approver and requester.department_id == approver.department_id:
+                    can_approve = True
+            else:
+                can_approve = True
+
     if not can_approve:
         raise HTTPException(status_code=403, detail="You are not authorized to approve this submission")
 
