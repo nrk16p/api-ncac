@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from database import get_db
-from models.master_model import FormSubmission, FormApprovalRule, FormApprovalLog
+from models.master_model import FormSubmission, FormApprovalRule, FormApprovalLog , FormMaster
 from models import User, Position
 
 router = APIRouter(prefix="/forms", tags=["Forms - Approval"])
@@ -118,9 +118,11 @@ def get_pending_approvals(
                 "submission_id": sub.id,
                 "form_id": sub.form_id,
                 "form_code": sub.form.form_code,
+                "form_name": sub.form.form_name,   # ✅ เพิ่มตรงนี้
                 "current_level": sub.current_approval_level,
                 "status": sub.status_approve,
                 "created_by": sub.created_by,
+                "created_by_email": requester.email,   # ✅ เพิ่ม email
                 "created_at": sub.created_at
             })
 
@@ -325,11 +327,11 @@ def get_approval_logs(
     employee_id: str | None = Query(None),
     db: Session = Depends(get_db)
 ):
-    # join กับ users และ submissions เพื่อเอา form_id
     query = (
-        db.query(FormApprovalLog, User, FormSubmission)
+        db.query(FormApprovalLog, User, FormSubmission, FormMaster)
         .join(User, FormApprovalLog.action_by == User.id)
         .join(FormSubmission, FormApprovalLog.submission_id == FormSubmission.id)
+        .join(FormMaster, FormSubmission.form_master_id == FormMaster.id)  # 👈 เพิ่ม
     )
 
     if employee_id:
@@ -341,13 +343,16 @@ def get_approval_logs(
         {
             "id": log.id,
             "submission_id": log.submission_id,
-            "form_id": submission.form_id,     # ✅ เพิ่ม form_id
+            "form_id": submission.form_id,
+            "form_code": form.form_code,
+            "form_name": form.form_name,   # ✅ เพิ่มตรงนี้
             "level_no": log.level_no,
             "action": log.action,
             "user_id": user.id,
             "employee_id": user.employee_id,
+            "email": user.email,          # ✅ เพิ่มตรงนี้
             "remark": log.remark,
             "action_at": log.action_at
         }
-        for log, user, submission in rows
+        for log, user, submission, form in rows
     ]

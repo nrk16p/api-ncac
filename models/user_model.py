@@ -49,6 +49,7 @@ class User(Base):
     department_id = Column(Integer, ForeignKey("departments.department_id"))
     site_id = Column(Integer, ForeignKey("sites.site_id"))
     position_id = Column(Integer, ForeignKey("positions.position_id"))
+    email = Column(String(255), unique=True, nullable=False)
 
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
