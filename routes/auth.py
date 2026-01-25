@@ -1,28 +1,53 @@
-import os, datetime, jwt
+import os
+import datetime
+import jwt
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from dotenv import load_dotenv
+
+# 🔑 GOOGLE AUTH (สำคัญมาก)
+from google.oauth2 import id_token
+from google.auth.transport.requests import Request as GoogleRequest
+
 from database import get_db
 from models import User, Position, PositionLevel, Department, Site
 
+# ============================================================
+# ENV
+# ============================================================
 load_dotenv()
+
 SECRET_KEY = os.getenv("SECRET_KEY", "mysecretkey")
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 30))
 
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+ALLOWED_GOOGLE_DOMAIN = "menatransport.co.th"
+
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
+print("✅ GOOGLE_CLIENT_ID =", GOOGLE_CLIENT_ID)
+
+# ============================================================
+# JWT
+# ============================================================
 def create_access_token(identity: str) -> str:
-    expire = datetime.datetime.utcnow() + datetime.timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    expire = datetime.datetime.utcnow() + datetime.timedelta(
+        minutes=ACCESS_TOKEN_EXPIRE_MINUTES
+    )
     payload = {"sub": identity, "exp": expire}
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
-# ===== Schemas =====
+# ============================================================
+# Schemas
+# ============================================================
 class LoginRequest(BaseModel):
     username: str
     password: str
+
 
 class RegisterRequest(BaseModel):
     username: str
@@ -34,70 +59,129 @@ class RegisterRequest(BaseModel):
     site_id: int | None = None
     position_id: int | None = None
 
-# ===== Login =====
+
+class GoogleLoginRequest(BaseModel):
+    id_token: str
+
+# ============================================================
+# Helper: Verify Google Token (FIXED)
+# ============================================================
+def verify_google_token(token: str):
+    try:
+        idinfo = id_token.verify_oauth2_token(
+            token,
+            GoogleRequest(),          # ✅ ตัวนี้เท่านั้น
+            GOOGLE_CLIENT_ID
+        )
+
+        # 🔐 ตรวจ email
+        email = idinfo.get("email")
+        if not email:
+            raise HTTPException(status_code=400, detail="No email in Google token")
+
+        # 🔐 ตรวจ domain
+        domain = email.split("@")[-1].lower()
+        if domain != ALLOWED_GOOGLE_DOMAIN:
+            raise HTTPException(
+                status_code=403,
+                detail="Google account domain is not allowed"
+            )
+
+        return idinfo
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print("❌ GOOGLE VERIFY ERROR =", e)
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid Google token"
+        )
+
+# ============================================================
+# Helper: Build user response (reuse logic เดิม)
+# ============================================================
+def build_user_response(user: User, db: Session):
+    # Position
+    position_name = None
+    position_level = None
+    position_level_id = None
+
+    if user.position_id:
+        position = db.get(Position, user.position_id)
+        if position:
+            position_name = position.position_name_en
+            level = db.get(PositionLevel, position.position_level_id)
+            if level:
+                position_level = level.level_name
+                position_level_id = level.position_level_id
+
+    # Department
+    department_name = None
+    if user.department_id:
+        department = db.get(Department, user.department_id)
+        if department:
+            department_name = department.department_name_en
+
+    # Site
+    site_name = None
+    if user.site_id:
+        site = db.get(Site, user.site_id)
+        if site:
+            site_name = site.site_name_en
+
+    return {
+        "id": user.id,
+        "username": user.username,
+        "firstname": user.firstname,
+        "lastname": user.lastname,
+        "employee_id": user.employee_id,
+        "site": site_name,
+        "department": department_name,
+        "position": position_name,
+        "position_level": position_level,
+        "position_level_id": position_level_id,
+    }
+
+# ============================================================
+# LOGIN (LOCAL)
+# ============================================================
 @router.post("/login")
 def login(payload: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter_by(username=payload.username).first()
+
+    # 🔒 Google user ห้าม login ด้วย password
+    if user and user.password_hash == "__GOOGLE__":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Use Google login"
+        )
+
     if user and user.check_password(payload.password):
         token = create_access_token(user.username)
-
-        # Position & Level
-        position_name = None
-        position_level = None
-        position_level_id = None
-        if user.position_id:
-            position = db.get(Position, user.position_id)
-            if position:
-                position_name = position.position_name_en
-                level = db.get(PositionLevel, position.position_level_id)
-                if level:
-                    position_level = level.level_name
-                    position_level_id = level.position_level_id
-
-        # Department
-        department_name = None
-        if user.department_id:
-            department = db.get(Department, user.department_id)
-            if department:
-                department_name = department.department_name_en
-
-        # Site
-        site_name = None
-        if user.site_id:
-            site = db.get(Site, user.site_id)
-            if site:
-                site_name = site.site_name_en
 
         return {
             "message": "Login success",
             "access_token": token,
-            "user": {
-                "id": user.id,
-                "username": user.username,
-                "firstname": user.firstname,
-                "lastname": user.lastname,
-                "employee_id": user.employee_id,
-                "site": site_name,
-                "department": department_name,
-                "position": position_name,
-                "position_level": position_level,
-                "position_level_id": position_level_id,
-            }
+            "user": build_user_response(user, db)
         }
 
-    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid credentials"
+    )
 
-# ===== Register =====
+# ============================================================
+# REGISTER (LOCAL)
+# ============================================================
 @router.post("/register", status_code=201)
 def register(payload: RegisterRequest, db: Session = Depends(get_db)):
-    # Check duplicate username
     if db.query(User).filter_by(username=payload.username).first():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Username already exists"
         )
-    
-    # Check duplicate employee_id
+
     if payload.employee_id and db.query(User).filter_by(employee_id=payload.employee_id).first():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -115,6 +199,7 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)):
             position_id=payload.position_id,
         )
         user.set_password(payload.password)
+
         db.add(user)
         db.commit()
         db.refresh(user)
@@ -124,24 +209,79 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)):
         return {
             "message": "User created successfully",
             "access_token": token,
-            "user": {
-                "id": user.id,
-                "username": user.username,
-                "firstname": user.firstname,
-                "lastname": user.lastname,
-                "employee_id": user.employee_id,
-            }
+            "user": build_user_response(user, db)
         }
 
     except IntegrityError:
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Database integrity error: Duplicate or invalid data"
+            detail="Database integrity error"
         )
     except Exception as e:
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Unexpected error: {str(e)}"
+            detail=str(e)
         )
+
+# ============================================================
+# LOGIN (GOOGLE)
+# ============================================================
+@router.post("/login/google")
+def login_google(payload: GoogleLoginRequest, db: Session = Depends(get_db)):
+    idinfo = verify_google_token(payload.id_token)
+
+    # =========================
+    # 1) Extract identity
+    # =========================
+    email = idinfo["email"]
+    username = email.split("@")[0]     # short username
+    employee_id = username             # policy: same value
+
+    # =========================
+    # 2) Find existing user
+    # =========================
+    user = db.query(User).filter(
+        (User.username == username) |
+        (User.employee_id == employee_id) |
+        (User.email == email)
+    ).first()
+
+    # =========================
+    # 3) Create user if not exist
+    # =========================
+    if not user:
+        user = User(
+            username=username,                 # ✅ short username
+            email=email,                       # ✅ email field
+            firstname=idinfo.get("given_name"),
+            lastname=idinfo.get("family_name"),
+            employee_id=employee_id,
+        )
+        user.password_hash = "__GOOGLE__"
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+    # =========================
+    # 4) Auto-fix legacy users
+    #    (created earlier with username=email)
+    # =========================
+    if user.email and user.username == user.email:
+        user.username = user.email.split("@")[0]
+        user.employee_id = user.username
+        db.commit()
+
+    # =========================
+    # 5) Issue JWT (single identity)
+    # =========================
+    token = create_access_token(user.username)
+
+    return {
+        "message": "Login with Google success",
+        "access_token": token,
+        "user": build_user_response(user, db)
+    }
+
+
