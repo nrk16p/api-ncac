@@ -8,3 +8,4 @@ PyJWT
 passlib
 argon2-cffi
 google-auth
+requests
