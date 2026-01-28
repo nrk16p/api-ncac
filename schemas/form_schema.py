@@ -138,3 +138,6 @@ class FormResponse(BaseModel):
     class Config:
         orm_mode = True
 
+class FormSubmissionUpdate(BaseModel):
+    updated_by: str
+    values: List[FormSubmissionValueCreate]

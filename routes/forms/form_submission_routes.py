@@ -10,7 +10,7 @@ from models.master_model import (
     FormSubmissionValue, FormSequence, FormApprovalRule, FormSubmissionLog
 )
 from models import User, Position
-from schemas.form_schema import FormSubmissionCreate, FormResponse, FormValueResponse 
+from schemas.form_schema import FormSubmissionCreate, FormResponse, FormValueResponse ,FormSubmissionUpdate
 
 router = APIRouter(prefix="/forms", tags=["Forms - Submission"])
 
@@ -359,3 +359,86 @@ def get_logs_by_form_id_path(
         }
         for log in logs
     ]
+@router.put("/{form_id}")
+def update_form_details(
+    form_id: str,
+    payload: FormSubmissionUpdate,
+    db: Session = Depends(get_db),
+):
+    submission = (
+        db.query(FormSubmission)
+        .options(joinedload(FormSubmission.values))
+        .filter(FormSubmission.form_id == form_id)
+        .first()
+    )
+
+    if not submission:
+        raise HTTPException(status_code=404, detail="Submission not found")
+
+    # 🔒 optional guard
+    if submission.status == "Done":
+        raise HTTPException(status_code=400, detail="Cannot edit completed form")
+
+    try:
+        submission.updated_by = payload.updated_by
+
+        # map existing values
+        existing = {v.question_id: v for v in submission.values}
+
+        for v in payload.values:
+            q = (
+                db.query(FormQuestion)
+                .filter(FormQuestion.id == v.question_id)
+                .first()
+            )
+            if not q:
+                raise HTTPException(400, f"Invalid question_id {v.question_id}")
+
+            # 🔎 validation (ย่อ)
+            if q.is_required and not any([
+                v.value_text, v.value_number, v.value_date, v.value_boolean
+            ]):
+                raise HTTPException(400, f"{q.question_label} is required")
+
+            if q.question_type == "multiselect" and isinstance(v.value_text, list):
+                v.value_text = ",".join(v.value_text)
+
+            if v.question_id in existing:
+                rec = existing[v.question_id]
+
+                # 🧾 log change (optional แต่แนะนำ)
+                if rec.value_text != v.value_text:
+                    db.add(FormSubmissionLog(
+                        submission_id=submission.id,
+                        action="UPDATE_VALUE",
+                        field_name=q.question_name,
+                        old_value=str(rec.value_text),
+                        new_value=str(v.value_text),
+                        action_by=payload.updated_by
+                    ))
+
+                rec.value_text = v.value_text
+                rec.value_number = v.value_number
+                rec.value_date = v.value_date
+                rec.value_boolean = v.value_boolean
+            else:
+                db.add(FormSubmissionValue(
+                    submission_id=submission.id,
+                    question_id=v.question_id,
+                    value_text=v.value_text,
+                    value_number=v.value_number,
+                    value_date=v.value_date,
+                    value_boolean=v.value_boolean
+                ))
+
+        db.commit()
+
+        return {
+            "message": "Form details updated",
+            "form_id": submission.form_id,
+            "submission_id": submission.id
+        }
+
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))

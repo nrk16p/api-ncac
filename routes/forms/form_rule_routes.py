@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from database import get_db
 from models.master_model import FormMaster, FormApprovalRule
-from schemas.form_schema import FormApprovalRuleCreate
+from schemas.form_schema import FormApprovalRuleCreate , FormApprovalRuleUpdate
 
 router = APIRouter(prefix="/forms", tags=["Forms - Approval Rules"])
 
@@ -11,53 +11,32 @@ router = APIRouter(prefix="/forms", tags=["Forms - Approval Rules"])
 # ➕ Create / 🔁 Update (Upsert) Approval Rule
 # ============================================================
 @router.post("/rules")
-def create_or_update_rule(payload: FormApprovalRuleCreate, db: Session = Depends(get_db)):
-    # 1️⃣ หา Form
-    form = db.query(FormMaster).filter(FormMaster.form_code == payload.form_code).first()
+def create_rule(payload: FormApprovalRuleCreate, db: Session = Depends(get_db)):
+    form = db.query(FormMaster).filter(
+        FormMaster.form_code == payload.form_code
+    ).first()
     if not form:
-        raise HTTPException(status_code=404, detail="Form not found")
+        raise HTTPException(404, "Form not found")
 
-    # 2️⃣ เช็คว่ามี rule ของ (form_master_id, level_no) อยู่แล้วหรือไม่
-    existing = db.query(FormApprovalRule).filter(
+    # 🚫 ป้องกัน creator range ซ้อน
+    overlap = db.query(FormApprovalRule).filter(
         FormApprovalRule.form_master_id == form.id,
-        FormApprovalRule.level_no == payload.level_no
+        FormApprovalRule.level_no == payload.level_no,
+        FormApprovalRule.creator_min <= payload.creator_max,
+        FormApprovalRule.creator_max >= payload.creator_min
     ).first()
 
-    if existing:
-        # 🔁 UPDATE
-        existing.creator_min = payload.creator_min
-        existing.creator_max = payload.creator_max
-        existing.approve_by_type = payload.approve_by_type
-        existing.approve_by_min = payload.approve_by_min
-        existing.approve_by_max = payload.approve_by_max
-        existing.same_department = payload.same_department
-        existing.is_active = payload.is_active
+    if overlap:
+        raise HTTPException(
+            400,
+            "Creator range overlaps with existing rule"
+        )
 
-        db.commit()
-        db.refresh(existing)
-
-        return {
-            "message": "Approval rule updated",
-            "rule": {
-                "id": existing.id,
-                "form_code": payload.form_code,
-                "level_no": existing.level_no,
-                "creator_min": existing.creator_min,
-                "creator_max": existing.creator_max,
-                "approve_by_type": existing.approve_by_type,
-                "approve_by_min": existing.approve_by_min,
-                "approve_by_max": existing.approve_by_max,
-                "same_department": existing.same_department,
-                "is_active": existing.is_active
-            }
-        }
-
-    # 3️⃣ ถ้ายังไม่มี → CREATE
     rule = FormApprovalRule(
         form_master_id=form.id,
+        level_no=payload.level_no,
         creator_min=payload.creator_min,
         creator_max=payload.creator_max,
-        level_no=payload.level_no,
         approve_by_type=payload.approve_by_type,
         approve_by_min=payload.approve_by_min,
         approve_by_max=payload.approve_by_max,
@@ -71,20 +50,32 @@ def create_or_update_rule(payload: FormApprovalRuleCreate, db: Session = Depends
 
     return {
         "message": "Approval rule created",
-        "rule": {
-            "id": rule.id,
-            "form_code": payload.form_code,
-            "level_no": rule.level_no,
-            "creator_min": rule.creator_min,
-            "creator_max": rule.creator_max,
-            "approve_by_type": rule.approve_by_type,
-            "approve_by_min": rule.approve_by_min,
-            "approve_by_max": rule.approve_by_max,
-            "same_department": rule.same_department,
-            "is_active": rule.is_active
-        }
+        "rule_id": rule.id
     }
 
+@router.put("/rules/{rule_id}")
+def update_rule(
+    rule_id: int,
+    payload: FormApprovalRuleUpdate,
+    db: Session = Depends(get_db)
+):
+    rule = db.query(FormApprovalRule).filter(
+        FormApprovalRule.id == rule_id
+    ).first()
+
+    if not rule:
+        raise HTTPException(404, "Rule not found")
+
+    for field, value in payload.dict(exclude_unset=True).items():
+        setattr(rule, field, value)
+
+    db.commit()
+    db.refresh(rule)
+
+    return {
+        "message": "Rule updated",
+        "rule_id": rule.id
+    }
 # ============================================================
 # 📄 Get Approval Rules (filter by form_code)
 # ============================================================
@@ -187,4 +178,67 @@ def delete_rule_by_form(form_code: str, level_no: int, db: Session = Depends(get
         "message": "Approval rule deleted",
         "form_code": form_code,
         "level_no": level_no
+    }
+@router.get("/{form_code}/rules")
+def get_rules_by_form_code(
+    form_code: str,
+    db: Session = Depends(get_db),
+):
+    form = (
+        db.query(FormMaster)
+        .filter(FormMaster.form_code == form_code)
+        .first()
+    )
+
+    if not form:
+        raise HTTPException(status_code=404, detail="Form not found")
+
+    rules = (
+        db.query(FormApprovalRule)
+        .filter(FormApprovalRule.form_master_id == form.id)
+        .order_by(
+            FormApprovalRule.level_no.asc(),
+            FormApprovalRule.creator_min.asc()
+        )
+        .all()
+    )
+
+    return {
+        "form_code": form_code,
+        "count": len(rules),
+        "rules": [
+            {
+                "id": r.id,
+                "level_no": r.level_no,
+                "creator_min": r.creator_min,
+                "creator_max": r.creator_max,
+                "approve_by_type": r.approve_by_type,
+                "approve_by_min": r.approve_by_min,
+                "approve_by_max": r.approve_by_max,
+                "same_department": r.same_department,
+                "is_active": r.is_active
+            }
+            for r in rules
+        ]
+    }
+@router.delete("/rules/{rule_id}")
+def delete_rule(
+    rule_id: int,
+    db: Session = Depends(get_db),
+):
+    rule = (
+        db.query(FormApprovalRule)
+        .filter(FormApprovalRule.id == rule_id)
+        .first()
+    )
+
+    if not rule:
+        raise HTTPException(status_code=404, detail="Approval rule not found")
+
+    db.delete(rule)
+    db.commit()
+
+    return {
+        "message": "Approval rule deleted",
+        "rule_id": rule_id
     }
