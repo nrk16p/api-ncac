@@ -211,9 +211,9 @@ def submit_form(payload: FormSubmissionCreate, db: Session = Depends(get_db)):
 # -------------------------
 # 🔹 Update STATUS (Workflow)
 # -------------------------
-@router.put("/{submission_id}/status")
+@router.put("/{form_id}/status")
 def update_status(
-    submission_id: int,
+    form_id: str,
     new_status: str = Query(..., regex="^(Open|In-Progress|Done|Backlog)$"),
     employee_id: str = Query(...),
     db: Session = Depends(get_db),
@@ -226,7 +226,14 @@ def update_status(
     4. Backlog      -> send back to queue
     """
 
-    submission = db.query(FormSubmission).filter(FormSubmission.id == submission_id).first()
+    # 🔍 หา submission ล่าสุดของ form_id
+    submission = (
+        db.query(FormSubmission)
+        .filter(FormSubmission.form_id == form_id)
+        .order_by(FormSubmission.id.desc())
+        .first()
+    )
+
     if not submission:
         raise HTTPException(status_code=404, detail="Submission not found")
 
@@ -236,17 +243,20 @@ def update_status(
         submission.updated_by = employee_id
 
         # 🔹 LOG: only when status changed
-        log_status_change(
-            db=db,
-            submission_id=submission.id,
-            old_status=old_status,
-            new_status=new_status,
-            action_by=employee_id
-        )
+        if old_status != new_status:
+            log_status_change(
+                db=db,
+                submission_id=submission.id,   # 👈 ยังใช้ submission_id จริง
+                old_status=old_status,
+                new_status=new_status,
+                action_by=employee_id
+            )
 
         db.commit()
+
         return {
             "message": "Status updated",
+            "form_id": form_id,
             "submission_id": submission.id,
             "old_status": old_status,
             "new_status": new_status
