@@ -35,13 +35,18 @@ print("✅ GOOGLE_CLIENT_ID =", GOOGLE_CLIENT_ID)
 # ============================================================
 # JWT
 # ============================================================
-def create_access_token(identity: str) -> str:
-    expire = datetime.datetime.utcnow() + datetime.timedelta(
+def create_access_token(subject: str):
+    expire = datetime.now(timezone.utc) + timedelta(
         minutes=ACCESS_TOKEN_EXPIRE_MINUTES
     )
-    payload = {"sub": identity, "exp": expire}
-    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
+    to_encode = {
+        "sub": subject,
+        "exp": expire
+    }
+
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
 # ============================================================
 # Schemas
 # ============================================================
