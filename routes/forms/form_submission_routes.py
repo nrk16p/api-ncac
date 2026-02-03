@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime, timedelta
 from typing import List, Optional
+from models.user_model import User
 
 from database import get_db
 from models.master_model import (
@@ -279,6 +280,9 @@ def get_form(
     end_date: Optional[str] = Query(None),
 ):
 
+    # =====================================================
+    # Base query
+    # =====================================================
     query = (
         db.query(FormSubmission)
         .options(
@@ -309,15 +313,39 @@ def get_form(
 
     results = query.all()
 
+    # =====================================================
+    # 🔹 Load users once (prevent N+1)
+    # =====================================================
+    employee_ids = {sub.created_by for sub in results if sub.created_by}
+
+    users = (
+        db.query(User)
+        .filter(User.employee_id.in_(employee_ids))
+        .all()
+    )
+
+    user_map = {u.employee_id: u for u in users}
+
+    # =====================================================
     # 🔁 FLATTEN RESPONSE
+    # =====================================================
     output = []
+
     for sub in results:
+        user = user_map.get(sub.created_by)
+
         item = {
             "form_id": sub.form_id,
             "status": sub.status,
             "status_approve": sub.status_approve,
             "created_by": sub.created_by,
             "created_at": sub.created_at,
+
+            # 👤 created user
+            "firstname": user.firstname if user else None,
+            "lastname": user.lastname if user else None,
+            "email": user.email if user else None,
+            "image_url": user.image_url if user else None,
 
             # 👇 flatten form
             "form_type": sub.form.form_type if sub.form else None,

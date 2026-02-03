@@ -127,7 +127,10 @@ class FormResponse(BaseModel):
     status_approve: str
     created_by: str
     created_at: datetime
-
+    firstname: str | None
+    lastname: str | None
+    email: str | None
+    image_url: str | None
     # 👇 flatten จาก form_master
     form_type: Optional[str]
     form_code: Optional[str]

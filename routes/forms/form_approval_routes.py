@@ -158,6 +158,11 @@ def get_pending_approvals(
                 "status": sub.status_approve,
                 "created_by": sub.created_by,
                 "created_at": sub.created_at,
+                "firstname": requester.firstname,
+                "lastname": requester.lastname,
+                "email": requester.email,
+                "image_url": requester.image_url,
+                
             })
 
     return result
