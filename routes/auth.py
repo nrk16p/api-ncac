@@ -238,9 +238,6 @@ def login_google(payload: GoogleLoginRequest, db: Session = Depends(get_db)):
     employee_id = username
     image_url = idinfo.get("picture")
 
-    # =========================
-    # Find user
-    # =========================
     user = db.query(User).filter(
         or_(
             User.username == username,
@@ -249,9 +246,8 @@ def login_google(payload: GoogleLoginRequest, db: Session = Depends(get_db)):
         )
     ).first()
 
-    # =========================
-    # Create if not exist
-    # =========================
+    now = datetime.now(timezone.utc)   # ✅ จุดเดียวใช้ทั้ง function
+
     if not user:
         user = User(
             username=username,
@@ -260,23 +256,18 @@ def login_google(payload: GoogleLoginRequest, db: Session = Depends(get_db)):
             lastname=idinfo.get("family_name"),
             employee_id=employee_id,
             image_url=image_url,
-            last_login=datetime.utcnow()
+            last_login=now
         )
         user.password_hash = "__GOOGLE__"
         db.add(user)
         db.commit()
         db.refresh(user)
     else:
-        # =========================
-        # Update on every login
-        # =========================
-        user.last_login = datetime.now(timezone.utc)
+        user.last_login = now
 
-        # update image if changed
         if image_url:
             user.image_url = image_url
 
-        # auto-fix legacy username=email
         if user.email and user.username == user.email:
             user.username = username
             user.employee_id = username
@@ -290,4 +281,3 @@ def login_google(payload: GoogleLoginRequest, db: Session = Depends(get_db)):
         "access_token": token,
         "user": build_user_response(user, db)
     }
-
