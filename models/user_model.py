@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Timestamp
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
 from sqlalchemy.orm import relationship
 from passlib.context import CryptContext
 from database import Base
@@ -55,7 +55,7 @@ class User(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     image_url = Column(String(512))          # ✅ Google profile image
-    last_login = Column(Timestamp)            # ✅ last login time
+    last_login = Column(DateTime(timezone=True))
     department = relationship("Department", backref="users")
     site = relationship("Site", backref="users")
     position = relationship("Position", backref="users")
