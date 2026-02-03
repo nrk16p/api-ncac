@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from dotenv import load_dotenv
+from sqlalchemy import or_
 
 # 🔑 GOOGLE AUTH (สำคัญมาก)
 from google.oauth2 import id_token
@@ -232,50 +233,56 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)):
 def login_google(payload: GoogleLoginRequest, db: Session = Depends(get_db)):
     idinfo = verify_google_token(payload.id_token)
 
-    # =========================
-    # 1) Extract identity
-    # =========================
     email = idinfo["email"]
-    username = email.split("@")[0]     # short username
-    employee_id = username             # policy: same value
+    username = email.split("@")[0]
+    employee_id = username
+    image_url = idinfo.get("picture")
 
     # =========================
-    # 2) Find existing user
+    # Find user
     # =========================
     user = db.query(User).filter(
-        (User.username == username) |
-        (User.employee_id == employee_id) |
-        (User.email == email)
+        or_(
+            User.username == username,
+            User.employee_id == employee_id,
+            User.email == email
+        )
     ).first()
 
     # =========================
-    # 3) Create user if not exist
+    # Create if not exist
     # =========================
     if not user:
         user = User(
-            username=username,                 # ✅ short username
-            email=email,                       # ✅ email field
+            username=username,
+            email=email,
             firstname=idinfo.get("given_name"),
             lastname=idinfo.get("family_name"),
             employee_id=employee_id,
+            image_url=image_url,
+            last_login=datetime.utcnow()
         )
         user.password_hash = "__GOOGLE__"
         db.add(user)
         db.commit()
         db.refresh(user)
+    else:
+        # =========================
+        # Update on every login
+        # =========================
+        user.last_login = datetime.utcnow()
 
-    # =========================
-    # 4) Auto-fix legacy users
-    #    (created earlier with username=email)
-    # =========================
-    if user.email and user.username == user.email:
-        user.username = user.email.split("@")[0]
-        user.employee_id = user.username
+        # update image if changed
+        if image_url:
+            user.image_url = image_url
+
+        # auto-fix legacy username=email
+        if user.email and user.username == user.email:
+            user.username = username
+            user.employee_id = username
+
         db.commit()
 
-    # =========================
-    # 5) Issue JWT (single identity)
-    # =========================
     token = create_access_token(user.username)
 
     return {
@@ -283,5 +290,4 @@ def login_google(payload: GoogleLoginRequest, db: Session = Depends(get_db)):
         "access_token": token,
         "user": build_user_response(user, db)
     }
-
 
