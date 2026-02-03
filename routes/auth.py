@@ -147,7 +147,10 @@ def build_user_response(user: User, db: Session):
         "position": position_name,
         "position_level": position_level,
         "position_level_id": position_level_id,
+        "image_url": user.image_url or None,
+        "last_login": user.last_login,    # (optional แต่แนะนำ)
     }
+
 
 # ============================================================
 # LOGIN (LOCAL)
