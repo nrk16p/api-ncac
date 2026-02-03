@@ -270,7 +270,7 @@ def login_google(payload: GoogleLoginRequest, db: Session = Depends(get_db)):
         # =========================
         # Update on every login
         # =========================
-        user.last_login = datetime.utcnow()
+        user.last_login = datetime.now(timezone.utc)
 
         # update image if changed
         if image_url:
