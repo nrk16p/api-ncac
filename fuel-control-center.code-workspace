@@ -11,6 +11,12 @@
 		},
 		{
 			"path": ".."
+		},
+		{
+			"path": "../../safety-tools"
+		},
+		{
+			"path": "../../engine_on_v2"
 		}
 	]
 }

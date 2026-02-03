@@ -83,7 +83,7 @@ def upsert_docs(db: Session, case_id: int, docs_payload: Optional[List[dict]]):
 
 class ProductSchema(BaseModel):
     product_name: str
-    amount: Optional[int] = None
+    amount: Optional[float] = None
     unit: Optional[str] = None
 
 
