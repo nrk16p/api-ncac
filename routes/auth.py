@@ -1,5 +1,5 @@
 import os
-import datetime
+from datetime import datetime, timezone
 import jwt
 
 from fastapi import APIRouter, Depends, HTTPException, status
