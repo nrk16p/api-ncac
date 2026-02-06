@@ -138,6 +138,7 @@ class AccidentCase(Base):
             "drug_test_result": self.drug_test_result,
             "truck_damage": self.truck_damage,
             "truck_damage_details": self.truck_damage_details,
+            "fault_party": self.fault_party,
             "product_damage": self.product_damage,
             "product_damage_details": self.product_damage_details,
             "estimated_goods_damage_value": self.estimated_goods_damage_value,
