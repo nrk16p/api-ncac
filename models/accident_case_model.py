@@ -53,6 +53,7 @@ class AccidentCase(Base):
     drug_test = Column(Text)
     alcohol_test_result = Column(Float)
     drug_test_result = Column(String(255))
+    fault_party = Column(String(255))
 
     # --- Damage Information ---
     truck_damage = Column(Text)

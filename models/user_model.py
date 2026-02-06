@@ -56,7 +56,8 @@ class User(Base):
 
     image_url = Column(String(512))          # ✅ Google profile image
     last_login = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
+    employee_status = Column(String(50))
+
     department = relationship("Department", backref="users")
     site = relationship("Site", backref="users")
     position = relationship("Position", backref="users")

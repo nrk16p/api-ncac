@@ -149,6 +149,8 @@ def build_user_response(user: User, db: Session):
         "position_level_id": position_level_id,
         "image_url": user.image_url or None,
         "last_login": user.last_login,    # (optional แต่แนะนำ)
+           "employee_status": user.employee_status,    # (optional แต่แนะนำ)
+     
     }
 
 

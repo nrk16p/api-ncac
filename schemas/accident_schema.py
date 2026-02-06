@@ -282,6 +282,7 @@ class AccidentCaseResponse(BaseModel):
     estimated_vehicle_damage_value: Optional[float] = None
     actual_goods_damage_value: Optional[float] = None
     actual_vehicle_damage_value: Optional[float] = None
+    fault_party :Optional[str] = None
 
     # 🔹 Attachments & Status
     attachments: Optional[str] = None
