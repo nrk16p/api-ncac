@@ -270,6 +270,7 @@ class AccidentCaseResponse(BaseModel):
     other_party_claim_no: Optional[str] = None
     claim_officer_full_name: Optional[str] = None
     claim_officer_phone: Optional[str] = None
+    fault_party:Optional[str] = None
 
     # 🔹 Test Results
     alcohol_test: Optional[str] = None
