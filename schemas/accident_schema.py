@@ -294,4 +294,4 @@ class AccidentCaseResponse(BaseModel):
     docs: Optional[List[dict[str, Any]]] = None
 
     class Config:
-        from_attributes = True  # ✅ Pydantic v2 compatible
+        from_attributes = True  # ✅ Pydantic v2 
