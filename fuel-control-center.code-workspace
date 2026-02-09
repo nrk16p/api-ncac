@@ -17,6 +17,9 @@
 		},
 		{
 			"path": "../../engine_on_v2"
+		},
+		{
+			"path": "../../api-payslip_v2"
 		}
 	]
 }

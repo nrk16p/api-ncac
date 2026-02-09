@@ -99,6 +99,8 @@ class AccidentCaseCreate(BaseModel):
     truck_damage_details: Optional[str] = None
     product_damage: Optional[str] = None
     product_damage_details: Optional[str] = None
+    fault_party:Optional[str] = None
+
 
     # 🔹 Test Results
     alcohol_test: Optional[str] = None
