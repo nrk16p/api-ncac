@@ -259,6 +259,8 @@ def get_case_reports(
     driver_id: Optional[List[str]] = Query(None),
     casestatus: Optional[List[str]] = Query(None),
     priority: Optional[List[str]] = Query(None),
+    client_id: Optional[List[int]] = Query(None),          # ✅ NEW
+    department_id: Optional[List[int]] = Query(None),      # ✅ NEW
     start_date: Optional[str] = Query(None),
     end_date: Optional[str] = Query(None),
 ):
@@ -266,14 +268,25 @@ def get_case_reports(
 
     if document_no:
         query = query.filter(CaseReport.document_no.in_(document_no))
+
     if site_id:
         query = query.filter(CaseReport.site_id.in_(site_id))
+
     if driver_id:
         query = query.filter(CaseReport.driver_id.in_(driver_id))
+
     if casestatus:
         query = query.filter(CaseReport.casestatus.in_(casestatus))
+
     if priority:
         query = query.filter(CaseReport.priority.in_(priority))
+
+    # ✅ NEW FILTERS
+    if client_id:
+        query = query.filter(CaseReport.client_id.in_(client_id))
+
+    if department_id:
+        query = query.filter(CaseReport.department_id.in_(department_id))
 
     if start_date and end_date:
         start = parse_dt(start_date)

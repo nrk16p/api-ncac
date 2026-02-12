@@ -140,6 +140,8 @@ def get_accident_cases(
     db: Session = Depends(get_db),
     document_no_ac: Optional[List[str]] = Query(None),
     site_id: Optional[List[int]] = Query(None),
+    client_id: Optional[List[int]] = Query(None),        # ✅ NEW
+    department_id: Optional[List[int]] = Query(None),    # ✅ NEW
     priority: Optional[List[str]] = Query(None),
     driver_id: Optional[List[str]] = Query(None),
     casestatus: Optional[List[str]] = Query(None),
@@ -164,14 +166,26 @@ def get_accident_cases(
 
     if document_no_ac:
         query = query.filter(models.AccidentCase.document_no_ac.in_(document_no_ac))
+
     if site_id:
         query = query.filter(models.AccidentCase.site_id.in_(site_id))
+
+    # ✅ NEW FILTERS
+    if client_id:
+        query = query.filter(models.AccidentCase.client_id.in_(client_id))
+
+    if department_id:
+        query = query.filter(models.AccidentCase.department_id.in_(department_id))
+
     if priority:
         query = query.filter(models.AccidentCase.priority.in_(priority))
+
     if driver_id:
         query = query.filter(models.AccidentCase.driver_id.in_(driver_id))
+
     if casestatus:
         query = query.filter(models.AccidentCase.casestatus.in_(casestatus))
+
     if start_date and end_date:
         start, end = parse_dt(start_date), parse_dt(end_date)
         if start and end:
@@ -182,6 +196,7 @@ def get_accident_cases(
 
     cases = query.order_by(models.AccidentCase.record_datetime.desc()).all()
     return [case.to_dict() for case in cases]
+
 
 # -----------------------------------------------------
 # UPDATE CASE
