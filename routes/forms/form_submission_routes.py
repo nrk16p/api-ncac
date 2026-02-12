@@ -271,6 +271,7 @@ def update_status(
 # -------------------------
 # 🔹 Read
 # -------------------------
+
 @router.get("/", response_model=List[FormResponse])
 def get_form(
     db: Session = Depends(get_db),
@@ -289,18 +290,16 @@ def get_form(
             joinedload(FormSubmission.form),
             joinedload(FormSubmission.values)
                 .joinedload(FormSubmissionValue.question),
+            joinedload(FormSubmission.approval_logs)   # ✅ LOAD LOGS
         )
     )
 
-    # 🔎 filter by employee
     if employee_id:
         query = query.filter(FormSubmission.created_by == employee_id)
 
-    # 🔎 filter by form_id
     if form_id:
         query = query.filter(FormSubmission.form_id == form_id)
 
-    # 📅 filter by date range (created_at)
     if start_date and end_date:
         start = parse_dt(start_date)
         end = parse_dt(end_date)
@@ -311,7 +310,7 @@ def get_form(
                 FormSubmission.created_at < end_next
             )
 
-    results = query.all()
+    results = query.all() or []
 
     # =====================================================
     # 🔹 Load users once (prevent N+1)
@@ -322,7 +321,7 @@ def get_form(
         db.query(User)
         .filter(User.employee_id.in_(employee_ids))
         .all()
-    )
+    ) if employee_ids else []
 
     user_map = {u.employee_id: u for u in users}
 
@@ -333,6 +332,12 @@ def get_form(
 
     for sub in results:
         user = user_map.get(sub.created_by)
+
+        # 🔹 Sort logs by level
+        logs_sorted = sorted(sub.approval_logs, key=lambda x: x.level_no) if sub.approval_logs else []
+
+        # 🔹 Get latest log (for remark)
+        latest_log = logs_sorted[-1] if logs_sorted else None
 
         item = {
             "form_id": sub.form_id,
@@ -352,6 +357,21 @@ def get_form(
             "form_code": sub.form.form_code if sub.form else None,
             "form_name": sub.form.form_name if sub.form else None,
 
+            # ✅ current remark (ป้องกัน schema error)
+            "remark": latest_log.remark if latest_log else None,
+
+            # ✅ approval history
+            "approval_logs": [
+                {
+                    "level_no": log.level_no,
+                    "action": log.action,
+                    "remark": log.remark,
+                    "action_by_employee_id": log.action_by,
+                    "action_at": log.action_at,
+                }
+                for log in logs_sorted
+            ],
+
             "values": []
         }
 
@@ -363,7 +383,6 @@ def get_form(
                 "value_date": v.value_date,
                 "value_boolean": v.value_boolean,
 
-                # 👇 flatten question
                 "question_name": v.question.question_name if v.question else None,
                 "question_label": v.question.question_label if v.question else None,
                 "question_type": v.question.question_type if v.question else None,
@@ -372,6 +391,7 @@ def get_form(
         output.append(item)
 
     return output
+
 @router.get("/{form_id}/logs")
 def get_logs_by_form_id_path(
     form_id: str,

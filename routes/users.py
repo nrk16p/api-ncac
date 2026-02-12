@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException , Query
+
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import joinedload
 
@@ -80,8 +81,11 @@ class UserResponse(BaseModel):
 
 
 @router.get("/", response_model=List[UserResponse])
-def get_users(db: Session = Depends(get_db)):
-    users = (
+def get_users(
+    employee_id: Optional[str] = Query(None),
+    db: Session = Depends(get_db)
+):
+    query = (
         db.query(User)
         .options(
             joinedload(User.department),
@@ -89,8 +93,13 @@ def get_users(db: Session = Depends(get_db)):
             joinedload(User.position)
                 .joinedload(Position.level)
         )
-        .all()
     )
+
+    # ✅ filter by employee_id
+    if employee_id:
+        query = query.filter(User.employee_id == employee_id)
+
+    users = query.all()
 
     return [build_user_response(u, db) for u in users]
 
@@ -110,3 +119,26 @@ def create_user(payload: UserCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(user)
     return user
+
+
+@router.get("/{employee_id}", response_model=UserResponse)
+def get_user_by_employee_id(
+    employee_id: str,
+    db: Session = Depends(get_db)
+):
+    user = (
+        db.query(User)
+        .options(
+            joinedload(User.department),
+            joinedload(User.site),
+            joinedload(User.position)
+                .joinedload(Position.level)
+        )
+        .filter(User.employee_id == employee_id)
+        .first()
+    )
+
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return build_user_response(user, db)

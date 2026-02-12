@@ -53,11 +53,14 @@ class FormMaster(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     form_type = Column(String(20), nullable=False)
-    form_code = Column(String(50), unique=True, nullable=False)
+    form_code = Column(String(50),index=True, nullable=False)
     form_name = Column(String(255))
     form_status = Column(String(20), default="Draft")
     need_approval = Column(Boolean, default=True)
     created_at = Column(TIMESTAMP, default=datetime.utcnow)
+    version = Column(Integer, default=1, nullable=False)
+    parent_form_id = Column(Integer, nullable=True)  # reference original form
+    is_latest = Column(Boolean, default=True, nullable=False)
 
     questions = relationship("FormQuestion", back_populates="form", cascade="all, delete")
     submissions = relationship("FormSubmission", back_populates="form")

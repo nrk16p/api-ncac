@@ -1,6 +1,7 @@
 from pydantic import BaseModel
-from typing import List, Optional, Union
+from typing import List, Optional, Union ,Literal 
 from datetime import datetime
+from pydantic import BaseModel, Field, model_validator
 
 
 # -------------------------
@@ -135,6 +136,8 @@ class FormResponse(BaseModel):
     form_type: Optional[str]
     form_code: Optional[str]
     form_name: Optional[str]
+    remark: Optional[str]
+
 
     values: List[FormValueResponse] = []
 
@@ -144,3 +147,55 @@ class FormResponse(BaseModel):
 class FormSubmissionUpdate(BaseModel):
     updated_by: str
     values: List[FormSubmissionValueCreate]
+# ============================================================
+# OPTION UPDATE
+# ============================================================
+class FormOptionUpdate(BaseModel):
+    id: Optional[int] = None  # used if updating existing option
+    option_value: str
+    option_label: str
+    option_filter: Optional[str] = None
+    sort_order: Optional[int] = None
+
+
+# ============================================================
+# QUESTION UPDATE
+# ============================================================
+class FormQuestionUpdate(BaseModel):
+    id: Optional[int] = None  # used if updating existing question
+
+    question_name: str
+    question_label: str
+    question_type: Literal[
+        "text",
+        "textarea",
+        "number",
+        "date",
+        "dropdown",
+        "multiselect",
+        "file"
+    ]
+    is_required: bool
+    sort_order: int
+
+    options: Optional[List[FormOptionUpdate]] = None
+
+    # Validate dropdown must have options
+    @model_validator(mode="after")
+    def validate_dropdown_options(self):
+        if self.question_type in ["dropdown", "multiselect"]:
+            if not self.options or len(self.options) == 0:
+                raise ValueError("Dropdown or multiselect must include options")
+        return self
+
+
+# ============================================================
+# FORM MASTER PATCH
+# ============================================================
+class FormMasterUpdate(BaseModel):
+    form_type: Optional[str] = None
+    form_name: Optional[str] = None
+    form_status: Optional[Literal["Draft", "Active", "Inactive", "Archived"]] = None
+    need_approval: Optional[bool] = None
+
+    questions: Optional[List[FormQuestionUpdate]] = None
