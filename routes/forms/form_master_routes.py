@@ -130,25 +130,35 @@ def versioned_update_form_master(
 ):
     try:
 
+        # =====================================================
         # 1️⃣ Get current latest version
-        old_form = db.query(FormMaster).filter(
-            FormMaster.form_code == form_code,
-            FormMaster.is_latest == True
-        ).first()
+        # =====================================================
+        old_form = (
+            db.query(FormMaster)
+            .filter(
+                FormMaster.form_code == form_code,
+                FormMaster.is_latest == True
+            )
+            .first()
+        )
 
         if not old_form:
             raise HTTPException(status_code=404, detail="Form not found")
 
-        # 2️⃣ IMPORTANT: Mark old version NOT latest first
+        # =====================================================
+        # 2️⃣ Mark old version as NOT latest
+        # =====================================================
         old_form.is_latest = False
-        db.flush()  # 🔥 ensures unique index won't block insert
+        db.flush()
 
+        # =====================================================
         # 3️⃣ Create new version
+        # =====================================================
         new_form = FormMaster(
             form_type=payload.form_type or old_form.form_type,
             form_code=old_form.form_code,
             form_name=payload.form_name or old_form.form_name,
-            form_status="Draft",  # new version always Draft
+            form_status="Draft",
             need_approval=(
                 payload.need_approval
                 if payload.need_approval is not None
@@ -162,7 +172,9 @@ def versioned_update_form_master(
         db.add(new_form)
         db.flush()
 
-        # 4️⃣ Clone questions + options
+        # =====================================================
+        # 4️⃣ Clone Questions + Options
+        # =====================================================
         for old_q in old_form.questions:
 
             cloned_question = FormQuestion(
@@ -188,10 +200,35 @@ def versioned_update_form_master(
 
         db.flush()
 
-        # 5️⃣ If structure update provided → replace cloned questions
+        # =====================================================
+        # 5️⃣ Clone Approval Rules 🔥 IMPORTANT
+        # =====================================================
+        old_rules = db.query(FormApprovalRule).filter(
+            FormApprovalRule.form_master_id == old_form.id
+        ).all()
+
+        for old_rule in old_rules:
+            cloned_rule = FormApprovalRule(
+                form_master_id=new_form.id,  # 🔥 point to new version
+                level_no=old_rule.level_no,
+                creator_min=old_rule.creator_min,
+                creator_max=old_rule.creator_max,
+                approve_by_type=old_rule.approve_by_type,
+                approve_by_min=old_rule.approve_by_min,
+                approve_by_max=old_rule.approve_by_max,
+                same_department=old_rule.same_department,
+                is_active=old_rule.is_active
+            )
+            db.add(cloned_rule)
+
+        db.flush()
+
+        # =====================================================
+        # 6️⃣ If structure update provided → replace cloned questions
+        # =====================================================
         if payload.questions is not None:
 
-            # delete cloned questions safely (no submissions linked yet)
+            # delete options first
             db.query(FormQuestionOption).filter(
                 FormQuestionOption.question_id.in_(
                     db.query(FormQuestion.id).filter(
@@ -200,6 +237,7 @@ def versioned_update_form_master(
                 )
             ).delete(synchronize_session=False)
 
+            # delete questions
             db.query(FormQuestion).filter(
                 FormQuestion.form_master_id == new_form.id
             ).delete(synchronize_session=False)
@@ -230,6 +268,9 @@ def versioned_update_form_master(
                             sort_order=opt.sort_order
                         ))
 
+        # =====================================================
+        # 7️⃣ Commit transaction
+        # =====================================================
         db.commit()
 
         return {
