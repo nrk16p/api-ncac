@@ -169,6 +169,7 @@ class FormQuestionUpdate(BaseModel):
     question_type: Literal[
         "text",
         "textarea",
+        "longtext",
         "number",
         "date",
         "dropdown",
