@@ -34,3 +34,7 @@ class ComplaintUpdate(BaseModel):
     complaint_type: Optional[str] = None
     complaint_details: Optional[str] = None
     complaint_url: Optional[str] = None
+    problem: Optional[str] = None
+    solution: Optional[str] = None
+    solution_url: Optional[str] = None
+    result: Optional[str] = None

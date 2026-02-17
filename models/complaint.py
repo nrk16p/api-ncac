@@ -46,7 +46,10 @@ class DriverComplaint(Base):
     complaint_type = Column(String(100))
     complaint_details = Column(Text)
     complaint_url = Column(String(500))
-
+    problem = Column(Text, nullable=True)
+    solution = Column(Text, nullable=True)
+    solution_url = Column(Text, nullable=True)
+    result = Column(Text, nullable=True)
     status = Column(Enum(ComplaintStatus), default=ComplaintStatus.OPEN)
 
     is_deleted = Column(Boolean, default=False)

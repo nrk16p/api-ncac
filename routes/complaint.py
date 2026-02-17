@@ -151,6 +151,7 @@ def define_reviewer(
 def approve_complaint(
     tracking_no: str,
     reviewer_employee_id: str,
+    remark: str,
     db: Session = Depends(get_db)
 ):
 
@@ -161,7 +162,7 @@ def approve_complaint(
     if not complaint:
         raise HTTPException(status_code=404, detail="Complaint not found")
 
-    # Get current lowest pending level
+    # Get current pending review (sequential enforcement)
     current_review = (
         db.query(ComplaintReview)
         .filter(
@@ -175,7 +176,6 @@ def approve_complaint(
     if not current_review:
         raise HTTPException(status_code=400, detail="No pending review")
 
-    # Enforce sequential approval
     if current_review.reviewer_employee_id != reviewer_employee_id:
         raise HTTPException(
             status_code=400,
@@ -185,6 +185,15 @@ def approve_complaint(
     # Approve
     current_review.status = ReviewStatus.APPROVED
     current_review.reviewed_at = datetime.utcnow()
+    current_review.remark = remark
+
+    # Log approval
+    log = ComplaintLog(
+        complaint_id=complaint.id,
+        action="APPROVE",
+        remark=remark
+    )
+    db.add(log)
 
     db.commit()
 
@@ -294,7 +303,6 @@ def update_complaint(
     if not complaint:
         raise HTTPException(status_code=404, detail="Complaint not found")
 
-    # Block only if CLOSED
     if complaint.status == ComplaintStatus.CLOSED:
         raise HTTPException(
             status_code=400,
@@ -303,19 +311,29 @@ def update_complaint(
 
     update_data = data.dict(exclude_unset=True)
 
-    # Apply all updates without workflow reset
+    # 🔥 If complaint was REJECTED → reset workflow
+    if complaint.status == ComplaintStatus.REJECTED:
+
+        # Delete old approval levels
+        db.query(ComplaintReview).filter(
+            ComplaintReview.complaint_id == complaint.id
+        ).delete()
+
+        # Reset status
+        complaint.status = ComplaintStatus.OPEN
+
+        log = ComplaintLog(
+            complaint_id=complaint.id,
+            action="RESUBMIT",
+            remark="Complaint edited after rejection and workflow restarted"
+        )
+        db.add(log)
+
+    # Apply updates
     for key, value in update_data.items():
         setattr(complaint, key, value)
 
     complaint.updated_at = datetime.utcnow()
-
-    # Optional: log update
-    update_log = ComplaintLog(
-        complaint_id=complaint.id,
-        action="UPDATE",
-        remark="Complaint updated without resetting workflow"
-    )
-    db.add(update_log)
 
     db.commit()
     db.refresh(complaint)
@@ -357,3 +375,66 @@ def get_current_approval(tracking_no: str, db: Session = Depends(get_db)):
         "reviewer_employee_id": current_review.reviewer_employee_id,
         "complaint_status": complaint.status
     }
+
+@router.post("/{tracking_no}/reject")
+def reject_complaint(
+    tracking_no: str,
+    reviewer_employee_id: str,
+    remark: str,
+    db: Session = Depends(get_db)
+):
+
+    complaint = db.query(DriverComplaint).filter(
+        DriverComplaint.tracking_no == tracking_no
+    ).first()
+
+    if not complaint:
+        raise HTTPException(status_code=404, detail="Complaint not found")
+
+    current_review = (
+        db.query(ComplaintReview)
+        .filter(
+            ComplaintReview.complaint_id == complaint.id,
+            ComplaintReview.status == ReviewStatus.PENDING
+        )
+        .order_by(ComplaintReview.level.asc())
+        .first()
+    )
+
+    if not current_review:
+        raise HTTPException(status_code=400, detail="No pending review")
+
+    if current_review.reviewer_employee_id != reviewer_employee_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Not current approval level"
+        )
+
+    # Mark current level as REJECTED
+    current_review.status = ReviewStatus.REJECTED
+    current_review.reviewed_at = datetime.utcnow()
+    current_review.remark = remark
+
+    # 🔥 Cancel all remaining pending levels
+    db.query(ComplaintReview).filter(
+        ComplaintReview.complaint_id == complaint.id,
+        ComplaintReview.status == ReviewStatus.PENDING
+    ).update(
+        {ComplaintReview.status: ReviewStatus.CANCELLED},
+        synchronize_session=False
+    )
+
+    # Update complaint status
+    complaint.status = ComplaintStatus.REJECTED
+
+    # Log action
+    log = ComplaintLog(
+        complaint_id=complaint.id,
+        action="REJECT",
+        remark=remark
+    )
+    db.add(log)
+
+    db.commit()
+
+    return {"message": "Complaint rejected"}
