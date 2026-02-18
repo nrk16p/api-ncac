@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from database import get_db
-from models.master_model import FormMaster, FormQuestion, FormQuestionOption
+from models.master_model import FormMaster, FormQuestion, FormQuestionOption,FormApprovalRule   # 🔥 เพิ่มบรรทัดนี้
 from schemas.form_schema import FormMasterCreate , FormMasterUpdate
+    
 
 
 router = APIRouter(prefix="/forms", tags=["Forms - Master"])
