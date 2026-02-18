@@ -114,36 +114,69 @@ def determine_initial_approval(db: Session, form_id: int, creator_level: int | N
 # ----------------------------
 @router.post("/submit")
 def submit_form(payload: FormSubmissionCreate, db: Session = Depends(get_db)):
-    form = db.query(FormMaster).filter(FormMaster.form_code == payload.form_code).first()
-    if not form:
-        raise HTTPException(status_code=404, detail="Form not found")
 
-    if form.form_status != "Active":
-        raise HTTPException(status_code=400, detail="Form is not active")
+    # =====================================================
+    # 1️⃣ Get ACTIVE + LATEST version only
+    # =====================================================
+    form = (
+        db.query(FormMaster)
+        .filter(
+            FormMaster.form_code == payload.form_code,
+            FormMaster.is_latest == True,       # 🔥 MUST
+            FormMaster.form_status == "Active" # 🔥 MUST
+        )
+        .first()
+    )
+
+    if not form:
+        raise HTTPException(
+            status_code=404,
+            detail="Active form not found"
+        )
 
     try:
-        form_id = generate_form_id(db, form.form_code)
-        creator_level = get_employee_position_level(db, payload.created_by)
 
+        # =====================================================
+        # 2️⃣ Generate form_id
+        # =====================================================
+        form_id = generate_form_id(db, form.form_code)
+
+        creator_level = get_employee_position_level(
+            db,
+            payload.created_by
+        )
+
+        # =====================================================
+        # 3️⃣ Determine approval
+        # =====================================================
         if not form.need_approval:
             status_approve, current_level = "Approved", None
         else:
-            status_approve, current_level = determine_initial_approval(db, form.id, creator_level)
+            status_approve, current_level = determine_initial_approval(
+                db,
+                form.id,   # 🔥 use versioned form id
+                creator_level
+            )
 
-        # 🔹 CREATE SUBMISSION (STATUS = Open)
+        # =====================================================
+        # 4️⃣ Create submission (bind to form_master_id)
+        # =====================================================
         submission = FormSubmission(
-            form_master_id=form.id,
+            form_master_id=form.id,  # 🔥 version-safe binding
             form_id=form_id,
             created_by=payload.created_by,
             updated_by=payload.updated_by or payload.created_by,
-            status="Open",                         # ✅ Workflow: Open on create
+            status="Open",
             status_approve=status_approve,
             current_approval_level=current_level
         )
+
         db.add(submission)
         db.flush()
 
-        # 🔹 LOG: Open (Create)
+        # =====================================================
+        # 5️⃣ Log status change
+        # =====================================================
         log_status_change(
             db=db,
             submission_id=submission.id,
@@ -152,36 +185,70 @@ def submit_form(payload: FormSubmissionCreate, db: Session = Depends(get_db)):
             action_by=payload.created_by
         )
 
+        # =====================================================
+        # 6️⃣ Validate required fields
+        # =====================================================
         submitted = {v.question_id: v for v in payload.values}
+
         for q in form.questions:
             if q.is_required and q.id not in submitted:
-                raise HTTPException(400, f"Missing required field: {q.question_label}")
+                raise HTTPException(
+                    400,
+                    f"Missing required field: {q.question_label}"
+                )
 
+        # =====================================================
+        # 7️⃣ Save values
+        # =====================================================
         for v in payload.values:
-            q = db.query(FormQuestion).filter(FormQuestion.id == v.question_id).first()
+
+            q = next((x for x in form.questions if x.id == v.question_id), None)
+
             if not q:
-                raise HTTPException(400, f"Invalid question_id {v.question_id}")
+                raise HTTPException(
+                    400,
+                    f"Invalid question_id {v.question_id}"
+                )
 
-            if q.question_type in ["text", "longtext"] and q.is_required and not v.value_text:
-                raise HTTPException(400, f"{q.question_label} is required")
+            # ===== TYPE VALIDATION =====
 
-            elif q.question_type == "dropdown" and q.is_required and not v.value_text:
-                raise HTTPException(400, f"{q.question_label} is required")
+            if q.question_type in ["text", "longtext"]:
+                if q.is_required and not v.value_text:
+                    raise HTTPException(400, f"{q.question_label} is required")
+
+            elif q.question_type == "dropdown":
+                if q.is_required and not v.value_text:
+                    raise HTTPException(400, f"{q.question_label} is required")
 
             elif q.question_type == "multiselect":
                 if q.is_required and not v.value_text:
-                    raise HTTPException(400, f"{q.question_label} must select at least one option")
+                    raise HTTPException(
+                        400,
+                        f"{q.question_label} must select at least one option"
+                    )
                 if isinstance(v.value_text, list):
                     v.value_text = ",".join(v.value_text)
 
-            elif q.question_type == "checkbox" and v.value_boolean is None:
-                raise HTTPException(400, f"{q.question_label} must be true or false")
+            elif q.question_type == "checkbox":
+                if v.value_boolean is None:
+                    raise HTTPException(
+                        400,
+                        f"{q.question_label} must be true or false"
+                    )
 
-            elif q.question_type in ["number", "int"] and q.is_required and v.value_number is None:
-                raise HTTPException(400, f"{q.question_label} must be a number")
+            elif q.question_type in ["number", "int"]:
+                if q.is_required and v.value_number is None:
+                    raise HTTPException(
+                        400,
+                        f"{q.question_label} must be a number"
+                    )
 
-            elif q.question_type in ["date", "datetime"] and q.is_required and not v.value_date:
-                raise HTTPException(400, f"{q.question_label} must be a date")
+            elif q.question_type in ["date", "datetime"]:
+                if q.is_required and not v.value_date:
+                    raise HTTPException(
+                        400,
+                        f"{q.question_label} must be a date"
+                    )
 
             record = FormSubmissionValue(
                 submission_id=submission.id,
@@ -191,6 +258,7 @@ def submit_form(payload: FormSubmissionCreate, db: Session = Depends(get_db)):
                 value_date=v.value_date,
                 value_boolean=v.value_boolean
             )
+
             db.add(record)
 
         db.commit()
@@ -199,6 +267,8 @@ def submit_form(payload: FormSubmissionCreate, db: Session = Depends(get_db)):
             "message": "Form submitted",
             "submission_id": submission.id,
             "form_id": submission.form_id,
+            "form_master_id": form.id,       # 🔥 added
+            "form_version": form.version,    # 🔥 added
             "status": submission.status,
             "status_approve": submission.status_approve,
             "current_approval_level": submission.current_approval_level
@@ -428,7 +498,11 @@ def update_form_details(
 ):
     submission = (
         db.query(FormSubmission)
-        .options(joinedload(FormSubmission.values))
+        .options(
+            joinedload(FormSubmission.values),
+            joinedload(FormSubmission.form)
+                .joinedload(FormMaster.questions)
+        )
         .filter(FormSubmission.form_id == form_id)
         .first()
     )
@@ -436,30 +510,39 @@ def update_form_details(
     if not submission:
         raise HTTPException(status_code=404, detail="Submission not found")
 
-    # 🔒 optional guard
+    # 🔒 lock done
     if submission.status == "Done":
         raise HTTPException(status_code=400, detail="Cannot edit completed form")
 
     try:
         submission.updated_by = payload.updated_by
 
-        # map existing values
+        # 🔥 get question set from SAME VERSION only
+        question_map = {q.id: q for q in submission.form.questions}
+
         existing = {v.question_id: v for v in submission.values}
 
         for v in payload.values:
-            q = (
-                db.query(FormQuestion)
-                .filter(FormQuestion.id == v.question_id)
-                .first()
-            )
-            if not q:
-                raise HTTPException(400, f"Invalid question_id {v.question_id}")
 
-            # 🔎 validation (ย่อ)
+            q = question_map.get(v.question_id)
+
+            if not q:
+                raise HTTPException(
+                    400,
+                    f"Invalid question_id {v.question_id} for this form version"
+                )
+
+            # validation
             if q.is_required and not any([
-                v.value_text, v.value_number, v.value_date, v.value_boolean
+                v.value_text,
+                v.value_number,
+                v.value_date,
+                v.value_boolean
             ]):
-                raise HTTPException(400, f"{q.question_label} is required")
+                raise HTTPException(
+                    400,
+                    f"{q.question_label} is required"
+                )
 
             if q.question_type == "multiselect" and isinstance(v.value_text, list):
                 v.value_text = ",".join(v.value_text)
@@ -467,7 +550,6 @@ def update_form_details(
             if v.question_id in existing:
                 rec = existing[v.question_id]
 
-                # 🧾 log change (optional แต่แนะนำ)
                 if rec.value_text != v.value_text:
                     db.add(FormSubmissionLog(
                         submission_id=submission.id,
@@ -482,6 +564,7 @@ def update_form_details(
                 rec.value_number = v.value_number
                 rec.value_date = v.value_date
                 rec.value_boolean = v.value_boolean
+
             else:
                 db.add(FormSubmissionValue(
                     submission_id=submission.id,
@@ -497,7 +580,9 @@ def update_form_details(
         return {
             "message": "Form details updated",
             "form_id": submission.form_id,
-            "submission_id": submission.id
+            "submission_id": submission.id,
+            "form_master_id": submission.form_master_id,
+            "form_version": submission.form.version
         }
 
     except Exception as e:
