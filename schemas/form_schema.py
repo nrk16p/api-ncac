@@ -136,6 +136,10 @@ class FormResponse(BaseModel):
     form_type: Optional[str]
     form_code: Optional[str]
     form_name: Optional[str]
+    # 🔥 ADD THESE
+    form_master_id: Optional[int] = None
+    form_version: Optional[int] = None
+    form_is_latest: Optional[bool] = None
     remark: Optional[str]
 
 

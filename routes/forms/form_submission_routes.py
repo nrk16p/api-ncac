@@ -356,7 +356,10 @@ def get_form(
             "form_type": sub.form.form_type if sub.form else None,
             "form_code": sub.form.form_code if sub.form else None,
             "form_name": sub.form.form_name if sub.form else None,
-
+            # 🔥 ADD THESE
+            "form_master_id": sub.form.id if sub.form else None,
+            "form_version": sub.form.version if sub.form else None,
+            "form_is_latest": sub.form.is_latest if sub.form else None,
             # ✅ current remark (ป้องกัน schema error)
             "remark": latest_log.remark if latest_log else None,
 

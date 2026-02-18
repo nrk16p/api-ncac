@@ -60,11 +60,23 @@ def create_form_master(payload: FormMasterCreate, db: Session = Depends(get_db))
 # Get Form Template
 # ============================================================
 @router.get("/{form_code}")
-def get_form(form_code: str, db: Session = Depends(get_db)):
-    form = db.query(FormMaster).filter(
-        FormMaster.form_code == form_code,
-        FormMaster.is_latest == True
-    ).first()
+def get_form(
+    form_code: str,
+    version: int | None = None,
+    db: Session = Depends(get_db)
+):
+    query = db.query(FormMaster).filter(
+        FormMaster.form_code == form_code
+    )
+
+    # 🔥 If version provided → get that version
+    if version:
+        query = query.filter(FormMaster.version == version)
+    else:
+        # default → latest
+        query = query.filter(FormMaster.is_latest == True)
+
+    form = query.first()
 
     if not form:
         raise HTTPException(status_code=404, detail="Form not found")
@@ -75,6 +87,8 @@ def get_form(form_code: str, db: Session = Depends(get_db)):
         "form_name": form.form_name,
         "form_status": form.form_status,
         "need_approval": form.need_approval,
+        "version": form.version,   # ✅ added
+        "is_latest": form.is_latest,  # optional but useful
         "questions": [
             {
                 "id": q.id,
@@ -94,27 +108,36 @@ def get_form(form_code: str, db: Session = Depends(get_db)):
             for q in sorted(form.questions, key=lambda x: x.sort_order)
         ]
     }
-
-
 # ============================================================
 # Update Form Status
 # ============================================================
 @router.patch("/{form_code}/status")
 def update_form_status(
     form_code: str,
-    status: str = Query(..., regex="^(Draft|Active|Archived|Inactive)$"),
+    status: str = Query(..., pattern="^(Draft|Active|Archived|Inactive)$"),
     db: Session = Depends(get_db)
 ):
-    form = db.query(FormMaster).filter(FormMaster.form_code == form_code).first()
+    # 🔥 always get latest version
+    form = (
+        db.query(FormMaster)
+        .filter(
+            FormMaster.form_code == form_code,
+            FormMaster.is_latest == True
+        )
+        .first()
+    )
+
     if not form:
         raise HTTPException(status_code=404, detail="Form not found")
 
     form.form_status = status
     db.commit()
+    db.refresh(form)
 
     return {
         "message": "Form status updated",
         "form_code": form.form_code,
+        "version": form.version,        # ✅ useful
         "form_status": form.form_status
     }
 # ============================================================
