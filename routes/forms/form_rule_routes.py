@@ -184,9 +184,13 @@ def get_rules_by_form_code(
     form_code: str,
     db: Session = Depends(get_db),
 ):
+    # ✅ always get latest version
     form = (
         db.query(FormMaster)
-        .filter(FormMaster.form_code == form_code)
+        .filter(
+            FormMaster.form_code == form_code,
+            FormMaster.is_latest == True
+        )
         .first()
     )
 
@@ -205,6 +209,7 @@ def get_rules_by_form_code(
 
     return {
         "form_code": form_code,
+        "version": form.version,  # 🔥 useful for frontend
         "count": len(rules),
         "rules": [
             {
