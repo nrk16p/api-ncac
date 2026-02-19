@@ -1,10 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException ,Query
+from fastapi import APIRouter, Depends, HTTPException ,Query,BackgroundTasks
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime, timedelta
 from typing import List, Optional
 from models.user_model import User
-
+from services.email_service import send_email,render_form_submit_th
 from database import get_db
 from models.master_model import (
     FormMaster, FormQuestion, FormSubmission,
@@ -12,6 +12,7 @@ from models.master_model import (
 )
 from models import User, Position
 from schemas.form_schema import FormSubmissionCreate, FormResponse, FormValueResponse ,FormSubmissionUpdate
+from routes.forms.form_approval_routes import can_user_approve
 
 router = APIRouter(prefix="/forms", tags=["Forms - Submission"])
 
@@ -108,37 +109,86 @@ def determine_initial_approval(db: Session, form_id: int, creator_level: int | N
 
     return "Approved", None
 
+def get_current_approver_emails(db: Session, submission: FormSubmission) -> list[str]:
 
+    # 🔹 Creator
+    creator = db.query(User).filter(
+        User.employee_id == submission.created_by
+    ).first()
+
+    if not creator:
+        return []
+
+    creator_level = get_employee_position_level(db, creator.employee_id)
+
+    # 🔹 Rule for current level
+    rule = (
+        db.query(FormApprovalRule)
+        .filter(
+            FormApprovalRule.form_master_id == submission.form_master_id,
+            FormApprovalRule.level_no == submission.current_approval_level,
+            FormApprovalRule.is_active == True,
+            FormApprovalRule.creator_min <= creator_level,
+            FormApprovalRule.creator_max >= creator_level,
+        )
+        .first()
+    )
+
+    if not rule:
+        return []
+
+    # 🔹 Find users in SAME DEPARTMENT only
+    same_dept_users = (
+        db.query(User)
+        .filter(User.department_id == creator.department_id)
+        .all()
+    )
+
+    result = []
+
+    for user in same_dept_users:
+
+        level = get_employee_position_level(db, user.employee_id)
+        if not level:
+            continue
+
+        # position level rule
+        if rule.approve_by_type == "position_level":
+            if level == rule.approve_by_value:
+                result.append(user.email)
+
+        elif rule.approve_by_type == "position_level_range":
+            if rule.approve_by_min <= level <= rule.approve_by_max:
+                result.append(user.email)
+
+    return list(set(result))
+
+    
 # ----------------------------
 # Submit
 # ----------------------------
 @router.post("/submit")
-def submit_form(payload: FormSubmissionCreate, db: Session = Depends(get_db)):
+def submit_form(
+    payload: FormSubmissionCreate,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
 
-    # =====================================================
-    # 1️⃣ Get ACTIVE + LATEST version only
-    # =====================================================
     form = (
         db.query(FormMaster)
         .filter(
             FormMaster.form_code == payload.form_code,
-            FormMaster.is_latest == True,       # 🔥 MUST
-            FormMaster.form_status == "Active" # 🔥 MUST
+            FormMaster.is_latest == True,
+            FormMaster.form_status == "Active"
         )
         .first()
     )
 
     if not form:
-        raise HTTPException(
-            status_code=404,
-            detail="Active form not found"
-        )
+        raise HTTPException(status_code=404, detail="Active form not found")
 
     try:
 
-        # =====================================================
-        # 2️⃣ Generate form_id
-        # =====================================================
         form_id = generate_form_id(db, form.form_code)
 
         creator_level = get_employee_position_level(
@@ -146,23 +196,17 @@ def submit_form(payload: FormSubmissionCreate, db: Session = Depends(get_db)):
             payload.created_by
         )
 
-        # =====================================================
-        # 3️⃣ Determine approval
-        # =====================================================
         if not form.need_approval:
             status_approve, current_level = "Approved", None
         else:
             status_approve, current_level = determine_initial_approval(
                 db,
-                form.id,   # 🔥 use versioned form id
+                form.id,
                 creator_level
             )
 
-        # =====================================================
-        # 4️⃣ Create submission (bind to form_master_id)
-        # =====================================================
         submission = FormSubmission(
-            form_master_id=form.id,  # 🔥 version-safe binding
+            form_master_id=form.id,
             form_id=form_id,
             created_by=payload.created_by,
             updated_by=payload.updated_by or payload.created_by,
@@ -174,9 +218,6 @@ def submit_form(payload: FormSubmissionCreate, db: Session = Depends(get_db)):
         db.add(submission)
         db.flush()
 
-        # =====================================================
-        # 5️⃣ Log status change
-        # =====================================================
         log_status_change(
             db=db,
             submission_id=submission.id,
@@ -185,9 +226,6 @@ def submit_form(payload: FormSubmissionCreate, db: Session = Depends(get_db)):
             action_by=payload.created_by
         )
 
-        # =====================================================
-        # 6️⃣ Validate required fields
-        # =====================================================
         submitted = {v.question_id: v for v in payload.values}
 
         for q in form.questions:
@@ -197,9 +235,6 @@ def submit_form(payload: FormSubmissionCreate, db: Session = Depends(get_db)):
                     f"Missing required field: {q.question_label}"
                 )
 
-        # =====================================================
-        # 7️⃣ Save values
-        # =====================================================
         for v in payload.values:
 
             q = next((x for x in form.questions if x.id == v.question_id), None)
@@ -210,65 +245,99 @@ def submit_form(payload: FormSubmissionCreate, db: Session = Depends(get_db)):
                     f"Invalid question_id {v.question_id}"
                 )
 
-            # ===== TYPE VALIDATION =====
+            if q.question_type == "multiselect" and isinstance(v.value_text, list):
+                v.value_text = ",".join(v.value_text)
 
-            if q.question_type in ["text", "longtext"]:
-                if q.is_required and not v.value_text:
-                    raise HTTPException(400, f"{q.question_label} is required")
-
-            elif q.question_type == "dropdown":
-                if q.is_required and not v.value_text:
-                    raise HTTPException(400, f"{q.question_label} is required")
-
-            elif q.question_type == "multiselect":
-                if q.is_required and not v.value_text:
-                    raise HTTPException(
-                        400,
-                        f"{q.question_label} must select at least one option"
-                    )
-                if isinstance(v.value_text, list):
-                    v.value_text = ",".join(v.value_text)
-
-            elif q.question_type == "checkbox":
-                if v.value_boolean is None:
-                    raise HTTPException(
-                        400,
-                        f"{q.question_label} must be true or false"
-                    )
-
-            elif q.question_type in ["number", "int"]:
-                if q.is_required and v.value_number is None:
-                    raise HTTPException(
-                        400,
-                        f"{q.question_label} must be a number"
-                    )
-
-            elif q.question_type in ["date", "datetime"]:
-                if q.is_required and not v.value_date:
-                    raise HTTPException(
-                        400,
-                        f"{q.question_label} must be a date"
-                    )
-
-            record = FormSubmissionValue(
+            db.add(FormSubmissionValue(
                 submission_id=submission.id,
                 question_id=v.question_id,
                 value_text=v.value_text,
                 value_number=v.value_number,
                 value_date=v.value_date,
                 value_boolean=v.value_boolean
-            )
-
-            db.add(record)
+            ))
 
         db.commit()
+        db.refresh(submission)
 
+        # =====================================================
+        # ✉️ SEND EMAIL AFTER SUCCESS
+        # =====================================================
+        # =====================================================
+        # Build TO + CC structure (Single Email)
+        # =====================================================
+
+        # 🔹 Get creator FIRST
+        creator = db.query(User).filter(
+            User.employee_id == submission.created_by
+        ).first()
+
+        # 🔹 Load values
+        values = (
+            db.query(FormSubmissionValue)
+            .options(joinedload(FormSubmissionValue.question))
+            .filter(FormSubmissionValue.submission_id == submission.id)
+            .all()
+        )
+
+        fields = []
+
+        for v in values:
+            value = (
+                v.value_text
+                or v.value_number
+                or v.value_date
+                or ("ใช่" if v.value_boolean else "ไม่ใช่")
+                or "-"
+            )
+
+            fields.append({
+                "label": v.question.question_label,
+                "value": value
+            })
+
+        # 🔹 Render template AFTER creator exists
+        body = render_form_submit_th({
+            "form_id": submission.form_id,
+            "form_name": form.form_name,
+            "created_at": submission.created_at.strftime("%d/%m/%Y %H:%M"),
+            "status": submission.status_approve,
+            "full_name": f"{creator.firstname} {creator.lastname}" if creator else "-",
+            "fields": fields,
+            "system_url": f"https://menait-service.vercel.app/mytickets/{submission.form_id}"
+        })
+
+        # 🔹 Build TO + CC
+        to_email = creator.email if creator else None
+
+        cc_list = []
+        cc_list.append("itcenter@menatransport.co.th")
+
+        if submission.current_approval_level:
+            approver_emails = get_current_approver_emails(db, submission)
+            cc_list.extend(approver_emails)
+
+        cc_list = list(set(cc_list))
+
+        if to_email in cc_list:
+            cc_list.remove(to_email)
+
+        subject = f"แจ้งการส่งแบบฟอร์ม {submission.form_id}"
+
+        if to_email:
+            background_tasks.add_task(
+                send_email,
+                to_email,
+                subject,
+                body,
+                cc_list
+            )
         return {
             "message": "Form submitted",
             "submission_id": submission.id,
             "form_id": submission.form_id,
-            "form_master_id": form.id,       # 🔥 added
-            "form_version": form.version,    # 🔥 added
+            "form_master_id": form.id,
+            "form_version": form.version,
             "status": submission.status,
             "status_approve": submission.status_approve,
             "current_approval_level": submission.current_approval_level
