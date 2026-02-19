@@ -3,8 +3,8 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime, timedelta
 from typing import List, Optional
-from models.user_model import User
-from services.email_service import send_email,render_form_submit_th
+from models.user_model import User ,Position
+from services.email_service import send_email,render_form_submit_th ,render_form_done_th
 from database import get_db
 from models.master_model import (
     FormMaster, FormQuestion, FormSubmission,
@@ -354,10 +354,11 @@ def submit_form(
 @router.put("/{form_id}/status")
 def update_status(
     form_id: str,
+    background_tasks: BackgroundTasks,   # 👈 add this
     new_status: str = Query(..., regex="^(Open|In-Progress|Done|Backlog)$"),
     employee_id: str = Query(...),
     db: Session = Depends(get_db),
-):
+    ):
     """
     Workflow:
     1. Open         -> create
@@ -393,14 +394,40 @@ def update_status(
             )
 
         db.commit()
+        # =====================================================
+        # ✉️ Send Email ONLY when Done
+        # =====================================================
+        if new_status == "Done":
 
-        return {
-            "message": "Status updated",
-            "form_id": form_id,
-            "submission_id": submission.id,
-            "old_status": old_status,
-            "new_status": new_status
-        }
+            creator = db.query(User).filter(
+                User.employee_id == submission.created_by
+            ).first()
+
+            if creator and creator.email:
+
+                subject = f"[ดำเนินการเสร็จสิ้น] {submission.form_id}"
+
+                body = render_form_done_th({
+                    "form_id": submission.form_id,
+                    "form_name": submission.form.form_name if submission.form else "",
+                    "system_url": f"https://menait-service.vercel.app/mytickets/{submission.form_id}"
+                })
+
+                background_tasks.add_task(
+                    send_email,
+                    creator.email,
+                    subject,
+                    body,
+                    ["itcenter@menatransport.co.th"]  # CC IT
+                )
+
+                return {
+                    "message": "Status updated",
+                    "form_id": form_id,
+                    "submission_id": submission.id,
+                    "old_status": old_status,
+                    "new_status": new_status
+                }
 
     except Exception as e:
         db.rollback()
@@ -421,7 +448,7 @@ def get_form(
 ):
 
     # =====================================================
-    # Base query
+    # 1️⃣ Base Query (LOAD RELATIONS)
     # =====================================================
     query = (
         db.query(FormSubmission)
@@ -429,7 +456,7 @@ def get_form(
             joinedload(FormSubmission.form),
             joinedload(FormSubmission.values)
                 .joinedload(FormSubmissionValue.question),
-            joinedload(FormSubmission.approval_logs)   # ✅ LOAD LOGS
+            joinedload(FormSubmission.approval_logs)
         )
     )
 
@@ -452,12 +479,17 @@ def get_form(
     results = query.all() or []
 
     # =====================================================
-    # 🔹 Load users once (prevent N+1)
+    # 2️⃣ LOAD USERS + DEPARTMENT + SITE + POSITION
     # =====================================================
     employee_ids = {sub.created_by for sub in results if sub.created_by}
 
     users = (
         db.query(User)
+        .options(
+            joinedload(User.department),
+            joinedload(User.site),
+            joinedload(User.position),
+        )
         .filter(User.employee_id.in_(employee_ids))
         .all()
     ) if employee_ids else []
@@ -465,44 +497,80 @@ def get_form(
     user_map = {u.employee_id: u for u in users}
 
     # =====================================================
-    # 🔁 FLATTEN RESPONSE
+    # 3️⃣ FLATTEN RESPONSE
     # =====================================================
     output = []
 
     for sub in results:
+
         user = user_map.get(sub.created_by)
 
-        # 🔹 Sort logs by level
-        logs_sorted = sorted(sub.approval_logs, key=lambda x: x.level_no) if sub.approval_logs else []
+        department = user.department if user else None
+        site = user.site if user else None
+        position = user.position if user else None
 
-        # 🔹 Get latest log (for remark)
+        logs_sorted = sorted(
+            sub.approval_logs, key=lambda x: x.level_no
+        ) if sub.approval_logs else []
+
         latest_log = logs_sorted[-1] if logs_sorted else None
 
         item = {
+            # =============================
+            # FORM BASIC
+            # =============================
             "form_id": sub.form_id,
             "status": sub.status,
             "status_approve": sub.status_approve,
             "created_by": sub.created_by,
             "created_at": sub.created_at,
 
-            # 👤 created user
+            # =============================
+            # USER
+            # =============================
             "firstname": user.firstname if user else None,
             "lastname": user.lastname if user else None,
             "email": user.email if user else None,
             "image_url": user.image_url if user else None,
+            "employee_status": user.employee_status if user else None,
 
-            # 👇 flatten form
+            # =============================
+            # DEPARTMENT
+            # =============================
+            "department_id": department.department_id if department else None,
+            "department_name_th": department.department_name_th if department else None,
+            "department_name_en": department.department_name_en if department else None,
+
+            # =============================
+            # SITE
+            # =============================
+            "site_id": site.site_id if site else None,
+            "site_code": site.site_code if site else None,
+            "site_name_th": site.site_name_th if site else None,
+            "site_name_en": site.site_name_en if site else None,
+
+            # =============================
+            # POSITION
+            # =============================
+            "position_id": position.position_id if position else None,
+            "position_name_th": position.position_name_th if position else None,
+            "position_name_en": position.position_name_en if position else None,
+
+            # =============================
+            # FORM META
+            # =============================
             "form_type": sub.form.form_type if sub.form else None,
             "form_code": sub.form.form_code if sub.form else None,
             "form_name": sub.form.form_name if sub.form else None,
-            # 🔥 ADD THESE
             "form_master_id": sub.form.id if sub.form else None,
             "form_version": sub.form.version if sub.form else None,
             "form_is_latest": sub.form.is_latest if sub.form else None,
-            # ✅ current remark (ป้องกัน schema error)
+
+            # =============================
+            # APPROVAL
+            # =============================
             "remark": latest_log.remark if latest_log else None,
 
-            # ✅ approval history
             "approval_logs": [
                 {
                     "level_no": log.level_no,
@@ -514,6 +582,9 @@ def get_form(
                 for log in logs_sorted
             ],
 
+            # =============================
+            # VALUES
+            # =============================
             "values": []
         }
 
@@ -524,7 +595,6 @@ def get_form(
                 "value_number": v.value_number,
                 "value_date": v.value_date,
                 "value_boolean": v.value_boolean,
-
                 "question_name": v.question.question_name if v.question else None,
                 "question_label": v.question.question_label if v.question else None,
                 "question_type": v.question.question_type if v.question else None,

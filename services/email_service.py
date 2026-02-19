@@ -15,6 +15,16 @@ env = Environment(loader=FileSystemLoader("templates"))
 def render_form_submit_th(context: dict):
     template = env.get_template("form_submit_th.html")
     return template.render(context)
+def render_form_done_th(context: dict):
+    template = env.get_template("form_done_th.html")
+    return template.render(context)
+def render_form_approved_th(context: dict):
+    template = env.get_template("form_approved_th.html")
+    return template.render(context)
+
+def render_form_rejected_th(context: dict):
+    template = env.get_template("form_rejected_th.html")
+    return template.render(context)
 
 def send_email(to_email: str, subject: str, body: str, cc: list[str] | None = None):
 

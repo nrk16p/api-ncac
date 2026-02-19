@@ -141,7 +141,7 @@ class FormResponse(BaseModel):
     form_version: Optional[int] = None
     form_is_latest: Optional[bool] = None
     remark: Optional[str]
-
+    department_name_th: Optional[str]
 
     values: List[FormValueResponse] = []
 

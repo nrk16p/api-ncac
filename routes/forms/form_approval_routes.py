@@ -1,6 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from database import get_db
+from fastapi import BackgroundTasks
+from services.email_service import render_form_rejected_th ,  send_email , render_form_approved_th
 
 from models.master_model import (
     FormSubmission,
@@ -175,6 +177,7 @@ def get_pending_approvals(
 @router.post("/{form_id}/approve")
 def approve_submission(
     form_id: str,
+    background_tasks: BackgroundTasks,   # 👈 add here
     employee_id: str = Query(...),
     remark: str | None = None,
     db: Session = Depends(get_db),
@@ -243,7 +246,27 @@ def approve_submission(
         submission.status_approve = "Approved"
 
     db.commit()
+    if submission.status_approve == "Approved":
 
+        creator = db.query(User).filter(
+            User.employee_id == submission.created_by
+        ).first()
+
+        if creator and creator.email:
+
+            body = render_form_approved_th({
+                "form_id": submission.form_id,
+                "form_name": submission.form.form_name if submission.form else "",
+                "system_url": f"https://menait-service.vercel.app/myticket/{submission.form_id}"
+            })
+
+            background_tasks.add_task(
+                send_email,
+                creator.email,
+                f"[อนุมัติแล้ว] {submission.form_id}",
+                body,
+                ["itcenter@menatransport.co.th"]
+            )
     return {
         "message": "Approved successfully",
         "form_id": submission.form_id,
@@ -259,6 +282,8 @@ def approve_submission(
 @router.post("/{form_id}/reject")
 def reject_submission(
     form_id: str,
+    background_tasks: BackgroundTasks,   # 👈 add here
+
     employee_id: str = Query(...),
     remark: str = Query(...),
     db: Session = Depends(get_db),
@@ -315,7 +340,26 @@ def reject_submission(
 
     submission.status_approve = "Rejected"
     db.commit()
+    creator = db.query(User).filter(
+        User.employee_id == submission.created_by
+    ).first()
 
+    if creator and creator.email:
+
+        body = render_form_rejected_th({
+            "form_id": submission.form_id,
+            "form_name": submission.form.form_name if submission.form else "",
+            "remark": remark,
+            "system_url": f"https://menait-service.vercel.app/myticket/{submission.form_id}"
+        })
+
+        background_tasks.add_task(
+            send_email,
+            creator.email,
+            f"[ไม่อนุมัติ] {submission.form_id}",
+            body,
+            ["itcenter@menatransport.co.th"]
+        )
     return {
         "message": "Rejected successfully",
         "form_id": submission.form_id,
