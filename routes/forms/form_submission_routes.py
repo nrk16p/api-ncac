@@ -13,7 +13,7 @@ from models.master_model import (
 from models import User, Position
 from schemas.form_schema import FormSubmissionCreate, FormResponse, FormValueResponse ,FormSubmissionUpdate
 from routes.forms.form_approval_routes import can_user_approve
-
+from zoneinfo import ZoneInfo
 router = APIRouter(prefix="/forms", tags=["Forms - Submission"])
 
 # ----------------------------
@@ -448,7 +448,7 @@ def get_form(
 ):
 
     # =====================================================
-    # 1️⃣ Base Query (LOAD RELATIONS)
+    # 1️⃣ Base Query
     # =====================================================
     query = (
         db.query(FormSubmission)
@@ -479,11 +479,23 @@ def get_form(
     results = query.all() or []
 
     # =====================================================
-    # 2️⃣ LOAD USERS + DEPARTMENT + SITE + POSITION
+    # 2️⃣ Collect IDs
     # =====================================================
-    employee_ids = {sub.created_by for sub in results if sub.created_by}
+    employee_ids = set()   # for created_by (employee_id)
+    user_ids = set()       # for action_by (users.id)
 
-    users = (
+    for sub in results:
+        if sub.created_by:
+            employee_ids.add(sub.created_by)
+
+        for log in sub.approval_logs or []:
+            if log.action_by:
+                user_ids.add(log.action_by)
+
+    # =====================================================
+    # 3️⃣ Load Users (creator)
+    # =====================================================
+    users_by_employee = (
         db.query(User)
         .options(
             joinedload(User.department),
@@ -494,26 +506,44 @@ def get_form(
         .all()
     ) if employee_ids else []
 
-    user_map = {u.employee_id: u for u in users}
+    user_employee_map = {u.employee_id: u for u in users_by_employee}
 
     # =====================================================
-    # 3️⃣ FLATTEN RESPONSE
+    # 4️⃣ Load Users (approver)
+    # =====================================================
+    users_by_id = (
+        db.query(User)
+        .filter(User.id.in_(user_ids))
+        .all()
+    ) if user_ids else []
+
+    user_id_map = {u.id: u for u in users_by_id}
+
+    # =====================================================
+    # 5️⃣ Flatten Response
     # =====================================================
     output = []
 
     for sub in results:
 
-        user = user_map.get(sub.created_by)
-
+        # ------------------------
+        # Creator
+        # ------------------------
+        user = user_employee_map.get(sub.created_by)
         department = user.department if user else None
         site = user.site if user else None
         position = user.position if user else None
 
+        # ------------------------
+        # Approval
+        # ------------------------
         logs_sorted = sorted(
             sub.approval_logs, key=lambda x: x.level_no
         ) if sub.approval_logs else []
 
         latest_log = logs_sorted[-1] if logs_sorted else None
+        latest_action_by = latest_log.action_by if latest_log else None
+        latest_actor = user_id_map.get(latest_action_by) if latest_action_by else None
 
         item = {
             # =============================
@@ -523,23 +553,24 @@ def get_form(
             "status": sub.status,
             "status_approve": sub.status_approve,
             "created_by": sub.created_by,
-            "created_at": sub.created_at,
-
+            "created_at": (
+                sub.created_at
+                .replace(tzinfo=ZoneInfo("UTC"))
+                .astimezone(ZoneInfo("Asia/Bangkok"))
+                if sub.created_at else None
+            ),
             # =============================
-            # USER
+            # USER (CREATOR)
             # =============================
             "firstname": user.firstname if user else None,
             "lastname": user.lastname if user else None,
             "email": user.email if user else None,
             "image_url": user.image_url if user else None,
-            "employee_status": user.employee_status if user else None,
 
             # =============================
             # DEPARTMENT
             # =============================
-            "department_id": department.department_id if department else None,
             "department_name_th": department.department_name_th if department else None,
-            "department_name_en": department.department_name_en if department else None,
 
             # =============================
             # SITE
@@ -567,10 +598,15 @@ def get_form(
             "form_is_latest": sub.form.is_latest if sub.form else None,
 
             # =============================
-            # APPROVAL
+            # APPROVAL (LATEST)
             # =============================
             "remark": latest_log.remark if latest_log else None,
+            "action_by_firstname": latest_actor.firstname if latest_actor else None,
+            "action_by_lastname": latest_actor.lastname if latest_actor else None,
 
+            # =============================
+            # APPROVAL LOGS
+            # =============================
             "approval_logs": [
                 {
                     "level_no": log.level_no,
@@ -585,20 +621,20 @@ def get_form(
             # =============================
             # VALUES
             # =============================
-            "values": []
+            "values": [
+                {
+                    "question_id": v.question_id,
+                    "value_text": v.value_text,
+                    "value_number": v.value_number,
+                    "value_date": v.value_date,
+                    "value_boolean": v.value_boolean,
+                    "question_name": v.question.question_name if v.question else None,
+                    "question_label": v.question.question_label if v.question else None,
+                    "question_type": v.question.question_type if v.question else None,
+                }
+                for v in sub.values
+            ],
         }
-
-        for v in sub.values:
-            item["values"].append({
-                "question_id": v.question_id,
-                "value_text": v.value_text,
-                "value_number": v.value_number,
-                "value_date": v.value_date,
-                "value_boolean": v.value_boolean,
-                "question_name": v.question.question_name if v.question else None,
-                "question_label": v.question.question_label if v.question else None,
-                "question_type": v.question.question_type if v.question else None,
-            })
 
         output.append(item)
 

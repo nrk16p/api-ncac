@@ -257,7 +257,7 @@ def approve_submission(
             body = render_form_approved_th({
                 "form_id": submission.form_id,
                 "form_name": submission.form.form_name if submission.form else "",
-                "system_url": f"https://menait-service.vercel.app/myticket/{submission.form_id}"
+                "system_url": f"https://menait-service.vercel.app/mytickets/{submission.form_id}"
             })
 
             background_tasks.add_task(
@@ -350,7 +350,7 @@ def reject_submission(
             "form_id": submission.form_id,
             "form_name": submission.form.form_name if submission.form else "",
             "remark": remark,
-            "system_url": f"https://menait-service.vercel.app/myticket/{submission.form_id}"
+            "system_url": f"https://menait-service.vercel.app/mytickets/{submission.form_id}"
         })
 
         background_tasks.add_task(

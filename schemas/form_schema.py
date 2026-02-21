@@ -142,7 +142,8 @@ class FormResponse(BaseModel):
     form_is_latest: Optional[bool] = None
     remark: Optional[str]
     department_name_th: Optional[str]
-
+    action_by_firstname: Optional[str] = None
+    action_by_lastname: Optional[str] = None
     values: List[FormValueResponse] = []
 
     class Config:
