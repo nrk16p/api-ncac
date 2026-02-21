@@ -603,7 +603,12 @@ def get_form(
             "remark": latest_log.remark if latest_log else None,
             "action_by_firstname": latest_actor.firstname if latest_actor else None,
             "action_by_lastname": latest_actor.lastname if latest_actor else None,
-
+            "action_at": (
+                latest_log.action_at
+                .replace(tzinfo=ZoneInfo("UTC"))
+                .astimezone(ZoneInfo("Asia/Bangkok"))
+                if latest_log and latest_log.action_at else None
+            ),          
             # =============================
             # APPROVAL LOGS
             # =============================
