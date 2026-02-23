@@ -27,6 +27,66 @@ def allocate_with_balance(df, cost_col, ratio_col='สัดส่วน'):
 
 
 # ============================================================
+# BUILD FINAL EXPORT FORMAT (MATCH ORIGINAL EXACTLY)
+# ============================================================
+
+def build_export_df(df: pd.DataFrame) -> pd.DataFrame:
+
+    out = df.copy()
+
+    # --- recompute totals exactly like original ---
+    out["ค่าอะไหล่"] = (
+        out.get("ค่าอะไหล่-หัว", 0).fillna(0)
+        + out.get("ค่าอะไหล่-หาง", 0).fillna(0)
+    )
+
+    out["ยาง"] = (
+        out.get("ยาง-หัว", 0).fillna(0)
+        + out.get("ยาง-หาง", 0).fillna(0)
+    )
+
+    out["PM"] = out.get("PM-หัว", 0).fillna(0)
+
+    out["อุบัติเหตุ"] = (
+        out.get("อุบัติเหตุ-หัว", 0).fillna(0)
+        + out.get("อุบัติเหตุ-หาง", 0).fillna(0)
+    )
+
+    export_columns = [
+        "หัว",
+        "หาง",
+        "หัว-หาง",
+        "ค่าอะไหล่-หาง",
+        "สัดส่วน",
+        "ยาง-หาง",
+        "อุบัติเหตุ-หาง",
+        "ค่าอะไหล่-หัว",
+        "PM-หัว",
+        "ยาง-หัว",
+        "อุบัติเหตุ-หัว",
+        "ค่าอะไหล่",
+        "ยาง",
+        "PM",
+        "อุบัติเหตุ",
+    ]
+
+    out = out[export_columns]
+
+    # --- rounding to match original display ---
+    numeric_cols = [c for c in export_columns if c not in ["หัว", "หาง", "หัว-หาง"]]
+
+    for c in numeric_cols:
+        out[c] = pd.to_numeric(out[c], errors="coerce").fillna(0)
+
+    out["สัดส่วน"] = out["สัดส่วน"].round(2)
+
+    money_cols = [c for c in numeric_cols if c != "สัดส่วน"]
+    out[money_cols] = out[money_cols].round(2)
+
+    return out
+
+
+# ============================================================
 # CORE LOGIC
 # ============================================================
 
@@ -98,14 +158,14 @@ def process_files(ldt_file, gpm_file, cost_file):
             how='left'
         ).fillna({'สัดส่วน': 0})
 
-        # Trailer cost
+        # Trailer allocation
         df = df.merge(cost, left_on='หาง', right_on='ทะเบียน', how='left').fillna(0)
 
         df['ค่าอะไหล่-หาง'] = allocate_with_balance(df, 'ค่าอะไหล่')
         df['ยาง-หาง'] = allocate_with_balance(df, 'ยาง')
         df['อุบัติเหตุ-หาง'] = allocate_with_balance(df, 'อุบัติเหตุ')
 
-        # Head cost
+        # Head allocation
         df = df.merge(
             cost,
             left_on='หัว',
@@ -124,6 +184,10 @@ def process_files(ldt_file, gpm_file, cost_file):
 
     tdm = process_sheet('tdm')
     trailer = process_sheet('Trailer')
+
+    # Build final formatted export
+    tdm_export = build_export_df(tdm)
+    trailer_export = build_export_df(trailer)
 
     # =========================================================
     # COST WITH FLEET
@@ -195,15 +259,17 @@ def process_files(ldt_file, gpm_file, cost_file):
             if metric == 'PM':
                 allocated_total = alloc_df['PM-หัว'].sum()
             else:
-                allocated_total = alloc_df[f'{metric}-หัว'].sum() + \
-                                  alloc_df[f'{metric}-หาง'].sum()
+                allocated_total = (
+                    alloc_df[f'{metric}-หัว'].sum()
+                    + alloc_df[f'{metric}-หาง'].sum()
+                )
 
             summary_rows.append({
                 'Fleet': fleet_name,
                 'Metric': metric,
-                'Cost Total': cost_total,
-                'Allocated Total': allocated_total,
-                'Diff': allocated_total - cost_total
+                'Cost Total': round(cost_total, 2),
+                'Allocated Total': round(allocated_total, 2),
+                'Diff': round(allocated_total - cost_total, 2)
             })
 
     recheck_df = pd.DataFrame(summary_rows)
@@ -215,8 +281,8 @@ def process_files(ldt_file, gpm_file, cost_file):
     output = BytesIO()
 
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        tdm.to_excel(writer, sheet_name='tdm', index=False)
-        trailer.to_excel(writer, sheet_name='Trailer', index=False)
+        tdm_export.to_excel(writer, sheet_name='tdm', index=False)
+        trailer_export.to_excel(writer, sheet_name='Trailer', index=False)
         cost_with_fleet.to_excel(writer, sheet_name='cost_with_fleet', index=False)
         recheck_df.to_excel(writer, sheet_name='recheck_total', index=False)
 
