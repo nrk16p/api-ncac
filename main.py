@@ -19,7 +19,13 @@ app = FastAPI(
     license_info={"name": "MENA Transport Internal License"},
     description="NCAC API - Form + Approval Workflow"
 )
-
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 # ------------------------------
 # Custom Swagger UI
 # ------------------------------
@@ -106,13 +112,7 @@ app.include_router(form_submission_router)
 # 4️⃣ Form Master (Template)  ⚠️ มี /{form_code}
 app.include_router(form_master_router)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+
 # ------------------------------
 # Root
 # ------------------------------
