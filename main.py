@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.middleware.cors import CORSMiddleware
 
 from database import engine, Base
 import models
@@ -64,6 +65,7 @@ from routes.forms.form_approval_routes import router as form_approval_router
 from routes.forms.form_rule_routes import router as form_rule_router
 from routes.forms.form_submission_routes import router as form_submission_router
 from routes.forms.form_master_routes import router as form_master_router
+from routes.allocation import allocation_routes
 
 # ------------------------------
 # Include Routers
@@ -87,7 +89,7 @@ app.include_router(districts.router)
 app.include_router(sub_districts.router)
 app.include_router(case_reports_investigate.router)
 app.include_router(complaint.router)
-
+app.include_router(allocation_routes.router)
 
 # ------------------------------
 # 🚨 Forms Order (สำคัญ)
@@ -104,6 +106,13 @@ app.include_router(form_submission_router)
 # 4️⃣ Form Master (Template)  ⚠️ มี /{form_code}
 app.include_router(form_master_router)
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 # ------------------------------
 # Root
 # ------------------------------

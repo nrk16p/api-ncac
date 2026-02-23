@@ -10,3 +10,5 @@ argon2-cffi
 google-auth
 requests
 jinja2
+xlsxwriter
+python-multipart
