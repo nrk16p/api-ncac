@@ -12,3 +12,4 @@ requests
 jinja2
 xlsxwriter
 python-multipart
+pandas
