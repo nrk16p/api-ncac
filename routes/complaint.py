@@ -311,25 +311,43 @@ def update_complaint(
 
     update_data = data.dict(exclude_unset=True)
 
-    # 🔥 If complaint was REJECTED → reset workflow
+    # =====================================================
+    # 1️⃣ If REJECTED → restart workflow
+    # =====================================================
     if complaint.status == ComplaintStatus.REJECTED:
 
-        # Delete old approval levels
         db.query(ComplaintReview).filter(
             ComplaintReview.complaint_id == complaint.id
         ).delete()
 
-        # Reset status
-        complaint.status = ComplaintStatus.OPEN
+        complaint.status = ComplaintStatus.ASSIGNED
 
-        log = ComplaintLog(
-            complaint_id=complaint.id,
-            action="RESUBMIT",
-            remark="Complaint edited after rejection and workflow restarted"
+        db.add(
+            ComplaintLog(
+                complaint_id=complaint.id,
+                action="RESUBMIT",
+                remark="Complaint edited after rejection and workflow restarted"
+            )
         )
-        db.add(log)
 
-    # Apply updates
+    # =====================================================
+    # 2️⃣ If department_id updated → auto move to ASSIGNED
+    # =====================================================
+    if "department_id" in update_data:
+
+        complaint.status = ComplaintStatus.ASSIGNED
+
+        db.add(
+            ComplaintLog(
+                complaint_id=complaint.id,
+                action="ASSIGNED",
+                remark="Department changed — status auto set to ASSIGNED"
+            )
+        )
+
+    # =====================================================
+    # Apply field updates
+    # =====================================================
     for key, value in update_data.items():
         setattr(complaint, key, value)
 
