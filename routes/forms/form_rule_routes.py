@@ -152,33 +152,7 @@ def update_rule_by_form(payload: FormApprovalRuleCreate, db: Session = Depends(g
             "is_active": rule.is_active
         }
     }
-# ============================================================
-# ❌ Delete Approval Rule by form_code + level_no
-# ============================================================
-@router.delete("/rules/by-form")
-def delete_rule_by_form(form_code: str, level_no: int, db: Session = Depends(get_db)):
-    # 1️⃣ หา Form
-    form = db.query(FormMaster).filter(FormMaster.form_code == form_code).first()
-    if not form:
-        raise HTTPException(status_code=404, detail="Form not found")
 
-    # 2️⃣ หา Rule
-    rule = db.query(FormApprovalRule).filter(
-        FormApprovalRule.form_master_id == form.id,
-        FormApprovalRule.level_no == level_no
-    ).first()
-
-    if not rule:
-        raise HTTPException(status_code=404, detail="Approval rule not found")
-
-    db.delete(rule)
-    db.commit()
-
-    return {
-        "message": "Approval rule deleted",
-        "form_code": form_code,
-        "level_no": level_no
-    }
 @router.get("/{form_code}/rules")
 def get_rules_by_form_code(
     form_code: str,

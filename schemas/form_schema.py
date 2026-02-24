@@ -106,8 +106,15 @@ class FormApprovalRuleCreate(BaseModel):
     
 class FormApprovalRuleUpdate(BaseModel):
     level_no: Optional[int] = None
+
+    creator_min: Optional[int] = None
+    creator_max: Optional[int] = None
+
     approve_by_type: Optional[str] = None
     approve_by_value: Optional[int] = None
+    approve_by_min: Optional[int] = None
+    approve_by_max: Optional[int] = None
+
     same_department: Optional[bool] = None
     is_active: Optional[bool] = None
 
