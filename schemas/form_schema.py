@@ -180,7 +180,7 @@ class FormQuestionUpdate(BaseModel):
         "date",
         "dropdown",
         "multiselect",
-        "file"
+        "file","datetime"
     ]
     is_required: bool
     sort_order: int
