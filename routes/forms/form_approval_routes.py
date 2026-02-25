@@ -263,7 +263,7 @@ def approve_submission(
             background_tasks.add_task(
                 send_email,
                 creator.email,
-                f"[อนุมัติแล้ว] {submission.form_id}",
+                f"[แบบฟอร์ม] {submission.form_id}",
                 body,
                 ["itcenter@menatransport.co.th"]
             )
@@ -356,7 +356,7 @@ def reject_submission(
         background_tasks.add_task(
             send_email,
             creator.email,
-            f"[ไม่อนุมัติ] {submission.form_id}",
+            f"[แบบฟอร์ม] {submission.form_id}",
             body,
             ["itcenter@menatransport.co.th"]
         )
