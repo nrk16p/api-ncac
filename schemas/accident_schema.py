@@ -239,6 +239,7 @@ class AccidentCaseResponse(BaseModel):
     driver_role_name: Optional[str] = None
     vehicle_head_plate: Optional[str] = None
     vehicle_tail_plate: Optional[str] = None
+    vehicle_truckno: Optional[str] = None
 
     # 🔹 Date & Location Info
     record_datetime: Optional[datetime] = None
