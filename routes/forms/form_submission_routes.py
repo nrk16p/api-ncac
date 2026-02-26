@@ -322,7 +322,7 @@ def submit_form(
         if to_email in cc_list:
             cc_list.remove(to_email)
 
-        subject = f"[แบบฟอร์ม] {submission.form_id}"
+        subject = f"[IT Service] {submission.form_id}"
 
         if to_email:
             background_tasks.add_task(
@@ -405,7 +405,7 @@ def update_status(
 
             if creator and creator.email:
 
-                subject = f"[แบบฟอร์ม] {submission.form_id}"
+                subject = f"[IT Service] {submission.form_id}"
 
                 body = render_form_done_th({
                     "form_id": submission.form_id,
