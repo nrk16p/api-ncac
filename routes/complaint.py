@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session,selectinload
 from sqlalchemy.exc import IntegrityError
 from database import get_db
 from models.complaint import (
@@ -9,10 +9,10 @@ from models.complaint import (
     ComplaintStatus,
     ReviewStatus
 )
-from schemas.complaint import ComplaintCreate, ComplaintResponse, ReviewCreate
+from schemas.complaint import ComplaintCreate, ComplaintResponse, ReviewCreate,ComplaintOut
 from datetime import datetime
 from sqlalchemy import text
-from typing import Optional
+from typing import Optional ,List
 
 
 router = APIRouter(prefix="/complaints", tags=["Complaints"])
@@ -100,18 +100,63 @@ def create_complaint(data: ComplaintCreate, db: Session = Depends(get_db)):
 # =========================================================
 # GET BY TRACKING NO
 # =========================================================
-@router.get("/{tracking_no}")
-def get_complaint(tracking_no: str, db: Session = Depends(get_db)):
+@router.get("/")
+def get_complaints(
+    driver_id: Optional[str] = None,
+    status: Optional[ComplaintStatus] = None,
+    department_id: Optional[int] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
 
-    complaint = db.query(DriverComplaint).filter(
-        DriverComplaint.tracking_no == tracking_no,
+    query = db.query(DriverComplaint).options(
+        selectinload(DriverComplaint.reviews)
+    ).filter(
         DriverComplaint.is_deleted == False
-    ).first()
+    )
 
-    if not complaint:
-        raise HTTPException(status_code=404, detail="Complaint not found")
+    if driver_id:
+        query = query.filter(DriverComplaint.driver_id == driver_id)
 
-    return complaint
+    if status:
+        query = query.filter(DriverComplaint.status == status)
+
+    if department_id:
+        query = query.filter(DriverComplaint.department_id == department_id)
+
+    if start_date and end_date:
+        start = datetime.fromisoformat(start_date)
+        end = datetime.fromisoformat(end_date)
+        query = query.filter(
+            DriverComplaint.created_at.between(start, end)
+        )
+
+    complaints = query.order_by(
+        DriverComplaint.created_at.desc()
+    ).all()
+
+    result = []
+
+    for c in complaints:
+        # 👇 ดึง dict เดิมทั้งหมดแบบเป๊ะ
+        complaint_dict = {
+            column.name: getattr(c, column.name)
+            for column in c.__table__.columns
+        }
+
+        # 👇 เพิ่ม reviews เข้าไป
+        complaint_dict["reviews"] = [
+            {
+                col.name: getattr(r, col.name)
+                for col in r.__table__.columns
+            }
+            for r in c.reviews
+        ]
+
+        result.append(complaint_dict)
+
+    return result
 
 
 # =========================================================

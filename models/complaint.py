@@ -58,7 +58,12 @@ class DriverComplaint(Base):
     updated_at = Column(DateTime, default=datetime.utcnow)
 
     # 👇 IMPORTANT: Must match back_populates below
-    reviews = relationship("ComplaintReview", back_populates="complaint", cascade="all, delete")
+    reviews = relationship(
+        "ComplaintReview",
+        back_populates="complaint",
+        cascade="all, delete",
+        order_by="ComplaintReview.level"   # 👈 เพิ่มบรรทัดนี้
+    )
     logs = relationship("ComplaintLog", back_populates="complaint", cascade="all, delete")
 
 

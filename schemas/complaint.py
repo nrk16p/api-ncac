@@ -1,6 +1,7 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import List, Optional
 from datetime import datetime
+from models.complaint import ComplaintStatus, ReviewStatus
 
 
 class ComplaintCreate(BaseModel):
@@ -38,3 +39,30 @@ class ComplaintUpdate(BaseModel):
     solution: Optional[str] = None
     solution_url: Optional[str] = None
     result: Optional[str] = None
+
+class ComplaintReviewOut(BaseModel):
+    id: int
+    level: int
+    reviewer_employee_id: Optional[str]
+    status: ReviewStatus
+    remark: Optional[str]
+    reviewed_at: Optional[datetime]
+
+    class Config:
+        orm_mode = True
+
+
+class ComplaintOut(BaseModel):
+    id: int
+    tracking_no: str
+    driver_id: str
+    department_id: Optional[int]
+    subject: str
+    detail: str
+    status: ComplaintStatus
+    created_at: datetime
+
+    reviews: List[ComplaintReviewOut] = []
+
+    class Config:
+        orm_mode = True
