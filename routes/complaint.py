@@ -105,14 +105,15 @@ def get_complaints(
     driver_id: Optional[str] = None,
     status: Optional[ComplaintStatus] = None,
     department_id: Optional[int] = None,
-    tracking_no: Optional[str] = None,   # ✅ เพิ่มตรงนี้
+    tracking_no: Optional[str] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
 
     query = db.query(DriverComplaint).options(
-        selectinload(DriverComplaint.reviews)
+        selectinload(DriverComplaint.reviews),
+        selectinload(DriverComplaint.logs)   # 👈 ต้องมี
     ).filter(
         DriverComplaint.is_deleted == False
     )
@@ -126,7 +127,6 @@ def get_complaints(
     if department_id:
         query = query.filter(DriverComplaint.department_id == department_id)
 
-    # ✅ filter tracking_no
     if tracking_no:
         query = query.filter(DriverComplaint.tracking_no == tracking_no)
 
@@ -144,17 +144,34 @@ def get_complaints(
     result = []
 
     for c in complaints:
+
         complaint_dict = {
             column.name: getattr(c, column.name)
             for column in c.__table__.columns
         }
 
+        # ✅ reviews = approval only
         complaint_dict["reviews"] = [
             {
                 col.name: getattr(r, col.name)
                 for col in r.__table__.columns
             }
-            for r in c.reviews
+            for r in sorted(c.reviews, key=lambda x: x.level)
+        ]
+
+        # ✅ audit = CLOSE only
+        complaint_dict["audit"] = [
+            {
+                "id": log.id,
+                "level": log.action,
+                "reviewer_employee_id": log.action_by_employee_id,
+                "status": log.action,
+                "remark": log.remark,
+                "reviewed_at": log.created_at,
+                "created_at": log.created_at
+            }
+            for log in c.logs
+            if log.action == "CLOSE"
         ]
 
         result.append(complaint_dict)
@@ -265,7 +282,12 @@ def approve_complaint(
 # CLOSE
 # =========================================================
 @router.post("/{tracking_no}/close")
-def close_complaint(tracking_no: str, db: Session = Depends(get_db)):
+def close_complaint(
+    tracking_no: str,
+    closer_employee_id: str,
+    remark: str | None = None,
+    db: Session = Depends(get_db)
+):
 
     complaint = db.query(DriverComplaint).filter(
         DriverComplaint.tracking_no == tracking_no
@@ -285,7 +307,20 @@ def close_complaint(tracking_no: str, db: Session = Depends(get_db)):
             detail="Not ready to close"
         )
 
+    # Update status
     complaint.status = ComplaintStatus.CLOSED
+    complaint.updated_at = datetime.utcnow()
+
+    # Log close action
+    log = ComplaintLog(
+        complaint_id=complaint.id,
+        action="CLOSE",
+        remark=remark,
+        action_by_employee_id=closer_employee_id,  # 🔥 important for audit
+        created_at=datetime.utcnow()
+    )
+
+    db.add(log)
     db.commit()
 
     return {"message": "Complaint closed"}
