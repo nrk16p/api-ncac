@@ -20,6 +20,9 @@
 		},
 		{
 			"path": "../../api-payslip_v2"
+		},
+		{
+			"path": "../../KPI_Tire"
 		}
 	]
 }
