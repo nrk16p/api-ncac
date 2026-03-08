@@ -137,32 +137,30 @@ def get_current_approver_emails(db: Session, submission: FormSubmission) -> list
     if not rule:
         return []
 
-    # 🔹 Find users in SAME DEPARTMENT only
-    same_dept_users = (
-        db.query(User)
-        .filter(User.department_id == creator.department_id)
-        .all()
-    )
+    # 🔹 Load ALL users instead of same department
+    users = db.query(User).all()
 
     result = []
 
-    for user in same_dept_users:
+    for user in users:
 
-        level = get_employee_position_level(db, user.employee_id)
-        if not level:
+        approver_level = get_employee_position_level(db, user.employee_id)
+
+        if not approver_level:
             continue
 
-        # position level rule
-        if rule.approve_by_type == "position_level":
-            if level == rule.approve_by_value:
-                result.append(user.email)
-
-        elif rule.approve_by_type == "position_level_range":
-            if rule.approve_by_min <= level <= rule.approve_by_max:
+        # 🔹 Use approval engine (same logic as approve API)
+        if can_user_approve(
+            db=db,
+            rule=rule,
+            approver=user,
+            approver_level=approver_level,
+            requester=creator,
+        ):
+            if user.email:
                 result.append(user.email)
 
     return list(set(result))
-
     
 # ----------------------------
 # Submit
@@ -323,15 +321,18 @@ def submit_form(
             cc_list.remove(to_email)
 
         subject = f"[IT Service] {submission.form_id}"
+        print("===== EMAIL PREVIEW =====")
+        print(to_email)
+        print(cc_list)  
 
         if to_email:
             background_tasks.add_task(
-                send_email,
-                to_email,
-                subject,
-                body,
-                cc_list
-            )
+                 send_email,
+                 to_email,
+                 subject,
+                 body,
+                 cc_list
+             )
         return {
             "message": "Form submitted",
             "submission_id": submission.id,

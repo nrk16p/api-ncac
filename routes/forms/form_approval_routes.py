@@ -78,7 +78,10 @@ def can_user_approve(
     approver_level: int,
     requester: User,
 ) -> bool:
-    # level check
+
+    # --------------------------------
+    # Position Level Rule
+    # --------------------------------
     if rule.approve_by_type == "position_level":
         if approver_level != rule.approve_by_value:
             return False
@@ -87,16 +90,23 @@ def can_user_approve(
         if not (rule.approve_by_min <= approver_level <= rule.approve_by_max):
             return False
 
-    # department logic
-    if rule.same_department:
-        return requester.department_id == approver.department_id
+    # --------------------------------
+    # Department Logic
+    # --------------------------------
 
-    # new responsibility logic
-    return approver_can_handle_department(
+    # 1️⃣ Same department first
+    if requester.department_id == approver.department_id:
+        return True
+
+    # 2️⃣ Cross department via responsibility table
+    if approver_can_handle_department(
         db=db,
         employee_id=approver.employee_id,
         department_id=requester.department_id,
-    )
+    ):
+        return True
+
+    return False
 
 
 # ============================================================
