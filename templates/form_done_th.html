@@ -77,6 +77,31 @@
           </td>
         </tr>
 
+        <!-- ── ADMIN COMMENT ── -->
+        {% if admin_comment %}
+        <tr>
+          <td style="padding:20px 28px 0;">
+            <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f0f4ff; border:1px solid #c7d2fe; border-radius:12px;">
+              <tr>
+                <td style="padding:20px 24px;">
+                  <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                    <tr>
+                      <td style="vertical-align:top; padding-right:10px;" width="28">
+                        <span style="font-size:20px; line-height:1;">&#128172;</span>
+                      </td>
+                      <td width="100%" style="vertical-align:top;">
+                        <div style="font-size:10px; font-weight:700; letter-spacing:0.08em; text-transform:uppercase; color:#6366f1; margin-bottom:6px;">ความเห็นจากผู้ดูแลระบบ</div>
+                        <div style="font-size:13px; color:#1e1b4b; line-height:1.6;">{{ admin_comment }}</div>
+                      </td>
+                    </tr>
+                  </table>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+        {% endif %}
+
         <!-- ── CTA BLOCK ── -->
         <tr>
           <td style="padding:20px 28px 16px;">
@@ -116,7 +141,7 @@
                         <div style="font-size:12px; color:#92400e;">ช่วยให้คะแนนเพื่อนำไปพัฒนา</div>
                       </td>
                       <td width="1" align="right" style="white-space:nowrap; padding-left:16px; vertical-align:middle;">
-                        <a href="https://shorturl.at/lBjVG" style="display:inline-block; background-color:#d97706; color:#ffffff; text-decoration:none; font-size:13px; font-weight:700; padding:10px 22px; border-radius:8px; letter-spacing:0.02em;">ทำแบบสอบถาม &rarr;</a>
+                        <a href="https://menait-service.vercel.app/survey-it/{{ form_id }}" style="display:inline-block; background-color:#d97706; color:#ffffff; text-decoration:none; font-size:13px; font-weight:700; padding:10px 22px; border-radius:8px; letter-spacing:0.02em;">ทำแบบสอบถาม &rarr;</a>
                       </td>
                     </tr>
                   </table>

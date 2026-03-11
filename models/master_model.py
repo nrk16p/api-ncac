@@ -129,6 +129,8 @@ class FormSubmission(Base):
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
+    admin_comment = Column(Text, nullable=True)  # ✅ NEW
+
     form = relationship("FormMaster", back_populates="submissions")
     values = relationship("FormSubmissionValue", back_populates="submission", cascade="all, delete-orphan")
 

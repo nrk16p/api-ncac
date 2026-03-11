@@ -411,7 +411,9 @@ def update_status(
                 body = render_form_done_th({
                     "form_id": submission.form_id,
                     "form_name": submission.form.form_name if submission.form else "",
-                    "system_url": f"https://menait-service.vercel.app/mytickets/{submission.form_id}"
+                    "system_url": f"https://menait-service.vercel.app/mytickets/{submission.form_id}",
+                    "admin_comment": submission.admin_comment or "",
+                    "created_at": submission.created_at.strftime("%d/%m/%Y %H:%M") if submission.created_at else ""
                 })
 
                 background_tasks.add_task(
@@ -560,6 +562,7 @@ def get_form(
                 .astimezone(ZoneInfo("Asia/Bangkok"))
                 if sub.created_at else None
             ),
+            "admin_comment": sub.admin_comment,
             # =============================
             # USER (CREATOR)
             # =============================

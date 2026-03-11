@@ -135,6 +135,7 @@ class FormResponse(BaseModel):
     status_approve: str
     created_by: str
     created_at: datetime
+    admin_comment: Optional[str] = None
     firstname: str | None
     lastname: str | None
     email: str | None
