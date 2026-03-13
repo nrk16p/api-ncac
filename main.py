@@ -63,7 +63,7 @@ from routes import (
     provinces,
     districts,
     sub_districts,
-    case_reports_investigate,complaint,fuel_routes
+    case_reports_investigate,complaint,fuel_routes,inspection
 )
 
 # 👉 Forms (แยกตาม topic)
@@ -96,6 +96,8 @@ app.include_router(case_reports_investigate.router)
 app.include_router(complaint.router)
 app.include_router(allocation_routes.router)
 app.include_router(fuel_routes.router)
+app.include_router(inspection.router)
+
 # ------------------------------
 # 🚨 Forms Order (สำคัญ)
 # ------------------------------

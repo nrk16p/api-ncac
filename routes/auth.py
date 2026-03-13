@@ -64,6 +64,8 @@ class RegisterRequest(BaseModel):
     department_id: int | None = None
     site_id: int | None = None
     position_id: int | None = None
+    email:str | None = None
+    employee_status :str | None = None
 
 
 class GoogleLoginRequest(BaseModel):
@@ -210,6 +212,9 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)):
             department_id=payload.department_id,
             site_id=payload.site_id,
             position_id=payload.position_id,
+            email=payload.email,
+            employee_status=payload.employee_status,
+
         )
         user.set_password(payload.password)
 
