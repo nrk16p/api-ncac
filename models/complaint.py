@@ -1,6 +1,6 @@
 from sqlalchemy import (
     Column, Integer, String, Text, ForeignKey,
-    DateTime, Enum, Boolean
+    DateTime, Enum, Boolean ,Numeric
 )
 from sqlalchemy.orm import relationship
 from datetime import datetime
@@ -50,6 +50,8 @@ class DriverComplaint(Base):
     solution = Column(Text, nullable=True)
     solution_url = Column(Text, nullable=True)
     result = Column(Text, nullable=True)
+    root_cause = Column(Text, nullable=True)
+    damage_cost = Column(Numeric(12,2), nullable=True)
     status = Column(Enum(ComplaintStatus), default=ComplaintStatus.OPEN)
 
     is_deleted = Column(Boolean, default=False)

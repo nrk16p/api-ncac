@@ -39,6 +39,8 @@ class ComplaintUpdate(BaseModel):
     solution: Optional[str] = None
     solution_url: Optional[str] = None
     result: Optional[str] = None
+    root_cause : Optional[str] = None
+    damage_cost : Optional[int] = None
 
 class ComplaintReviewOut(BaseModel):
     id: int
