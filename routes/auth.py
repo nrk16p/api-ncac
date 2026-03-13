@@ -187,7 +187,7 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
     )
 
 # ============================================================
-# REGISTER (LOCAL) 3
+# REGISTER (LOCAL) 5
 # ============================================================
 @router.post("/register", status_code=201)
 def register(payload: RegisterRequest, db: Session = Depends(get_db)):
