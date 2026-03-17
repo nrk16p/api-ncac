@@ -47,7 +47,7 @@ class CaseReport(Base):
     attachments = Column(String(255))
     casestatus = Column(String(50))
     priority = Column(String(20))
-
+    breakdown_status = Column(String(20))
     # ✅ RelationshipsUPDATE
     site = relationship("Site", backref="case_reports")
     department = relationship("Department", backref="case_reports")
@@ -156,6 +156,7 @@ class CaseReportInvestigate(Base):
     investigate_id = Column(Integer, primary_key=True)
     document_no = Column(String(50), ForeignKey("case_reports.document_no"))
     root_cause_analysis = Column(Text)
+    root_cause = Column(Text)
     claim_type = Column(Text)
     insurance_claim = Column(Text)
     product_resellable = Column(Text)
