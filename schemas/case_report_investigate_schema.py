@@ -12,6 +12,7 @@ class CaseReportInvestigateBase(BaseModel):
     driver_cost: Optional[int] = None
     company_cost: Optional[int] = None
     penalty : Optional[int]=None
+    root_cause : Optional[int] = None
 
 class CaseReportInvestigateCreate(CaseReportInvestigateBase):
     corrective_actions: Optional[List[CorrectiveActionItem]] = []

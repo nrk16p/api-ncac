@@ -158,6 +158,7 @@ class CaseReportSchema(BaseModel):
     actual_price: Optional[float] = None
     attachments: Optional[str] = None
     casestatus: Optional[str] = "Pending"
+    breakdown_status: Optional[str] = None
 
     products: Optional[List[ProductSchema]] = None
 
