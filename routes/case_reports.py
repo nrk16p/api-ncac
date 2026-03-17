@@ -227,6 +227,8 @@ def create_or_update_case_report(payload: CaseReportSchema, db: Session = Depend
         case_details=payload.case_details,
         estimated_cost=payload.estimated_cost,
         actual_price=payload.actual_price,
+        breakdown_status=payload.breakdown_status,
+
         attachments=payload.attachments,
         casestatus=payload.casestatus or "Pending",
     )
