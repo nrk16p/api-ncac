@@ -80,7 +80,7 @@ class CaseReport(Base):
             "client_name": getattr(self.client, "client_name", None),
             "origin_name": getattr(self.origin, "location_name", None),
             "incident_cause": getattr(self.incident_cause, "cause_name", None),
-            "breakdown_status": getattr(self.breakdown_status, "cause_name", None),
+            "breakdown_status": self.breakdown_status,
 
 
     
