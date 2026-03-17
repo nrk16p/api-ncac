@@ -169,6 +169,7 @@ class CaseReportInvestigate(Base):
     account_attachment = Column(Text)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
     updated_at = Column(TIMESTAMP(timezone=True), onupdate=func.now())
+    penalty = Column(Integer)
 
     # ✅ Relationship back to CaseReport
     case_report = relationship("CaseReport", back_populates="investigation")
@@ -193,6 +194,10 @@ class CaseReportInvestigate(Base):
             "driver_cost": self.driver_cost,
             "company_cost": self.company_cost,
             "event_img": self.event_img,
+            "root_cause": self.root_cause,
+            "penalty": self.penalty,
+
+
             "event_img_remark": self.event_img_remark,
             "account_attachment": self.account_attachment,
             "created_at": self.created_at.isoformat() if self.created_at else None,
