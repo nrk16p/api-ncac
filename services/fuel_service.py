@@ -60,7 +60,7 @@ def transform_ppt(contents):
     df['number_plate'] = df['number_plate'].str.replace('Plate No. ', '', regex=False)
 
     df['number_plate'] = df['number_plate'].str.replace('สบ', '', regex=False)
-
+    df['number_plate'] = df['number_plate'].str.strip()
     df = df[['Date', 'amount', 'price', 'number_plate', 'amount_DIESEL', 'amount_NGV']]
 
     df['Date'] = df['Date'].astype(str).str.split(' ').str[0]
