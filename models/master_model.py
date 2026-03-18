@@ -17,7 +17,14 @@ class MasterDriver(Base):
     last_name = Column(String(100))
     site_id = Column(Integer, ForeignKey("sites.site_id"))
     driver_role_id = Column(Integer, ForeignKey("driver_roles.driver_role_id"))
-
+    # NEW FIELDS
+    client_name = Column(String)
+    plant_code = Column(String)
+    plant_name = Column(String)
+    truck_number = Column(String)
+    number_plate = Column(String)
+    truck_type = Column(String)
+    month_year = Column(String)
     site = relationship("Site", backref="drivers")
     role = relationship("DriverRole", backref="drivers")
 

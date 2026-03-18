@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 from database import get_db
 from models import MasterDriver
+from sqlalchemy.dialects.postgresql import insert
 
 router = APIRouter(prefix="/masterdrivers", tags=["Master Drivers"])
 
@@ -13,13 +14,22 @@ class MasterDriverBase(BaseModel):
     site_id: Optional[int] = None
     driver_role_id: Optional[int] = None
 
+
+
 class MasterDriverCreate(MasterDriverBase):
     first_name: str
     last_name: str
     site_id: int
     driver_role_id: int
     driver_id: str
+    client_name: Optional[str] = None
+    plant_code: Optional[str] = None
+    plant_name: Optional[str] = None
+    truck_number: Optional[str] = None
+    truck_type: Optional[str] = None
 
+    number_plate: Optional[str] = None
+    month_year: Optional[str] = None
 
 class MasterDriverResponse(MasterDriverBase):
     driver_id: str
@@ -42,3 +52,33 @@ def create_driver(payload: MasterDriverCreate, db: Session = Depends(get_db)):
 @router.get("/", response_model=List[MasterDriverResponse])
 def get_drivers(db: Session = Depends(get_db)):
     return db.query(MasterDriver).all()
+
+
+
+@router.post("/bulk-upsert")
+def upsert_drivers(payload: List[MasterDriverCreate], db: Session = Depends(get_db)):
+
+    stmt = insert(MasterDriver).values([p.dict() for p in payload])
+
+    stmt = stmt.on_conflict_do_update(
+        index_elements=['driver_id'],  # unique key
+        set_={
+            "first_name": stmt.excluded.first_name,
+            "last_name": stmt.excluded.last_name,
+            "site_id": stmt.excluded.site_id,
+            "driver_role_id": stmt.excluded.driver_role_id,
+            "client_name": stmt.excluded.client_name,
+            "plant_code": stmt.excluded.plant_code,
+            "plant_name": stmt.excluded.plant_name,
+            "truck_number": stmt.excluded.truck_number,
+            "truck_type": stmt.excluded.truck_type,
+
+            "number_plate": stmt.excluded.number_plate,
+            "month_year": stmt.excluded.month_year,
+        }
+    )
+
+    db.execute(stmt)
+    db.commit()
+
+    return {"message": "Upsert success"}
