@@ -59,6 +59,7 @@ class InspectionTask(Base):
     trainer_id = Column(String)    
     client_name = Column(String)
     plant_code = Column(String)
+    plant_name = Column(String)
 
     plan_date = Column(Date)
     action_date = Column(DateTime)

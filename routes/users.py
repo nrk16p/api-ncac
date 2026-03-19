@@ -78,8 +78,60 @@ class UserResponse(BaseModel):
     class Config:
         orm_mode = True
 
+class UserUpdate(BaseModel):
+    username: Optional[str] = None
+    employee_id: Optional[str] = None
+    department_id: Optional[int] = None
+    site_id: Optional[int] = None
+    position_id: Optional[int] = None
+    email: Optional[str] = None
+    employee_status: Optional[str] = None
+    firstname: Optional[str] = None
+    lastname: Optional[str] = None
+@router.put("/{employee_id}", response_model=UserResponse)
+def update_user(
+    employee_id: str,
+    payload: UserUpdate,
+    db: Session = Depends(get_db)
+):
+    user = (
+        db.query(User)
+        .options(
+            joinedload(User.department),
+            joinedload(User.site),
+            joinedload(User.position)
+                .joinedload(Position.level)
+        )
+        .filter(User.employee_id == employee_id)
+        .first()
+    )
 
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
 
+    # ✅ check username duplicate (ถ้ามีการ update)
+    if payload.username:
+        existing_user = db.query(User).filter(
+            User.username == payload.username,
+            User.employee_id != employee_id
+        ).first()
+
+        if existing_user:
+            raise HTTPException(status_code=400, detail="Username already exists")
+
+    # ✅ update fields แบบ dynamic
+    update_data = payload.dict(exclude_unset=True)
+
+    for field, value in update_data.items():
+        if field == "password":
+            user.set_password(value)
+        else:
+            setattr(user, field, value)
+
+    db.commit()
+    db.refresh(user)
+
+    return build_user_response(user, db)
 @router.get("/", response_model=List[UserResponse])
 def get_users(
     employee_id: Optional[str] = Query(None),

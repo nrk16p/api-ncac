@@ -27,6 +27,7 @@ class MasterDriverCreate(MasterDriverBase):
     plant_name: Optional[str] = None
     truck_number: Optional[str] = None
     truck_type: Optional[str] = None
+    status: Optional[str] = None
 
     number_plate: Optional[str] = None
     month_year: Optional[str] = None
@@ -72,7 +73,6 @@ def upsert_drivers(payload: List[MasterDriverCreate], db: Session = Depends(get_
             "plant_name": stmt.excluded.plant_name,
             "truck_number": stmt.excluded.truck_number,
             "truck_type": stmt.excluded.truck_type,
-
             "number_plate": stmt.excluded.number_plate,
             "month_year": stmt.excluded.month_year,
         }
@@ -82,3 +82,26 @@ def upsert_drivers(payload: List[MasterDriverCreate], db: Session = Depends(get_
     db.commit()
 
     return {"message": "Upsert success"}
+
+
+@router.get("/option_plant")
+def get_unique_dimensions(db: Session = Depends(get_db)):
+
+    result = db.query(
+        MasterDriver.client_name,
+        MasterDriver.plant_code,
+        MasterDriver.plant_name
+    ).filter(
+        MasterDriver.client_name.isnot(None),
+        MasterDriver.plant_code.isnot(None),
+        MasterDriver.plant_name.isnot(None)
+    ).distinct().all()
+
+    return [
+        {
+            "client_name": r.client_name,
+            "plant_code": r.plant_code,
+            "plant_name": r.plant_name
+        }
+        for r in result
+    ]

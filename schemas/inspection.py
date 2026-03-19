@@ -8,6 +8,7 @@ class InspectionTaskCreate(BaseModel):
     trainer_id: str
     client_name: str
     plant_code: str
+    plant_name: str
 
     plan_date: date
     action_date: Optional[datetime] = None

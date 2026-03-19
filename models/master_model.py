@@ -18,6 +18,7 @@ class MasterDriver(Base):
     site_id = Column(Integer, ForeignKey("sites.site_id"))
     driver_role_id = Column(Integer, ForeignKey("driver_roles.driver_role_id"))
     # NEW FIELDS
+    status = Column(String)
     client_name = Column(String)
     plant_code = Column(String)
     plant_name = Column(String)
