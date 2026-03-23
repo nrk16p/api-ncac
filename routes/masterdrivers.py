@@ -34,6 +34,19 @@ class MasterDriverCreate(MasterDriverBase):
 
 class MasterDriverResponse(MasterDriverBase):
     driver_id: str
+    first_name: str
+    last_name: str
+    site_id: int
+    driver_role_id: int
+    client_name: Optional[str] = None
+    plant_code: Optional[str] = None
+    plant_name: Optional[str] = None
+    truck_number: Optional[str] = None
+    truck_type: Optional[str] = None
+    status: Optional[str] = None
+
+    number_plate: Optional[str] = None
+    month_year: Optional[str] = None
     class Config:
         orm_mode = True
 

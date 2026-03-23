@@ -1,13 +1,26 @@
 from sqlalchemy import Column, Integer, String, Date, DateTime, Float, Text, ForeignKey
-from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.dialects.postgresql import JSONB, ARRAY
 from sqlalchemy.orm import relationship
 from database import Base
+
 
 
 class SafetyTalk(Base):
     __tablename__ = "safety_talk"
 
     safety_talk_id = Column(Integer, primary_key=True, index=True)
+
+    inspection_task_id = Column(
+        String,
+        ForeignKey("inspection_task.inspection_task_id"),
+        unique=True
+    )
+
+    # 🔥 NEW
+    topics = Column(JSONB)       # list of topics
+    attendance = Column(JSONB)   # list of drivers attendance
+
+    # existing
     noted = Column(Text)
     upload_url = Column(Text)
 
@@ -16,10 +29,22 @@ class DrugTest(Base):
     __tablename__ = "drug_test"
 
     drug_test_id = Column(Integer, primary_key=True, index=True)
+
+    # Alcohol
     alcohol = Column(Float)
     alcohol_attachment = Column(Text)
-    amfetamin_2 = Column(String)
+
+    # Amphetamine
+    amfetamin = Column(String)
     amfetamin_attachment = Column(String)
+
+    # ✅ NEW: KRA (กระท่อม)
+    kra = Column(String)
+    kra_attachment = Column(String)
+
+    # ✅ NEW: THC (กัญชา)
+    thc = Column(String)
+    thc_attachment = Column(String)
 
 
 class PPETest(Base):
@@ -27,10 +52,22 @@ class PPETest(Base):
 
     ppe_test_id = Column(Integer, primary_key=True, index=True)
 
+    # เดิม
     shirt_check = Column(String, nullable=True)
     shirt_size = Column(String, nullable=True)
+
     boot_check = Column(String, nullable=True)
     boot_size = Column(String, nullable=True)
+
+    # ✅ เพิ่ม PPE ใหม่
+    helmet_check = Column(String, nullable=True)          # หมวก Safety
+    glasses_check = Column(String, nullable=True)         # แว่นตา Safety
+    mask_check = Column(String, nullable=True)            # ผ้าปิดจมูก
+    vest_check = Column(String, nullable=True)            # เสื้อสะท้อนแสง
+    glove_check = Column(String, nullable=True)           # ถุงมือ Safety
+    safety_shoes_check = Column(String, nullable=True)    # รองเท้า Safety
+
+    # attachment
     ppe_attachment = Column(String, nullable=True)
 
 class VehicleInspect(Base):
@@ -38,16 +75,14 @@ class VehicleInspect(Base):
 
     vehicle_inspect_id = Column(Integer, primary_key=True, index=True)
 
-    around_check_side_1 = Column(String)
-    around_check_side_2 = Column(String)
-    around_check_side_3 = Column(String)
-    around_check_side_4 = Column(String)
+    # ✅ checklist ทั้งหมด (เก็บเป็น JSON)
+    checklist = Column(JSONB)
 
+    # ✅ รูปรอบรถ (หน้า/ซ้าย/ขวา/หลัง)
     around_check_attachment = Column(ARRAY(String))
 
-    equiement_check = Column(String)
-    cockpit_check = Column(String)
-    cockpit_check_attachment = Column(String)
+    # ✅ รูปในห้องโดยสาร
+    cockpit_attachment = Column(String)
 
 
 
@@ -79,9 +114,11 @@ class InspectionTaskDriver(Base):
     )
 
     driver_id = Column(String)      # changed to string
-    truck_id = Column(String)       # changed to string
+    number_plate = Column(String)       # changed to string
     truck_number = Column(String)   # new field
-
+    first_name = Column(String)
+    last_name = Column(String)
+    status = Column(String)
     truck_type = Column(String)
 
     drug_test_id = Column(
