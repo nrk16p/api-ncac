@@ -4,7 +4,8 @@ from sqlalchemy.exc import IntegrityError
 from datetime import datetime, timedelta
 from typing import List, Optional
 from models.user_model import User ,Position
-from services.email_service import send_email,render_form_submit_th ,render_form_done_th
+from services.email_service import send_email, render_form_submit_th, render_form_done_th
+from services.line_service import send_line_message
 from database import get_db
 from models.master_model import (
     FormMaster, FormQuestion, FormSubmission,
@@ -333,6 +334,27 @@ def submit_form(
                  body,
                  cc_list
              )
+
+        # =====================================================
+        # 📱 SEND LINE MESSAGE
+        # =====================================================
+        creator_name = f"{creator.firstname} {creator.lastname}" if creator else "-"
+        line_message = (
+            f"⋆ ˚｡⋆୨📋୧⋆ ˚｡⋆\n"
+            f"𝐍𝐄𝐖 𝐅𝐎𝐑𝐌 𝐒𝐔𝐁𝐌𝐈𝐓𝐓𝐄𝐃 ✨\n"
+            f"\n"
+            f"🔖 ɴᴏ: {submission.form_id}\n"
+            f"📄 ғᴏʀᴍ: {form.form_name}\n"
+            f"🌷 ɴᴀᴍᴇ: {creator_name}\n"
+            f"📌 sᴛᴀᴛᴜs: {submission.status_approve}\n"
+            f"🗓 ᴅᴀᴛᴇ: {submission.created_at.strftime('%d/%m/%Y %H:%M')}\n"
+            f"\n"
+            f"⸝⸝⸝ ᴅᴇᴛᴀɪʟ ᴄʟɪᴄᴋ ʜᴇʀᴇ 🔗\n"
+            f"https://menait-service.vercel.app/mytickets/{submission.form_id}\n"
+            f"⋆ ˚｡⋆୨✿୧⋆ ˚｡⋆"
+        )
+        background_tasks.add_task(send_line_message, line_message)
+
         return {
             "message": "Form submitted",
             "submission_id": submission.id,
