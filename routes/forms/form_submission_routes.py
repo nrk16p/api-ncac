@@ -299,7 +299,7 @@ def submit_form(
         body = render_form_submit_th({
             "form_id": submission.form_id,
             "form_name": form.form_name,
-            "created_at": submission.created_at.strftime("%d/%m/%Y %H:%M"),
+            "created_at": submission.created_at.replace(tzinfo=ZoneInfo("UTC")).astimezone(ZoneInfo("Asia/Bangkok")).strftime("%d/%m/%Y %H:%M"),
             "status": submission.status_approve,
             "full_name": f"{creator.firstname} {creator.lastname}" if creator else "-",
             "fields": fields,
@@ -340,14 +340,13 @@ def submit_form(
         # =====================================================
         creator_name = f"{creator.firstname} {creator.lastname}" if creator else "-"
         line_message = (
-            f"⋆ ˚｡⋆୨📋୧⋆ ˚｡⋆\n"
             f"𝐍𝐄𝐖 𝐅𝐎𝐑𝐌 𝐒𝐔𝐁𝐌𝐈𝐓𝐓𝐄𝐃 ✨\n"
             f"\n"
             f"🔖 ɴᴏ: {submission.form_id}\n"
             f"📄 ғᴏʀᴍ: {form.form_name}\n"
             f"🌷 ɴᴀᴍᴇ: {creator_name}\n"
             f"📌 sᴛᴀᴛᴜs: {submission.status_approve}\n"
-            f"🗓 ᴅᴀᴛᴇ: {submission.created_at.strftime('%d/%m/%Y %H:%M')}\n"
+            f"🗓 ᴅᴀᴛᴇ: {submission.created_at.replace(tzinfo=ZoneInfo('UTC')).astimezone(ZoneInfo('Asia/Bangkok')).strftime('%d/%m/%Y %H:%M')}\n"
             f"\n"
             f"⸝⸝⸝ ᴅᴇᴛᴀɪʟ ᴄʟɪᴄᴋ ʜᴇʀᴇ 🔗\n"
             f"https://menait-service.vercel.app/mytickets/{submission.form_id}\n"
@@ -435,7 +434,7 @@ def update_status(
                     "form_name": submission.form.form_name if submission.form else "",
                     "system_url": f"https://menait-service.vercel.app/mytickets/{submission.form_id}",
                     "admin_comment": submission.admin_comment or "",
-                    "created_at": submission.created_at.strftime("%d/%m/%Y %H:%M") if submission.created_at else ""
+                    "created_at": submission.created_at.replace(tzinfo=ZoneInfo("UTC")).astimezone(ZoneInfo("Asia/Bangkok")).strftime("%d/%m/%Y %H:%M") if submission.created_at else ""
                 })
 
                 background_tasks.add_task(
@@ -470,6 +469,7 @@ def get_form(
     form_id: Optional[str] = Query(None),
     start_date: Optional[str] = Query(None),
     end_date: Optional[str] = Query(None),
+    status: Optional[str] = Query(None, regex="^(Open|In-Progress|Done|Backlog)$")
 ):
 
     # =====================================================
@@ -500,6 +500,9 @@ def get_form(
                 FormSubmission.created_at >= start,
                 FormSubmission.created_at < end_next
             )
+
+    if status:
+        query = query.filter(FormSubmission.status == status)
 
     results = query.all() or []
 
