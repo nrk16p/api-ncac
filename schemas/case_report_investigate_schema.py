@@ -6,12 +6,12 @@ from .corrective_action_schema import CorrectiveActionItem
 class CaseReportInvestigateBase(BaseModel):
     root_cause_analysis: Optional[str] = None
     claim_type: Optional[str] = None
-    insurance_claim: Optional[int] = None
-    product_resellable: Optional[int] = None
-    remaining_damage_cost: Optional[int] = None
-    driver_cost: Optional[int] = None
-    company_cost: Optional[int] = None
-    penalty : Optional[int]=None
+    insurance_claim: Optional[float] = None
+    product_resellable: Optional[float] = None
+    remaining_damage_cost: Optional[float] = None
+    driver_cost: Optional[float] = None
+    company_cost: Optional[float] = None
+    penalty : Optional[float]=None
     root_cause : Optional[str] = None
 
 class CaseReportInvestigateCreate(CaseReportInvestigateBase):
