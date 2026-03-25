@@ -135,6 +135,9 @@ def update_user(
 @router.get("/", response_model=List[UserResponse])
 def get_users(
     employee_id: Optional[str] = Query(None),
+    department_id: Optional[int] = Query(None),
+    site_id: Optional[int] = Query(None),
+    employee_status: Optional[str] = Query(None),
     db: Session = Depends(get_db)
 ):
     query = (
@@ -147,9 +150,15 @@ def get_users(
         )
     )
 
-    # ✅ filter by employee_id
-    if employee_id:
-        query = query.filter(User.employee_id == employee_id)
+    filters = {
+        "employee_id": employee_id,
+        "department_id": department_id,
+        "site_id": site_id,
+        "employee_status": employee_status,
+    }
+    for field, value in filters.items():
+        if value is not None:
+            query = query.filter(getattr(User, field) == value)
 
     users = query.all()
 
