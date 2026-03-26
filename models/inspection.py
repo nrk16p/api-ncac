@@ -2,6 +2,10 @@ from sqlalchemy import Column, Integer, String, Date, DateTime, Float, Text, For
 from sqlalchemy.dialects.postgresql import JSONB, ARRAY
 from sqlalchemy.orm import relationship
 from database import Base
+from datetime import datetime
+import pytz
+
+bangkok = pytz.timezone("Asia/Bangkok")
 
 
 
@@ -30,6 +34,10 @@ class DrugTest(Base):
 
     drug_test_id = Column(Integer, primary_key=True, index=True)
 
+    # ✅ NEW: status
+    drug_test_status = Column(String, default="pending")  
+    # เช่น pending / pass / fail
+
     # Alcohol
     alcohol = Column(Float)
     alcohol_attachment = Column(Text)
@@ -38,11 +46,11 @@ class DrugTest(Base):
     amfetamin = Column(String)
     amfetamin_attachment = Column(String)
 
-    # ✅ NEW: KRA (กระท่อม)
+    # KRA
     kra = Column(String)
     kra_attachment = Column(String)
 
-    # ✅ NEW: THC (กัญชา)
+    # THC
     thc = Column(String)
     thc_attachment = Column(String)
 
@@ -66,7 +74,7 @@ class PPETest(Base):
     vest_check = Column(String, nullable=True)            # เสื้อสะท้อนแสง
     glove_check = Column(String, nullable=True)           # ถุงมือ Safety
     safety_shoes_check = Column(String, nullable=True)    # รองเท้า Safety
-
+    ppe_status = Column(String, nullable=True, default="pending")
     # attachment
     ppe_attachment = Column(String, nullable=True)
 
@@ -98,13 +106,17 @@ class InspectionTask(Base):
 
     plan_date = Column(Date)
     action_date = Column(DateTime)
-
+    drug_test_attachment = Column(String)
     inspection_task_status = Column(String)
 
     drivers = relationship("InspectionTaskDriver", back_populates="task")
 
 class InspectionTaskDriver(Base):
     __tablename__ = "inspection_task_driver"
+    inspection_date = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(bangkok)
+    )
 
     inspection_task_driver_id = Column(String, primary_key=True, index=True)
 

@@ -6,11 +6,39 @@ from models import inspection as models
 from schemas import inspection as schemas
 from .helper import get_driver_or_404
 
-
 router = APIRouter(prefix="/ppe", tags=["PPE"])
 
 
-# ✅ CREATE PPE
+# ======================================================
+# 🧠 Helper: Calculate PPE Status
+# ======================================================
+def calculate_ppe_status(ppe):
+    values = [
+        ppe.shirt_check,
+        ppe.boot_check,
+        ppe.helmet_check,
+        ppe.glasses_check,
+        ppe.mask_check,
+        ppe.vest_check,
+        ppe.glove_check,
+        ppe.safety_shoes_check,
+    ]
+
+    # 🟡 pending (ยังกรอกไม่ครบ)
+    if any(v is None for v in values):
+        return "pending"
+
+    # 🔴 fail (มีตัวไหน fail)
+    if any(v == "fail" for v in values):
+        return "fail"
+
+    # 🟢 pass (ผ่านทั้งหมด)
+    return "pass"
+
+
+# ======================================================
+# 🚀 CREATE PPE
+# ======================================================
 @router.post("/{inspection_task_driver_id}", response_model=schemas.PPETestResponse)
 def add_ppe(
     inspection_task_driver_id: str,
@@ -25,16 +53,23 @@ def add_ppe(
 
     ppe = models.PPETest(**payload.dict())
 
+    # ✅ คำนวณ status
+    ppe.ppe_status = calculate_ppe_status(ppe)
+
     db.add(ppe)
     db.commit()
     db.refresh(ppe)
 
+    # 🔗 bind กับ driver
     driver.ppe_test_id = ppe.ppe_test_id
     db.commit()
 
     return ppe
 
 
+# ======================================================
+# 🔄 UPDATE PPE
+# ======================================================
 @router.put("/{inspection_task_driver_id}", response_model=schemas.PPETestResponse)
 def update_ppe(
     inspection_task_driver_id: str,
@@ -50,8 +85,15 @@ def update_ppe(
         models.PPETest.ppe_test_id == driver.ppe_test_id
     ).first()
 
+    if not ppe:
+        raise HTTPException(404, "PPE record not found")
+
+    # 🔄 update field
     for key, value in payload.dict(exclude_unset=True).items():
         setattr(ppe, key, value)
+
+    # ✅ recalculate status ทุกครั้ง
+    ppe.ppe_status = calculate_ppe_status(ppe)
 
     db.commit()
     db.refresh(ppe)
@@ -59,7 +101,9 @@ def update_ppe(
     return ppe
 
 
-# ✅ GET PPE
+# ======================================================
+# 📥 GET PPE
+# ======================================================
 @router.get("/{inspection_task_driver_id}", response_model=schemas.PPETestResponse)
 def get_ppe(
     inspection_task_driver_id: str,
@@ -74,4 +118,23 @@ def get_ppe(
         models.PPETest.ppe_test_id == driver.ppe_test_id
     ).first()
 
+    if not ppe:
+        raise HTTPException(404, "PPE record not found")
+
     return ppe
+
+
+# ======================================================
+# 📊 OPTIONAL: GET ALL PPE (filter ได้)
+# ======================================================
+@router.get("/", response_model=list[schemas.PPETestResponse])
+def list_ppe(
+    status: str | None = None,
+    db: Session = Depends(get_db)
+):
+    query = db.query(models.PPETest)
+
+    if status:
+        query = query.filter(models.PPETest.ppe_status == status)
+
+    return query.all()

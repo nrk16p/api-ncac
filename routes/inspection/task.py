@@ -168,7 +168,44 @@ def get_task(inspection_task_id: str, db: Session = Depends(get_db)):
         models.InspectionTaskDriver.inspection_task_id == inspection_task_id
     ).all()
 
-    return {"task": task, "drivers": drivers}
+    result = []
+
+    for d in drivers:
+        driver_dict = d.__dict__.copy()
+
+        # ❌ เอา _sa_instance_state ออก
+        driver_dict.pop("_sa_instance_state", None)
+
+        # -----------------------------
+        # 🔥 ADD PPE STATUS
+        # -----------------------------
+        if d.ppe_test_id:
+            ppe = db.query(models.PPETest).filter(
+                models.PPETest.ppe_test_id == d.ppe_test_id
+            ).first()
+
+            driver_dict["ppe_status"] = ppe.ppe_status if ppe else None
+        else:
+            driver_dict["ppe_status"] = None
+
+        # -----------------------------
+        # 🔥 ADD DRUG STATUS
+        # -----------------------------
+        if d.drug_test_id:
+            drug = db.query(models.DrugTest).filter(
+                models.DrugTest.drug_test_id == d.drug_test_id
+            ).first()
+
+            driver_dict["drug_test_status"] = drug.drug_test_status if drug else None
+        else:
+            driver_dict["drug_test_status"] = None
+
+        result.append(driver_dict)
+
+    return {
+        "task": task,
+        "drivers": result
+    }
 
 
 @router.delete("/{inspection_task_id}")

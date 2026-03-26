@@ -27,35 +27,8 @@ class DriverCreate(BaseModel):
 
 
 
-# ---------------- PPE ----------------
-class PPETestBase(BaseModel):
-    shirt_check: Optional[str] = None
-    shirt_size: Optional[str] = None
-
-    boot_check: Optional[str] = None
-    boot_size: Optional[str] = None
-
-    helmet_check: Optional[str] = None
-    glasses_check: Optional[str] = None
-    mask_check: Optional[str] = None
-    glove_check: Optional[str] = None
-
-    ppe_attachment: Optional[str] = None
 
 
-class PPETestCreate(PPETestBase):
-    pass
-
-
-class PPETestUpdate(PPETestBase):
-    pass
-
-
-class PPETestResponse(PPETestBase):
-    ppe_test_id: int
-
-    class Config:
-        orm_mode = True
 
 
 class ChecklistItem(BaseModel):
@@ -92,6 +65,7 @@ class InspectionTaskUpdate(BaseModel):
     client_name: Optional[str] = None
     action_date: Optional[date] = None
     inspection_task_status: Optional[str] = None
+    drug_test_attachment: Optional[str] = None
 
 class DrugTestCreate(BaseModel):
     alcohol: Optional[float] = None
@@ -100,15 +74,18 @@ class DrugTestCreate(BaseModel):
     amfetamin: Optional[str] = None
     amfetamin_attachment: Optional[str] = None
 
-    # ✅ NEW
     kra: Optional[str] = None
     kra_attachment: Optional[str] = None
 
     thc: Optional[str] = None
     thc_attachment: Optional[str] = None
 
+
 class DrugTestResponse(DrugTestCreate):
     drug_test_id: int
+
+    # ✅ เพิ่มตรงนี้
+    drug_test_status: str
 
     class Config:
         orm_mode = True
@@ -139,6 +116,66 @@ class SafetyTalkUpdate(SafetyTalkBase):
 class SafetyTalkResponse(SafetyTalkBase):
     safety_talk_id: int
     inspection_task_id: str
+
+    class Config:
+        orm_mode = True
+
+class DriverUpdate(BaseModel):
+    number_plate: Optional[str] = None
+    truck_number: Optional[str] = None
+    truck_type: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+
+    # ✅ NEW
+    inspection_date: Optional[datetime] = None
+
+
+
+# ---------------- PPE ----------------
+class PPETestBase(BaseModel):
+    shirt_check: Optional[str] = None
+    shirt_size: Optional[str] = None
+
+    boot_check: Optional[str] = None
+    boot_size: Optional[str] = None
+
+    helmet_check: Optional[str] = None
+    glasses_check: Optional[str] = None
+    mask_check: Optional[str] = None
+    vest_check: Optional[str] = None              # ✅ ADD
+    glove_check: Optional[str] = None
+    safety_shoes_check: Optional[str] = None      # ✅ ADD
+
+    ppe_attachment: Optional[str] = None
+
+class PPETestCreate(PPETestBase):
+    pass
+
+
+class PPETestUpdate(PPETestBase):
+    pass
+
+
+class PPETestResponse(BaseModel):
+    ppe_test_id: int
+
+    shirt_check: Optional[str]
+    shirt_size: Optional[str]
+
+    boot_check: Optional[str]
+    boot_size: Optional[str]
+
+    helmet_check: Optional[str]
+    glasses_check: Optional[str]
+    mask_check: Optional[str]
+    vest_check: Optional[str]
+    glove_check: Optional[str]
+    safety_shoes_check: Optional[str]
+
+    ppe_attachment: Optional[str]
+
+    ppe_status: str   # ✅ ต้องมี
 
     class Config:
         orm_mode = True

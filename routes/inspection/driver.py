@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from datetime import datetime
 
 from database import get_db
 from models import inspection as models
@@ -70,10 +71,9 @@ def get_driver_detail(inspection_task_driver_id: str, db: Session = Depends(get_
 @router.put("/{inspection_task_driver_id}")
 def update_driver(
     inspection_task_driver_id: str,
-    payload: schemas.DriverCreate,
+    payload: schemas.DriverUpdate,   # ✅ เปลี่ยนตรงนี้
     db: Session = Depends(get_db)
 ):
-
     driver = db.query(models.InspectionTaskDriver).filter(
         models.InspectionTaskDriver.inspection_task_driver_id == inspection_task_driver_id
     ).first()
@@ -81,17 +81,18 @@ def update_driver(
     if not driver:
         raise HTTPException(404, "Driver not found")
 
-    driver.number_plate = payload.number_plate
-    driver.truck_number = payload.truck_number
-    driver.truck_type = payload.truck_type
-    driver.first_name = payload.first_name
-    driver.last_name = payload.last_name
+    # 🔄 update เฉพาะ field ที่ส่งมา
+    for key, value in payload.dict(exclude_unset=True).items():
+        setattr(driver, key, value)
+
+    # ✅ fallback ถ้าไม่ได้ส่ง inspection_date
+    if "inspection_date" not in payload.dict(exclude_unset=True):
+        driver.inspection_date = datetime.utcnow()
 
     db.commit()
     db.refresh(driver)
 
     return driver
-
 
 @router.delete("/{inspection_task_driver_id}")
 def delete_driver(

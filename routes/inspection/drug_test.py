@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from database import get_db
@@ -6,10 +6,43 @@ from models import inspection as models
 from schemas import inspection as schemas
 from .helper import get_driver_or_404
 
-# ✅ สำคัญมาก
 router = APIRouter(prefix="/drug-test")
 
-@router.post("/{inspection_task_driver_id}")
+
+# ======================================================
+# 🧠 Helper: Calculate Drug Test Status
+# ======================================================
+def calculate_drug_status(drug):
+    values = [
+        drug.alcohol,
+        drug.amfetamin,
+        drug.kra,
+        drug.thc
+    ]
+
+    # 🟡 ถ้ายังมี None → pending
+    if any(v is None for v in values):
+        return "pending"
+
+    # 🔴 fail case
+    if drug.alcohol > 0:
+        return "fail"
+
+    if (
+        drug.amfetamin == "positive" or
+        drug.kra == "positive" or
+        drug.thc == "positive"
+    ):
+        return "fail"
+
+    # 🟢 pass
+    return "pass"
+
+
+# ======================================================
+# 🚀 CREATE
+# ======================================================
+@router.post("/{inspection_task_driver_id}", response_model=schemas.DrugTestResponse)
 def add_drug_test(
     inspection_task_driver_id: str,
     payload: schemas.DrugTestCreate,
@@ -23,29 +56,34 @@ def add_drug_test(
 
     drug = models.DrugTest(**payload.dict())
 
+    # ✅ auto status
+    drug.drug_test_status = calculate_drug_status(drug)
+
     db.add(drug)
     db.commit()
     db.refresh(drug)
 
+    # 🔗 link กลับไปที่ driver
     driver.drug_test_id = drug.drug_test_id
     db.commit()
 
     return drug
 
-@router.put("/{inspection_task_driver_id}")
+
+# ======================================================
+# 🔄 UPDATE
+# ======================================================
+@router.put("/{inspection_task_driver_id}", response_model=schemas.DrugTestResponse)
 def update_drug_test_by_driver(
     inspection_task_driver_id: str,
     payload: schemas.DrugTestCreate,
     db: Session = Depends(get_db)
 ):
-    # 🔹 หา driver
     driver = get_driver_or_404(inspection_task_driver_id, db)
 
-    # 🔹 check ว่ามี drug test ไหม
     if not driver.drug_test_id:
         raise HTTPException(404, "Drug test not found for this driver")
 
-    # 🔹 หา drug test
     drug = db.query(models.DrugTest).filter(
         models.DrugTest.drug_test_id == driver.drug_test_id
     ).first()
@@ -53,9 +91,12 @@ def update_drug_test_by_driver(
     if not drug:
         raise HTTPException(404, "Drug test not found")
 
-    # 🔹 update fields
+    # 🔄 update fields
     for key, value in payload.dict(exclude_unset=True).items():
         setattr(drug, key, value)
+
+    # ✅ recalc status
+    drug.drug_test_status = calculate_drug_status(drug)
 
     db.commit()
     db.refresh(drug)
@@ -63,6 +104,9 @@ def update_drug_test_by_driver(
     return drug
 
 
+# ======================================================
+# 🔍 GET
+# ======================================================
 @router.get("/{inspection_task_driver_id}", response_model=schemas.DrugTestResponse)
 def get_drug_test_by_driver(
     inspection_task_driver_id: str,
@@ -76,5 +120,8 @@ def get_drug_test_by_driver(
     drug = db.query(models.DrugTest).filter(
         models.DrugTest.drug_test_id == driver.drug_test_id
     ).first()
+
+    if not drug:
+        raise HTTPException(404, "Drug test not found")
 
     return drug
