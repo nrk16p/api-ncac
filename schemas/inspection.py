@@ -31,6 +31,7 @@ class DriverCreate(BaseModel):
 
 
 
+
 class ChecklistItem(BaseModel):
     item: str
     status: str  # PASS / FAIL / NA
@@ -179,3 +180,8 @@ class PPETestResponse(BaseModel):
 
     class Config:
         orm_mode = True
+
+
+class DeleteTaskRequest(BaseModel):
+    deleted_by: str
+    remark: str | None = None

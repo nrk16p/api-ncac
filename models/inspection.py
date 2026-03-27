@@ -4,6 +4,7 @@ from sqlalchemy.orm import relationship
 from database import Base
 from datetime import datetime
 import pytz
+from fastapi import Header
 
 bangkok = pytz.timezone("Asia/Bangkok")
 
@@ -158,3 +159,20 @@ class InspectionTaskDriver(Base):
     drug_test = relationship("DrugTest")
     ppe_test = relationship("PPETest")
     vehicle_inspect = relationship("VehicleInspect")
+
+
+class InspectionTaskLog(Base):
+    __tablename__ = "inspection_task_log"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    inspection_task_id = Column(String, index=True)
+    action = Column(String)  # DELETE / UPDATE / CREATE
+
+    action_by = Column(String)  # employee_id หรือ username
+    remark = Column(Text)
+
+    created_at = Column(
+        DateTime,
+        default=lambda: datetime.now(bangkok)
+    )

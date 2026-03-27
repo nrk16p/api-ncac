@@ -209,8 +209,11 @@ def get_task(inspection_task_id: str, db: Session = Depends(get_db)):
 
 
 @router.delete("/{inspection_task_id}")
-def delete_task(inspection_task_id: str, db: Session = Depends(get_db)):
-
+def delete_task(
+    inspection_task_id: str,
+    payload: schemas.DeleteTaskRequest,
+    db: Session = Depends(get_db)
+):
     task = db.query(models.InspectionTask).filter(
         models.InspectionTask.inspection_task_id == inspection_task_id
     ).first()
@@ -218,10 +221,34 @@ def delete_task(inspection_task_id: str, db: Session = Depends(get_db)):
     if not task:
         raise HTTPException(404, "Task not found")
 
-    db.delete(task)
-    db.commit()
+    try:
+        # -----------------------------
+        # 🧾 CREATE LOG
+        # -----------------------------
+        log = models.InspectionTaskLog(
+            inspection_task_id=inspection_task_id,
+            action="DELETE",
+            action_by=payload.deleted_by,
+            remark=payload.remark or "delete via API"
+        )
 
-    return {"message": "Task deleted"}
+        db.add(log)
+
+        # -----------------------------
+        # ❌ DELETE TASK
+        # -----------------------------
+        db.delete(task)
+
+        db.commit()
+
+        return {
+            "message": "Task deleted",
+            "deleted_by": payload.deleted_by
+        }
+
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, str(e))
 
 @router.put("/{inspection_task_id}")
 def update_task(
