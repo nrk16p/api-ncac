@@ -135,11 +135,7 @@ class DriverUpdate(BaseModel):
 
 # ---------------- PPE ----------------
 class PPETestBase(BaseModel):
-    shirt_check: Optional[str] = None
-    shirt_size: Optional[str] = None
 
-    boot_check: Optional[str] = None
-    boot_size: Optional[str] = None
 
     helmet_check: Optional[str] = None
     glasses_check: Optional[str] = None
@@ -160,13 +156,6 @@ class PPETestUpdate(PPETestBase):
 
 class PPETestResponse(BaseModel):
     ppe_test_id: int
-
-    shirt_check: Optional[str]
-    shirt_size: Optional[str]
-
-    boot_check: Optional[str]
-    boot_size: Optional[str]
-
     helmet_check: Optional[str]
     glasses_check: Optional[str]
     mask_check: Optional[str]
