@@ -85,9 +85,7 @@ def update_driver(
     for key, value in payload.dict(exclude_unset=True).items():
         setattr(driver, key, value)
 
-    # ✅ fallback ถ้าไม่ได้ส่ง inspection_date
-    if "inspection_date" not in payload.dict(exclude_unset=True):
-        driver.inspection_date = datetime.utcnow()
+
 
     db.commit()
     db.refresh(driver)

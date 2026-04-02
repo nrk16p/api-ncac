@@ -73,6 +73,7 @@ from routes.forms.form_submission_routes import router as form_submission_router
 from routes.forms.form_master_routes import router as form_master_router
 from routes.allocation import allocation_routes
 from routes.inspection import router as inspection_router
+from routes.leave_booking.router import router as leave_booking_router
 
 
 # ------------------------------
@@ -103,6 +104,8 @@ app.include_router(mixer_compensation.router)
 app.include_router(master_root_cause.router)
 app.include_router(inspection_router)
 
+#booking leave
+app.include_router(leave_booking_router)
 
 # ------------------------------
 # 🚨 Forms Order (สำคัญ) 
