@@ -35,6 +35,7 @@ class DriverCreate(BaseModel):
 class ChecklistItem(BaseModel):
     item: str
     status: str  # PASS / FAIL / NA
+    fieldKey:str
     remark: Optional[str] = None
 
 
