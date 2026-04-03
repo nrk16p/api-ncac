@@ -143,7 +143,8 @@ class PPETestBase(BaseModel):
     vest_check: Optional[str] = None              # ✅ ADD
     glove_check: Optional[str] = None
     safety_shoes_check: Optional[str] = None      # ✅ ADD
-
+    vest_size: Optional[str] = None 
+    safety_shoes_size: Optional[str] = None 
     ppe_attachment: Optional[str] = None
 
 class PPETestCreate(PPETestBase):
@@ -162,7 +163,8 @@ class PPETestResponse(BaseModel):
     vest_check: Optional[str]
     glove_check: Optional[str]
     safety_shoes_check: Optional[str]
-
+    vest_size: Optional[str] = None 
+    safety_shoes_size: Optional[str] = None 
     ppe_attachment: Optional[str]
 
     ppe_status: str   # ✅ ต้องมี
