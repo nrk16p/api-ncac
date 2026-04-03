@@ -377,7 +377,7 @@ def submit_form(
 def update_status(
     form_id: str,
     background_tasks: BackgroundTasks,   # 👈 add this
-    new_status: str = Query(..., regex="^(Open|In-Progress|Done|Backlog)$"),
+    new_status: str = Query(..., regex="^(Open|In-Progress|Done|Backlog|Rejected)$"),
     employee_id: str = Query(...),
     db: Session = Depends(get_db),
     ):
@@ -469,7 +469,7 @@ def get_form(
     form_id: Optional[str] = Query(None),
     start_date: Optional[str] = Query(None),
     end_date: Optional[str] = Query(None),
-    status: Optional[str] = Query(None, regex="^(Open|In-Progress|Done|Backlog)$")
+    status: Optional[str] = Query(None, regex="^(Open|In-Progress|Done|Backlog|Rejected)$")
 ):
 
     # =====================================================
