@@ -63,10 +63,10 @@ class PPETest(Base):
 
     # เดิม
     shirt_check = Column(String, nullable=True)
-    shirt_size = Column(String, nullable=True)
+    vest_size = Column(String, nullable=True)
 
     boot_check = Column(String, nullable=True)
-    boot_size = Column(String, nullable=True)
+    safety_shoes_size = Column(String, nullable=True)
 
     # ✅ เพิ่ม PPE ใหม่
     helmet_check = Column(String, nullable=True)          # หมวก Safety
