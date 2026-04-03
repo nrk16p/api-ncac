@@ -24,17 +24,9 @@ class DriverCreate(BaseModel):
     truck_type: str
 
 
-
-
-
-
-
-
-
-
 class ChecklistItem(BaseModel):
     item: str
-    status: str  # PASS / FAIL / NA
+    status: str  # PASS / FAIL / 
     fieldKey:str
     remark: Optional[str] = None
 
