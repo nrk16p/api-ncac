@@ -99,7 +99,7 @@ def create_task(
                 truck_type=d.truck_type,
                 first_name=d.first_name,
                 last_name=d.last_name,
-                inspection_task_driver_status="pending"
+                inspection_task_driver_status="open"
             )
 
             db.add(driver)
