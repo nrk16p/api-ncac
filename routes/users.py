@@ -41,6 +41,9 @@ def build_user_response(user: User, db: Session):
         "employee_status": user.employee_status,
         "firstname": user.firstname,
         "lastname": user.lastname,
+        "department_id": user.department_id,
+        "site_id": user.site_id,
+        "position_id": user.position_id,
         "department": department_name,
         "site": site_name,
         "position": position_name,
@@ -69,7 +72,9 @@ class UserResponse(BaseModel):
     employee_status: Optional[str]
     firstname: Optional[str]
     lastname: Optional[str]
-
+    department_id: Optional[int]
+    site_id: Optional[int]
+    position_id: Optional[int]
     department: Optional[str]
     site: Optional[str]
     position: Optional[str]
