@@ -11,6 +11,28 @@ from .helper import get_driver_or_404
 
 router = APIRouter(prefix="/vehicle-inspect", tags=["Vehicle Inspect"])
 
+# ======================================================
+# 🧠 Helper: Calculate Vehicle Inspect Status
+# ======================================================
+def calculate_vehicle_inspect_status(inspect):
+    values = [] # รวบรวมค่าทั้งหมดจาก checklist ที่เป็น "pass" หรือ "fail" เพื่อใช้ในการคำนวณสถานะ
+    for section, items in inspect.checklist.items():
+        for item in items:
+            if item["status"] is not None:  # ถ้ามี remark แสดงว่าตรวจแล้ว
+                values.append(item["status"])
+    
+    # 🟡 pending (ยังกรอกไม่ครบ)
+    if any(v is None for v in values):
+        return "pending"
+
+    # 🔴 fail (มีตัวไหน fail)
+    if any(v == "fail" for v in values):
+        return "fail"
+
+    # 🟢 pass (ผ่านทั้งหมด)
+    return "pass"
+
+
 def convert_checklist(checklist: dict):
     return {
         section: [item.dict() for item in items]
@@ -32,6 +54,8 @@ def create_vehicle_inspect(
         around_check_attachment=payload.around_check_attachment,
         cockpit_attachment=payload.cockpit_attachment
     )
+    # ✅ คำนวณ status
+    inspect.vechicle_status = calculate_vehicle_inspect_status(inspect)
 
     db.add(inspect)
     db.commit()
@@ -84,6 +108,9 @@ def update_vehicle_inspect(
 
     if payload.cockpit_attachment is not None:
         inspect.cockpit_attachment = payload.cockpit_attachment
+
+    # ✅ คำนวณ status
+    inspect.vechicle_status = calculate_vehicle_inspect_status(inspect)
 
     db.commit()
     db.refresh(inspect)

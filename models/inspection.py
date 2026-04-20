@@ -93,6 +93,8 @@ class VehicleInspect(Base):
     # ✅ รูปในห้องโดยสาร
     cockpit_attachment = Column(String)
 
+    vechicle_status = Column(String, nullable=True, default="pending")
+
 
 
 class InspectionTask(Base):

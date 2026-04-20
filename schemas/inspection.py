@@ -50,6 +50,7 @@ class VehicleInspectUpdate(BaseModel):
 
 class VehicleInspectResponse(VehicleInspectBase):
     vehicle_inspect_id: int
+    vechicle_status: str
 
     class Config:
         orm_mode = True

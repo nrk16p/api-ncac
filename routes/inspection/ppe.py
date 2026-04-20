@@ -14,8 +14,6 @@ router = APIRouter(prefix="/ppe", tags=["PPE"])
 # ======================================================
 def calculate_ppe_status(ppe):
     values = [
-        ppe.shirt_check,
-        ppe.boot_check,
         ppe.helmet_check,
         ppe.glasses_check,
         ppe.mask_check,

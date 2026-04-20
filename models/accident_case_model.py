@@ -31,7 +31,7 @@ class AccidentCase(Base):
     client_id = Column(Integer, ForeignKey("clients.client_id"))
     origin_id = Column(Integer, ForeignKey("locations.location_id"))
     reporter_id = Column(Integer, ForeignKey("users.id"))
-    driver_id = Column(Text, ForeignKey("masterdrivers.driver_id"))
+    driver_id = Column(Integer, ForeignKey("masterdrivers.driver_id"))
     driver_role_id = Column(Integer, ForeignKey("driver_roles.driver_role_id"))
     vehicle_id_head = Column(Integer, ForeignKey("vehicles.vehicle_id"))
     vehicle_id_tail = Column(Integer, ForeignKey("vehicles.vehicle_id"))
