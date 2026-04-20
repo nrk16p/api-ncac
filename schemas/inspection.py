@@ -22,6 +22,8 @@ class DriverCreate(BaseModel):
     number_plate: Optional[str] = None
     truck_number: Optional[str] = None
     truck_type: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
 
 
 class ChecklistItem(BaseModel):

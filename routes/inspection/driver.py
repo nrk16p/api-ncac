@@ -4,6 +4,7 @@ from datetime import datetime
 
 from database import get_db
 from models import inspection as models
+from models.master_model import MasterDriver
 from schemas import inspection as schemas
 
 # ✅ ต้องมีตัวนี้
@@ -35,17 +36,20 @@ def add_driver(
     if exists:
         raise HTTPException(400, "Driver already exists")
 
+    # 🔎 ดึงข้อมูลจาก MasterDriver ก่อน
+    master = db.query(MasterDriver).filter(
+        MasterDriver.driver_id == payload.driver_id
+    ).first()
+
     driver = models.InspectionTaskDriver(
         inspection_task_driver_id=inspection_task_driver_id,
         inspection_task_id=inspection_task_id,
         driver_id=payload.driver_id,
-        number_plate=payload.number_plate,
-        truck_number=payload.truck_number,
-        truck_type=payload.truck_type,
-        first_name=payload.first_name,
-        last_name=payload.last_name,
-
-
+        number_plate=payload.number_plate or (master.number_plate if master else None),
+        truck_number=payload.truck_number or (master.truck_number if master else None),
+        truck_type=payload.truck_type or (master.truck_type if master else None),
+        first_name=master.first_name if master else None,
+        last_name=master.last_name if master else None,
         inspection_task_driver_status="pending"
     )
 
