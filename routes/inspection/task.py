@@ -200,6 +200,18 @@ def get_task(inspection_task_id: str, db: Session = Depends(get_db)):
         else:
             driver_dict["drug_test_status"] = None
 
+        # -----------------------------
+        # 🔥 ADD VEHICLE STATUS
+        # -----------------------------
+        if d.vehicle_inspect_id:
+            vehicle_inspect = db.query(models.VehicleInspect).filter(
+                models.VehicleInspect.vehicle_inspect_id == d.vehicle_inspect_id
+            ).first()
+
+            driver_dict["vehicle_status"] = vehicle_inspect.vechicle_status if vehicle_inspect else None
+        else:
+            driver_dict["vehicle_status"] = None
+
         result.append(driver_dict)
 
     return {
