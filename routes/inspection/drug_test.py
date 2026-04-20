@@ -29,9 +29,9 @@ def calculate_drug_status(drug):
         return "fail"
 
     if (
-        drug.amfetamin == "positive" or
-        drug.kra == "positive" or
-        drug.thc == "positive"
+        drug.amfetamin == "พบสาร" or
+        drug.kra == "พบสาร" or
+        drug.thc == "พบสาร"
     ):
         return "fail"
 
