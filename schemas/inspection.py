@@ -19,9 +19,9 @@ class InspectionTaskCreate(BaseModel):
 class DriverCreate(BaseModel):
 
     driver_id: str
-    number_plate: str
-    truck_number: str
-    truck_type: str
+    number_plate: Optional[str] = None
+    truck_number: Optional[str] = None
+    truck_type: Optional[str] = None
 
 
 class ChecklistItem(BaseModel):
