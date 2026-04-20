@@ -26,7 +26,7 @@ def calculate_vehicle_inspect_status(inspect):
         return "pending"
 
     # 🔴 fail (มีตัวไหน fail)
-    if any(v == "fail" for v in values):
+    if any(v == "ไม่ผ่าน" for v in values):
         return "fail"
 
     # 🟢 pass (ผ่านทั้งหมด)

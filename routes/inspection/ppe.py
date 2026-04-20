@@ -27,7 +27,7 @@ def calculate_ppe_status(ppe):
         return "pending"
 
     # 🔴 fail (มีตัวไหน fail)
-    if any(v == "fail" for v in values):
+    if any(v == "ไม่มี" or v == "ชำรุด" for v in values):
         return "fail"
 
     # 🟢 pass (ผ่านทั้งหมด)
