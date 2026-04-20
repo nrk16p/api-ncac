@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from database import get_db
 from models import inspection as models
 from schemas import inspection as schemas
-from .helper import get_driver_or_404
+from .helper import get_driver_or_404, calculate_overall_inspection_status
 
 router = APIRouter(prefix="/drug-test")
 
@@ -65,6 +65,7 @@ def add_drug_test(
 
     # 🔗 link กลับไปที่ driver
     driver.drug_test_id = drug.drug_test_id
+    driver.inspection_task_driver_status = calculate_overall_inspection_status(driver, db)
     db.commit()
 
     return drug
@@ -98,6 +99,7 @@ def update_drug_test_by_driver(
     # ✅ recalc status
     drug.drug_test_status = calculate_drug_status(drug)
 
+    driver.inspection_task_driver_status = calculate_overall_inspection_status(driver, db)
     db.commit()
     db.refresh(drug)
 

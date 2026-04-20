@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from database import get_db
 from models import inspection as models
 from schemas import inspection as schemas
-from .helper import get_driver_or_404
+from .helper import get_driver_or_404, calculate_overall_inspection_status
 
 router = APIRouter(prefix="/ppe", tags=["PPE"])
 
@@ -60,6 +60,7 @@ def add_ppe(
 
     # 🔗 bind กับ driver
     driver.ppe_test_id = ppe.ppe_test_id
+    driver.inspection_task_driver_status = calculate_overall_inspection_status(driver, db)
     db.commit()
 
     return ppe
@@ -93,6 +94,7 @@ def update_ppe(
     # ✅ recalculate status ทุกครั้ง
     ppe.ppe_status = calculate_ppe_status(ppe)
 
+    driver.inspection_task_driver_status = calculate_overall_inspection_status(driver, db)
     db.commit()
     db.refresh(ppe)
 

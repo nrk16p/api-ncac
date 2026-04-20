@@ -6,7 +6,7 @@ from fastapi.encoders import jsonable_encoder
 from database import get_db
 from models import inspection as models
 from schemas import inspection as schemas
-from .helper import get_driver_or_404
+from .helper import get_driver_or_404, calculate_overall_inspection_status
 
 
 router = APIRouter(prefix="/vehicle-inspect", tags=["Vehicle Inspect"])
@@ -62,6 +62,7 @@ def create_vehicle_inspect(
     db.refresh(inspect)
 
     driver.vehicle_inspect_id = inspect.vehicle_inspect_id
+    driver.inspection_task_driver_status = calculate_overall_inspection_status(driver, db)
     db.commit()
 
     return inspect
@@ -112,6 +113,7 @@ def update_vehicle_inspect(
     # ✅ คำนวณ status
     inspect.vechicle_status = calculate_vehicle_inspect_status(inspect)
 
+    driver.inspection_task_driver_status = calculate_overall_inspection_status(driver, db)
     db.commit()
     db.refresh(inspect)
 
