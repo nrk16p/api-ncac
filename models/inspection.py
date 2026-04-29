@@ -106,7 +106,8 @@ class InspectionTask(Base):
     client_name = Column(String)
     plant_code = Column(String)
     plant_name = Column(String)
-
+    created_at = Column(DateTime, default=lambda: datetime.now(bangkok))
+    updated_at = Column(DateTime, default=lambda: datetime.now(bangkok), onupdate=lambda: datetime.now(bangkok))
     plan_date = Column(Date)
     action_date = Column(DateTime)
     drug_test_attachment = Column(String)
