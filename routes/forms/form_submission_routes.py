@@ -595,6 +595,7 @@ def get_form(
             "lastname": user.lastname if user else None,
             "email": user.email if user else None,
             "image_url": user.image_url if user else None,
+            "employee_status": user.employee_status if user else None,
 
             # =============================
             # DEPARTMENT

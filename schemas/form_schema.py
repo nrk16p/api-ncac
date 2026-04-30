@@ -139,6 +139,7 @@ class FormResponse(BaseModel):
     firstname: str | None
     lastname: str | None
     email: str | None
+    employee_status: str | None
     image_url: str | None
     # 👇 flatten จาก form_master
     form_type: Optional[str]
