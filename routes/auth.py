@@ -153,7 +153,7 @@ def build_user_response(user: User, db: Session):
         "position_level_id": position_level_id,
         "image_url": user.image_url or None,
         "last_login": user.last_login,    # (optional แต่แนะนำ)
-           "employee_status": user.employee_status,    # (optional แต่แนะนำ)
+        "employee_status": user.employee_status,    # (optional แต่แนะนำ)
      
     }
 
@@ -166,11 +166,11 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter_by(username=payload.username).first()
 
     # 🔒 Google user ห้าม login ด้วย password
-    if user and user.password_hash == "__GOOGLE__":
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Use Google login"
-        )
+    # if user and user.password_hash == "__GOOGLE__":
+    #     raise HTTPException(
+    #         status_code=status.HTTP_401_UNAUTHORIZED,
+    #         detail="Use Google login"
+    #     )
 
     if user and user.check_password(payload.password):
         token = create_access_token(user.username)
@@ -266,19 +266,23 @@ def login_google(payload: GoogleLoginRequest, db: Session = Depends(get_db)):
     now = datetime.now(timezone.utc)   # ✅ จุดเดียวใช้ทั้ง function
 
     if not user:
-        user = User(
-            username=username,
-            email=email,
-            firstname=idinfo.get("given_name"),
-            lastname=idinfo.get("family_name"),
-            employee_id=employee_id,
-            image_url=image_url,
-            last_login=now
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="ไม่พบบัญชีพนักงานในระบบ กรุณาติดต่อไอทีเพื่อสร้างบัญชีให้ก่อน"
         )
-        user.password_hash = "__GOOGLE__"
-        db.add(user)
-        db.commit()
-        db.refresh(user)
+        # user = User(
+        #     username=username,
+        #     email=email,
+        #     firstname=idinfo.get("given_name"),
+        #     lastname=idinfo.get("family_name"),
+        #     employee_id=employee_id,
+        #     image_url=image_url,
+        #     last_login=now
+        # )
+        # user.password_hash = "__GOOGLE__"
+        # db.add(user)
+        # db.commit()
+        # db.refresh(user)
     else:
         user.last_login = now
 
