@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from datetime import date
 import calendar as pycal
@@ -13,20 +13,27 @@ router = APIRouter(prefix="/calendar")
 
 @router.get("")
 def get_calendar(
-    fleet: str,
-    plant: str,
-    driver_id: str,   # 👈 รับเป็น string
     year: int,
     month: int,
+
+    # optional filters
+    fleet: str | None = Query(default=None),
+    plant: str | None = Query(default=None),
+
+    # optional: ถ้าส่งมา จะแสดง driver_booking ของคนนั้น
+    driver_id: str | None = Query(default=None),
+
     db: Session = Depends(get_db)
 ):
     # =========================
-    # 🔥 FIX: enforce type
+    # Normalize input
     # =========================
-    driver_id = str(driver_id)
+    fleet = fleet.strip() if fleet else None
+    plant = plant.strip() if plant else None
+    driver_id = str(driver_id).strip() if driver_id else None
 
     # =========================
-    # 📅 date range
+    # Date range
     # =========================
     days = pycal.monthrange(year, month)[1]
 
@@ -34,62 +41,110 @@ def get_calendar(
     end_date = date(year, month, days)
 
     # =========================
-    # 🧠 daily_quota
+    # Daily quota query
     # =========================
-    rows = db.query(LeaveDailyQuota).filter(
-        LeaveDailyQuota.fleet == fleet,
-        LeaveDailyQuota.plant == plant,
+    quota_query = db.query(LeaveDailyQuota).filter(
         LeaveDailyQuota.date >= start_date,
         LeaveDailyQuota.date <= end_date
+    )
+
+    if fleet:
+        quota_query = quota_query.filter(LeaveDailyQuota.fleet == fleet)
+
+    if plant:
+        quota_query = quota_query.filter(LeaveDailyQuota.plant == plant)
+
+    quota_rows = quota_query.order_by(
+        LeaveDailyQuota.date.asc(),
+        LeaveDailyQuota.fleet.asc(),
+        LeaveDailyQuota.plant.asc()
     ).all()
 
     # =========================
-    # 🧠 booking (optimized select)
+    # Booking query
     # =========================
-    bookings = db.query(
+    booking_query = db.query(
+        DriverLeaveBooking.booking_id,
         DriverLeaveBooking.leave_date,
+        DriverLeaveBooking.fleet,
+        DriverLeaveBooking.plant,
         DriverLeaveBooking.driver_id,
-        DriverLeaveBooking.status
+        DriverLeaveBooking.status,
+        DriverLeaveBooking.leave_type,
+        DriverLeaveBooking.remark
     ).filter(
-        DriverLeaveBooking.fleet == fleet,
-        DriverLeaveBooking.plant == plant,
         DriverLeaveBooking.leave_date >= start_date,
         DriverLeaveBooking.leave_date <= end_date,
         DriverLeaveBooking.status.in_(["pending", "approve"])
-    ).all()
+    )
+
+    if fleet:
+        booking_query = booking_query.filter(DriverLeaveBooking.fleet == fleet)
+
+    if plant:
+        booking_query = booking_query.filter(DriverLeaveBooking.plant == plant)
+
+    bookings = booking_query.all()
 
     # =========================
-    # 🧠 group
+    # Group booking by date + fleet + plant
     # =========================
     booking_map = defaultdict(list)
     driver_map = {}
 
-    for leave_date, b_driver_id, status in bookings:
-        booking_map[leave_date].append(status)
+    for b in bookings:
+        key = (b.leave_date, b.fleet, b.plant)
 
-        # 🔥 FIX: compare safely
-        if str(b_driver_id) == driver_id:
-            driver_map[leave_date] = status
+        booking_item = {
+            "booking_id": b.booking_id,
+            "driver_id": b.driver_id,
+            "status": b.status,
+            "leave_type": b.leave_type,
+            "remark": b.remark
+        }
+
+        booking_map[key].append(booking_item)
+
+        if driver_id and str(b.driver_id) == driver_id:
+            driver_map[key] = booking_item
 
     # =========================
-    # 🧠 build response
+    # Build response
     # =========================
     result = []
 
-    for r in rows:
-        used = len(booking_map[r.date])
+    for r in quota_rows:
+        key = (r.date, r.fleet, r.plant)
+
+        bookings_on_day = booking_map[key]
+        used = len(bookings_on_day)
         remaining = max(0, r.quota - used)
 
-        result.append({
+        item = {
             "date": r.date,
+            "fleet": r.fleet,
+            "plant": r.plant,
             "quota": r.quota,
             "used": used,
             "remaining": remaining,
             "is_full": used >= r.quota,
-            "driver_booking": driver_map.get(r.date)  # None / pending / approve
-        })
+            "bookings": bookings_on_day
+        }
+
+        # ถ้ามี driver_id ค่อยเพิ่ม driver_booking
+        if driver_id:
+            item["driver_booking"] = driver_map.get(key)
+
+        result.append(item)
 
     return {
         "status": "success",
+        "filters": {
+            "year": year,
+            "month": month,
+            "fleet": fleet,
+            "plant": plant,
+            "driver_id": driver_id
+        },
         "data": result
     }

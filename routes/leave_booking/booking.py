@@ -213,3 +213,157 @@ def get_my_booking(
             "remaining_monthly_quota": max(0, monthly_limit - current_used)
         }
     }
+
+@router.get("/admin")
+def get_admin_booking(
+    year: int | None = None,
+    month: int | None = None,
+    fleet: str | None = None,
+    plant: str | None = None,
+    db: Session = Depends(get_db)
+):
+    # =========================
+    # Normalize filters
+    # =========================
+    fleet = fleet.strip() if fleet else None
+    plant = plant.strip() if plant else None
+
+    query = db.query(DriverLeaveBooking)
+
+    # =========================
+    # Filter by year/month
+    # =========================
+    start = None
+    end = None
+
+    if year and month:
+        month_days = calendar.monthrange(year, month)[1]
+        start = date(year, month, 1)
+        end = date(year, month, month_days)
+
+        query = query.filter(
+            DriverLeaveBooking.leave_date >= start,
+            DriverLeaveBooking.leave_date <= end
+        )
+
+    elif year and not month:
+        start = date(year, 1, 1)
+        end = date(year, 12, 31)
+
+        query = query.filter(
+            DriverLeaveBooking.leave_date >= start,
+            DriverLeaveBooking.leave_date <= end
+        )
+
+    elif month and not year:
+        raise HTTPException(
+            status_code=400,
+            detail="year is required when month is provided"
+        )
+
+    # =========================
+    # Optional fleet / plant filter
+    # =========================
+    if fleet:
+        query = query.filter(DriverLeaveBooking.fleet == fleet)
+
+    if plant:
+        query = query.filter(DriverLeaveBooking.plant == plant)
+
+    # =========================
+    # Get data
+    # =========================
+    data = query.order_by(
+        DriverLeaveBooking.leave_date.asc(),
+        DriverLeaveBooking.fleet.asc(),
+        DriverLeaveBooking.plant.asc(),
+        DriverLeaveBooking.driver_id.asc()
+    ).all()
+
+    # =========================
+    # Summary
+    # =========================
+    total = len(data)
+    pending = len([x for x in data if x.status == "pending"])
+    approve = len([x for x in data if x.status == "approve"])
+    reject = len([x for x in data if x.status == "reject"])
+    cancel = len([x for x in data if x.status == "cancel"])
+
+    return {
+        "status": "success",
+        "filters": {
+            "year": year,
+            "month": month,
+            "fleet": fleet,
+            "plant": plant
+        },
+        "summary": {
+            "total": total,
+            "pending": pending,
+            "approve": approve,
+            "reject": reject,
+            "cancel": cancel
+        },
+        "data": data
+    }
+
+@router.put("/{booking_id}/status")
+def update_booking_status(
+    booking_id: int,
+    payload: dict,
+    db: Session = Depends(get_db)
+):
+    # =========================
+    # Normalize input
+    # =========================
+    new_status = str(payload.get("status") or "").strip().lower()
+    admin_remark = payload.get("admin_remark")
+
+    allowed_status = ["pending", "approve", "reject", "cancel"]
+
+    if new_status not in allowed_status:
+        raise HTTPException(
+            status_code=400,
+            detail=f"invalid status. allowed: {allowed_status}"
+        )
+
+    # =========================
+    # Find booking
+    # =========================
+    booking = db.query(DriverLeaveBooking).filter(
+        DriverLeaveBooking.booking_id == booking_id
+    ).first()
+
+    if not booking:
+        raise HTTPException(
+            status_code=404,
+            detail="booking not found"
+        )
+
+    # =========================
+    # Update status
+    # =========================
+    booking.status = new_status
+
+    # Optional: append admin remark into existing remark
+    if admin_remark:
+        old_remark = booking.remark or ""
+        booking.remark = f"{old_remark}\n[ADMIN] {admin_remark}".strip()
+
+    db.commit()
+    db.refresh(booking)
+
+    return {
+        "status": "success",
+        "message": "booking status updated",
+        "data": {
+            "booking_id": booking.booking_id,
+            "fleet": booking.fleet,
+            "plant": booking.plant,
+            "driver_id": booking.driver_id,
+            "leave_date": booking.leave_date,
+            "status": booking.status,
+            "leave_type": booking.leave_type,
+            "remark": booking.remark
+        }
+    }
