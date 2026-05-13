@@ -8,6 +8,8 @@ from database import get_db
 from models.leave_booking.booking import DriverLeaveBooking
 from models.leave_booking.daily_quota import LeaveDailyQuota
 from models.leave_booking.blackout import LeaveBlackout
+from models.master.plant import PlantMaster
+from models.master_model import MasterDriver
 
 router = APIRouter(prefix="/booking")
 
@@ -281,6 +283,46 @@ def get_admin_booking(
     ).all()
 
     # =========================
+    # Batch lookup driver_name / plant_name
+    # =========================
+    driver_ids = list({b.driver_id for b in data})
+    plant_fleet_pairs = list({(b.plant, b.fleet) for b in data})
+    plant_codes = list({p for p, _ in plant_fleet_pairs})
+
+    drivers = db.query(MasterDriver).filter(
+        MasterDriver.driver_id.in_(driver_ids)
+    ).all()
+    plants = db.query(PlantMaster).filter(
+        PlantMaster.plant_code.in_(plant_codes)
+    ).all()
+
+    driver_map = {
+        str(d.driver_id): f"{d.first_name} {d.last_name}"
+        for d in drivers
+    }
+    plant_map = {
+        (p.plant_code, p.fleet): p.plant_name
+        for p in plants
+    }
+
+    result = [
+        {
+            "booking_id": b.booking_id,
+            "driver_id": b.driver_id,
+            "driver_name": driver_map.get(str(b.driver_id)),
+            "fleet": b.fleet,
+            "plant": b.plant,
+            "plant_name": plant_map.get((b.plant, b.fleet)),
+            "leave_date": b.leave_date,
+            "leave_type": b.leave_type,
+            "status": b.status,
+            "remark": b.remark,
+            "created_at": b.created_at,
+        }
+        for b in data
+    ]
+
+    # =========================
     # Summary
     # =========================
     total = len(data)
@@ -304,7 +346,7 @@ def get_admin_booking(
             "reject": reject,
             "cancel": cancel
         },
-        "data": data
+        "data": result
     }
 
 @router.put("/{booking_id}/status")
@@ -333,13 +375,13 @@ def update_booking_status(
     booking = db.query(DriverLeaveBooking).filter(
         DriverLeaveBooking.booking_id == booking_id
     ).first()
-
+    
     if not booking:
         raise HTTPException(
             status_code=404,
             detail="booking not found"
         )
-
+    
     # =========================
     # Update status
     # =========================
