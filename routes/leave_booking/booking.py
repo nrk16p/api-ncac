@@ -7,6 +7,7 @@ import calendar
 from database import get_db
 from models.leave_booking.booking import DriverLeaveBooking
 from models.leave_booking.daily_quota import LeaveDailyQuota
+from models.leave_booking.monthly_quota import MonthlyLeaveQuota
 from models.leave_booking.blackout import LeaveBlackout
 from models.master.plant import PlantMaster
 from models.master_model import MasterDriver
@@ -20,6 +21,7 @@ router = APIRouter(prefix="/booking")
 def parse_date(d):
     if isinstance(d, date):
         return d
+
     try:
         return datetime.strptime(d, "%Y-%m-%d").date()
     except Exception:
@@ -53,6 +55,104 @@ def get_driver_monthly_limit(year: int, month: int) -> int:
 
 
 # ======================================================
+# 🧠 Helper: validate booking quota
+# Rule:
+# 1) 1 plant / 1 day cannot exceed LeaveDailyQuota.quota
+# 2) all plants combined / fleet / day cannot exceed MonthlyLeaveQuota.daily_quota
+# ======================================================
+def validate_booking_quota(
+    db: Session,
+    fleet: str,
+    plant: str,
+    leave_date: date,
+    exclude_booking_id: int | None = None
+):
+    # =========================
+    # 1) Plant daily quota
+    # =========================
+    quota = db.query(LeaveDailyQuota).filter(
+        LeaveDailyQuota.fleet == fleet,
+        LeaveDailyQuota.plant == plant,
+        LeaveDailyQuota.date == leave_date
+    ).first()
+
+    if not quota:
+        raise HTTPException(
+            status_code=400,
+            detail="no quota"
+        )
+
+    plant_used_query = db.query(
+        func.count(DriverLeaveBooking.booking_id)
+    ).filter(
+        DriverLeaveBooking.fleet == fleet,
+        DriverLeaveBooking.plant == plant,
+        DriverLeaveBooking.leave_date == leave_date,
+        DriverLeaveBooking.status.in_(["pending", "approve"])
+    )
+
+    if exclude_booking_id:
+        plant_used_query = plant_used_query.filter(
+            DriverLeaveBooking.booking_id != exclude_booking_id
+        )
+
+    plant_used = plant_used_query.scalar() or 0
+
+    if plant_used >= quota.quota:
+        raise HTTPException(
+            status_code=400,
+            detail="plant quota full"
+        )
+
+    # =========================
+    # 2) Fleet daily quota
+    # =========================
+    monthly_quota = db.query(MonthlyLeaveQuota).filter(
+        MonthlyLeaveQuota.fleet == fleet,
+        MonthlyLeaveQuota.year == leave_date.year,
+        MonthlyLeaveQuota.month == leave_date.month,
+        MonthlyLeaveQuota.is_latest == True,
+        MonthlyLeaveQuota.is_active == True
+    ).first()
+
+    if not monthly_quota:
+        raise HTTPException(
+            status_code=400,
+            detail="monthly quota not found or inactive"
+        )
+
+    fleet_used_query = db.query(
+        func.count(DriverLeaveBooking.booking_id)
+    ).filter(
+        DriverLeaveBooking.fleet == fleet,
+        DriverLeaveBooking.leave_date == leave_date,
+        DriverLeaveBooking.status.in_(["pending", "approve"])
+    )
+
+    if exclude_booking_id:
+        fleet_used_query = fleet_used_query.filter(
+            DriverLeaveBooking.booking_id != exclude_booking_id
+        )
+
+    fleet_used = fleet_used_query.scalar() or 0
+
+    if fleet_used >= monthly_quota.daily_quota:
+        raise HTTPException(
+            status_code=400,
+            detail="fleet daily quota full"
+        )
+
+    return {
+        "plant_quota": quota.quota,
+        "plant_used": plant_used,
+        "plant_remaining": max(0, quota.quota - plant_used),
+        "fleet_daily_quota": monthly_quota.daily_quota,
+        "fleet_used": fleet_used,
+        "fleet_remaining": max(0, monthly_quota.daily_quota - fleet_used)
+    }
+
+
+# ======================================================
 # 🚀 CREATE BOOKING
 # ======================================================
 @router.post("/driver")
@@ -73,28 +173,6 @@ def create_booking(payload: dict, db: Session = Depends(get_db)):
     # =========================
     if is_blackout(db, fleet, plant, d):
         raise HTTPException(400, "blackout")
-
-    # =========================
-    # 📊 quota
-    # =========================
-    quota = db.query(LeaveDailyQuota).filter(
-        LeaveDailyQuota.fleet == fleet,
-        LeaveDailyQuota.plant == plant,
-        LeaveDailyQuota.date == d
-    ).first()
-
-    if not quota:
-        raise HTTPException(400, "no quota")
-
-    used = db.query(func.count(DriverLeaveBooking.booking_id)).filter(
-        DriverLeaveBooking.fleet == fleet,
-        DriverLeaveBooking.plant == plant,
-        DriverLeaveBooking.leave_date == d,
-        DriverLeaveBooking.status.in_(["pending", "approve"])
-    ).scalar() or 0
-
-    if used >= quota.quota:
-        raise HTTPException(400, "quota full")
 
     # =========================
     # 🔁 duplicate check
@@ -122,7 +200,9 @@ def create_booking(payload: dict, db: Session = Depends(get_db)):
 
     monthly_limit = get_driver_monthly_limit(year, month)
 
-    current_used = db.query(func.count(DriverLeaveBooking.booking_id)).filter(
+    current_used = db.query(
+        func.count(DriverLeaveBooking.booking_id)
+    ).filter(
         DriverLeaveBooking.driver_id == driver_id,
         DriverLeaveBooking.leave_date >= month_start,
         DriverLeaveBooking.leave_date <= month_end,
@@ -134,6 +214,19 @@ def create_booking(payload: dict, db: Session = Depends(get_db)):
             400,
             f"monthly limit reached ({monthly_limit} days)"
         )
+
+    # =========================
+    # 📊 quota
+    # Rule:
+    # 1) this plant cannot exceed plant daily quota
+    # 2) all plants combined cannot exceed fleet daily quota
+    # =========================
+    quota_summary = validate_booking_quota(
+        db=db,
+        fleet=fleet,
+        plant=plant,
+        leave_date=d
+    )
 
     # =========================
     # 💾 create
@@ -164,9 +257,31 @@ def create_booking(payload: dict, db: Session = Depends(get_db)):
             "status": b.status,
             "leave_type": b.leave_type,
             "remark": b.remark,
+
+            # Driver monthly leave rule
             "monthly_limit": monthly_limit,
             "current_used_after_create": current_used + 1,
-            "remaining_monthly_quota": max(0, monthly_limit - (current_used + 1))
+            "remaining_monthly_quota": max(
+                0,
+                monthly_limit - (current_used + 1)
+            ),
+
+            # Quota summary
+            "quota_summary": {
+                "plant_quota": quota_summary["plant_quota"],
+                "plant_used_after_create": quota_summary["plant_used"] + 1,
+                "plant_remaining_after_create": max(
+                    0,
+                    quota_summary["plant_quota"] - (quota_summary["plant_used"] + 1)
+                ),
+
+                "fleet_daily_quota": quota_summary["fleet_daily_quota"],
+                "fleet_used_after_create": quota_summary["fleet_used"] + 1,
+                "fleet_remaining_after_create": max(
+                    0,
+                    quota_summary["fleet_daily_quota"] - (quota_summary["fleet_used"] + 1)
+                )
+            }
         }
     }
 
@@ -193,9 +308,13 @@ def get_my_booking(
         DriverLeaveBooking.driver_id == driver_id,
         DriverLeaveBooking.leave_date >= start,
         DriverLeaveBooking.leave_date <= end
-    ).order_by(DriverLeaveBooking.leave_date.asc()).all()
+    ).order_by(
+        DriverLeaveBooking.leave_date.asc()
+    ).all()
 
-    current_used = db.query(func.count(DriverLeaveBooking.booking_id)).filter(
+    current_used = db.query(
+        func.count(DriverLeaveBooking.booking_id)
+    ).filter(
         DriverLeaveBooking.driver_id == driver_id,
         DriverLeaveBooking.leave_date >= start,
         DriverLeaveBooking.leave_date <= end,
@@ -216,6 +335,10 @@ def get_my_booking(
         }
     }
 
+
+# ======================================================
+# 📄 ADMIN BOOKING
+# ======================================================
 @router.get("/admin")
 def get_admin_booking(
     year: int | None = None,
@@ -235,9 +358,6 @@ def get_admin_booking(
     # =========================
     # Filter by year/month
     # =========================
-    start = None
-    end = None
-
     if year and month:
         month_days = calendar.monthrange(year, month)[1]
         start = date(year, month, 1)
@@ -291,15 +411,17 @@ def get_admin_booking(
 
     drivers = db.query(MasterDriver).filter(
         MasterDriver.driver_id.in_(driver_ids)
-    ).all()
+    ).all() if driver_ids else []
+
     plants = db.query(PlantMaster).filter(
         PlantMaster.plant_code.in_(plant_codes)
-    ).all()
+    ).all() if plant_codes else []
 
     driver_map = {
         str(d.driver_id): f"{d.first_name} {d.last_name}"
         for d in drivers
     }
+
     plant_map = {
         (p.plant_code, p.fleet): p.plant_name
         for p in plants
@@ -349,6 +471,10 @@ def get_admin_booking(
         "data": result
     }
 
+
+# ======================================================
+# 🔄 UPDATE BOOKING STATUS
+# ======================================================
 @router.put("/{booking_id}/status")
 def update_booking_status(
     booking_id: int,
@@ -375,13 +501,33 @@ def update_booking_status(
     booking = db.query(DriverLeaveBooking).filter(
         DriverLeaveBooking.booking_id == booking_id
     ).first()
-    
+
     if not booking:
         raise HTTPException(
             status_code=404,
             detail="booking not found"
         )
-    
+
+    # =========================
+    # Validate quota before approve
+    # =========================
+    # Case:
+    # - current status = reject/cancel
+    # - admin changes to approve
+    # Need to re-check plant quota and fleet daily quota
+    #
+    # If current status is already pending or approve,
+    # it is already counted in used quota, so skip this check.
+    # =========================
+    if new_status == "approve" and booking.status not in ["pending", "approve"]:
+        validate_booking_quota(
+            db=db,
+            fleet=booking.fleet,
+            plant=booking.plant,
+            leave_date=booking.leave_date,
+            exclude_booking_id=booking.booking_id
+        )
+
     # =========================
     # Update status
     # =========================

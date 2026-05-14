@@ -11,6 +11,8 @@ from models.leave_booking.daily_quota import LeaveDailyQuota
 from models.master.plant import PlantMaster
 
 router = APIRouter(prefix="/monthly-quota")
+
+
 # ======================================================
 # 🧠 Helper
 # ======================================================
@@ -19,20 +21,27 @@ def get_days_in_month(year: int, month: int) -> int:
 
 
 def calculate_daily_quota(total_driver: int, percentage: float) -> int:
+    """
+    Quota รวมทั้ง fleet ต่อ 1 วัน
+    Example:
+    total_driver = 200
+    percentage = 0.03
+    daily_quota = floor(200 * 0.03) = 6
+    """
     value = math.floor(total_driver * percentage)
     return max(1, value)
 
 
 def calculate_monthly_quota(total_driver: int, days: int, percentage: float) -> int:
+    """
+    Quota รวมทั้ง fleet ต่อเดือน
+    """
     value = math.floor(total_driver * days * percentage)
     return max(1, value)
 
 
 # ======================================================
-# 🚀 CREATE (percentage-based)
-# ======================================================
-# ======================================================
-# 🚀 CREATE (percentage-based)
+# 🚀 CREATE Monthly Quota
 # ======================================================
 @router.post("/")
 def create_monthly_quota(payload: dict, db: Session = Depends(get_db)):
@@ -41,33 +50,54 @@ def create_monthly_quota(payload: dict, db: Session = Depends(get_db)):
     # ✅ Validate
     # ================================
     if payload.get("percentage") is None:
-        raise HTTPException(400, "percentage is required")
+        raise HTTPException(status_code=400, detail="percentage is required")
 
     if payload["percentage"] <= 0 or payload["percentage"] > 1:
-        raise HTTPException(400, "percentage must be between 0 and 1")
+        raise HTTPException(
+            status_code=400,
+            detail="percentage must be between 0 and 1"
+        )
 
-    if payload["month"] < 1 or payload["month"] > 12:
-        raise HTTPException(400, "invalid month")
+    if payload.get("month") is None or payload["month"] < 1 or payload["month"] > 12:
+        raise HTTPException(status_code=400, detail="invalid month")
 
-    if payload["total_driver"] <= 0:
-        raise HTTPException(400, "total_driver must be > 0")
+    if payload.get("year") is None:
+        raise HTTPException(status_code=400, detail="year is required")
+
+    if payload.get("fleet") is None or str(payload["fleet"]).strip() == "":
+        raise HTTPException(status_code=400, detail="fleet is required")
+
+    if payload.get("total_driver") is None or payload["total_driver"] <= 0:
+        raise HTTPException(status_code=400, detail="total_driver must be > 0")
 
     # ================================
     # 📅 Setup
     # ================================
-    year = payload["year"]
-    month = payload["month"]
-    fleet = payload["fleet"]
-    total_driver = payload["total_driver"]
-    percentage = payload["percentage"]
+    year = int(payload["year"])
+    month = int(payload["month"])
+    fleet = str(payload["fleet"]).strip()
+    total_driver = int(payload["total_driver"])
+    percentage = float(payload["percentage"])
 
     days = get_days_in_month(year, month)
 
+    # ✅ This is fleet-level quota per day
+    # Example: daily_quota = 6 means all plants combined can book max 6 per day
     daily_quota = calculate_daily_quota(total_driver, percentage)
-    monthly_quota_limit = calculate_monthly_quota(total_driver, days, percentage)
+
+    # ✅ This is fleet-level quota per month
+    monthly_quota_limit = calculate_monthly_quota(
+        total_driver=total_driver,
+        days=days,
+        percentage=percentage
+    )
+
+    # ✅ This is plant-level quota per day
+    # New rule: each plant can have only 1 booking per day
+    plant_daily_quota = 1
 
     # ================================
-    # 📦 Monthly Quota (create / reuse)
+    # 📦 Monthly Quota create / reuse
     # ================================
     exists = db.query(MonthlyLeaveQuota).filter(
         MonthlyLeaveQuota.fleet == fleet,
@@ -83,13 +113,19 @@ def create_monthly_quota(payload: dict, db: Session = Depends(get_db)):
             month=month,
             percentage=percentage,
             total_driver=total_driver,
+
+            # ✅ quota รวมทั้ง fleet ต่อวัน
             daily_quota=daily_quota,
+
+            # ✅ quota รวมทั้ง fleet ต่อเดือน
             monthly_quota_limit=monthly_quota_limit,
+
             is_latest=True
         )
         db.add(quota)
         db.flush()
     else:
+        # ถ้ามี monthly quota อยู่แล้ว ใช้ค่าเดิม
         daily_quota = exists.daily_quota
         monthly_quota_limit = exists.monthly_quota_limit
 
@@ -101,14 +137,20 @@ def create_monthly_quota(payload: dict, db: Session = Depends(get_db)):
     ).all()
 
     if not plants:
-        raise HTTPException(400, "No plants found for this fleet")
+        raise HTTPException(
+            status_code=400,
+            detail="No plants found for this fleet"
+        )
 
     # ================================
-    # 🔥 FIX: filter existing by month
+    # 📅 Date range
     # ================================
     start_date = date(year, month, 1)
     end_date = date(year, month, days)
 
+    # ================================
+    # 🔎 Existing Daily Quota
+    # ================================
     existing = db.query(LeaveDailyQuota).filter(
         LeaveDailyQuota.fleet == fleet,
         LeaveDailyQuota.date >= start_date,
@@ -138,9 +180,14 @@ def create_monthly_quota(payload: dict, db: Session = Depends(get_db)):
                     fleet=fleet,
                     plant=plant.plant_code,
                     date=target_date,
-                    quota=daily_quota
+
+                    # ✅ UPDATED LOGIC
+                    # 1 plant / 1 day = max 1 quota
+                    # ไม่ใช้ daily_quota ตรงนี้แล้ว
+                    quota=plant_daily_quota
                 )
             )
+
             created_count += 1
 
     db.commit()
@@ -156,14 +203,25 @@ def create_monthly_quota(payload: dict, db: Session = Depends(get_db)):
             "year": year,
             "month": month,
             "days_in_month": days,
-            "daily_quota": daily_quota,
+
+            # quota รวมทั้ง fleet ต่อวัน
+            "fleet_daily_quota": daily_quota,
+
+            # quota ต่อ plant ต่อวัน
+            "plant_daily_quota": plant_daily_quota,
+
+            # quota รวมทั้ง fleet ต่อเดือน
             "monthly_quota_limit": monthly_quota_limit,
+
             "daily_quota_created": created_count,
             "daily_quota_skipped": skipped_count,
             "total_expected": len(plants) * days,
+            "total_plants": len(plants),
             "daily_status": "created" if created_count > 0 else "already_exists"
         }
     }
+
+
 # ======================================================
 # 📄 LIST
 # ======================================================
@@ -181,7 +239,10 @@ def list_monthly_quota(
         MonthlyLeaveQuota.is_latest == True
     ).all()
 
-    return {"status": "success", "data": data}
+    return {
+        "status": "success",
+        "data": data
+    }
 
 
 # ======================================================
@@ -202,36 +263,86 @@ def get_monthly_quota(
     ).first()
 
     if not data:
-        raise HTTPException(404, "Quota not found")
+        raise HTTPException(status_code=404, detail="Quota not found")
 
-    return {"status": "success", "data": data}
+    return {
+        "status": "success",
+        "data": data
+    }
 
 
 # ======================================================
-# 🔄 UPDATE (versioning)
+# 🔄 UPDATE Monthly Quota Version
 # ======================================================
 @router.put("/")
 def update_monthly_quota(payload: dict, db: Session = Depends(get_db)):
 
+    # ================================
+    # ✅ Validate
+    # ================================
+    required_fields = ["fleet", "year", "month", "total_driver", "percentage"]
+
+    for field in required_fields:
+        if payload.get(field) is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{field} is required"
+            )
+
+    if payload["percentage"] <= 0 or payload["percentage"] > 1:
+        raise HTTPException(
+            status_code=400,
+            detail="percentage must be between 0 and 1"
+        )
+
+    if payload["month"] < 1 or payload["month"] > 12:
+        raise HTTPException(status_code=400, detail="invalid month")
+
+    if payload["total_driver"] <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="total_driver must be > 0"
+        )
+
+    fleet = str(payload["fleet"]).strip()
+    year = int(payload["year"])
+    month = int(payload["month"])
+
     old = db.query(MonthlyLeaveQuota).filter(
-        MonthlyLeaveQuota.fleet == payload["fleet"],
-        MonthlyLeaveQuota.year == payload["year"],
-        MonthlyLeaveQuota.month == payload["month"],
+        MonthlyLeaveQuota.fleet == fleet,
+        MonthlyLeaveQuota.year == year,
+        MonthlyLeaveQuota.month == month,
         MonthlyLeaveQuota.is_latest == True
     ).first()
 
     if not old:
-        raise HTTPException(404, "Quota not found")
+        raise HTTPException(status_code=404, detail="Quota not found")
 
-    # mark old as not latest
+    # ================================
+    # Mark old version as not latest
+    # ================================
     old.is_latest = False
     db.flush()
 
-    # recalculate
-    days = get_days_in_month(payload["year"], payload["month"])
-    daily_quota = calculate_daily_quota(payload["total_driver"], payload["percentage"])
-    monthly_quota_limit = calculate_monthly_quota(payload["total_driver"], days, payload["percentage"])
+    # ================================
+    # Recalculate fleet-level quota
+    # ================================
+    days = get_days_in_month(year, month)
 
+    daily_quota = calculate_daily_quota(
+        total_driver=int(payload["total_driver"]),
+        percentage=float(payload["percentage"])
+    )
+
+    monthly_quota_limit = calculate_monthly_quota(
+        total_driver=int(payload["total_driver"]),
+        days=days,
+        percentage=float(payload["percentage"])
+    )
+
+    payload["fleet"] = fleet
+    payload["year"] = year
+    payload["month"] = month
     payload["daily_quota"] = daily_quota
     payload["monthly_quota_limit"] = monthly_quota_limit
 
@@ -242,12 +353,49 @@ def update_monthly_quota(payload: dict, db: Session = Depends(get_db)):
     )
 
     db.add(new_quota)
+
+    # ======================================================
+    # ✅ UPDATED LOGIC FOR EXISTING LeaveDailyQuota
+    # ======================================================
+    # ถ้ามี LeaveDailyQuota ของเดือนนี้อยู่แล้ว
+    # ให้ update quota ราย plant เป็น 1
+    # เพราะ rule ใหม่คือ 1 plant / 1 day = quota 1
+    # ======================================================
+    start_date = date(year, month, 1)
+    end_date = date(year, month, days)
+
+    daily_rows = db.query(LeaveDailyQuota).filter(
+        LeaveDailyQuota.fleet == fleet,
+        LeaveDailyQuota.date >= start_date,
+        LeaveDailyQuota.date <= end_date
+    ).all()
+
+    updated_daily_quota_count = 0
+
+    for row in daily_rows:
+        if row.quota != 1:
+            row.quota = 1
+            updated_daily_quota_count += 1
+
     db.commit()
 
     return {
         "status": "success",
         "message": "Quota updated",
-        "daily_quota": daily_quota
+        "data": {
+            "fleet": fleet,
+            "year": year,
+            "month": month,
+
+            # quota รวมทั้ง fleet ต่อวัน
+            "fleet_daily_quota": daily_quota,
+
+            # quota ต่อ plant ต่อวัน
+            "plant_daily_quota": 1,
+
+            "monthly_quota_limit": monthly_quota_limit,
+            "updated_daily_quota_count": updated_daily_quota_count
+        }
     }
 
 
@@ -270,9 +418,12 @@ def toggle_status(
     ).first()
 
     if not quota:
-        raise HTTPException(404, "Quota not found")
+        raise HTTPException(status_code=404, detail="Quota not found")
 
     quota.is_active = is_active
     db.commit()
 
-    return {"status": "success", "is_active": is_active}
+    return {
+        "status": "success",
+        "is_active": is_active
+    }
