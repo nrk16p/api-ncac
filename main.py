@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.middleware.cors import CORSMiddleware
+import asyncio
 
 from database import engine, Base
 import models
@@ -121,6 +122,15 @@ app.include_router(form_submission_router)
 
 # 4️⃣ Form Master (Template)  ⚠️ มี /{form_code}
 app.include_router(form_master_router)
+
+
+# ------------------------------
+# Startup
+# ------------------------------
+@app.on_event("startup")
+async def startup_event():
+    from routes.leave_booking.system_status import periodic_broadcast
+    asyncio.create_task(periodic_broadcast())
 
 
 # ------------------------------
