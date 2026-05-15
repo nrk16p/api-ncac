@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 from database import get_db
 from models import MasterDriver
+from models.master.plant import PlantMaster
 from sqlalchemy.dialects.postgresql import insert
 
 router = APIRouter(prefix="/masterdrivers", tags=["Master Drivers"])
@@ -41,6 +42,7 @@ class MasterDriverResponse(MasterDriverBase):
     client_name: Optional[str] = None
     plant_code: Optional[str] = None
     plant_name: Optional[str] = None
+    fleet: Optional[str] = None
     truck_number: Optional[str] = None
     truck_type: Optional[str] = None
     status: Optional[str] = None
@@ -124,4 +126,24 @@ def get_driver_by_id(driver_id: str, db: Session = Depends(get_db)):
     driver = db.query(MasterDriver).filter(MasterDriver.driver_id == driver_id).first()
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
-    return driver
+
+    plant = db.query(PlantMaster).filter(
+        PlantMaster.plant_code == driver.plant_code
+    ).first() if driver.plant_code else None
+
+    return {
+        "driver_id": driver.driver_id,
+        "first_name": driver.first_name,
+        "last_name": driver.last_name,
+        "site_id": driver.site_id,
+        "driver_role_id": driver.driver_role_id,
+        "client_name": driver.client_name,
+        "plant_code": driver.plant_code,
+        "plant_name": driver.plant_name,
+        "fleet": plant.fleet if plant else None,
+        "truck_number": driver.truck_number,
+        "truck_type": driver.truck_type,
+        "status": driver.status,
+        "number_plate": driver.number_plate,
+        "month_year": driver.month_year,
+    }
