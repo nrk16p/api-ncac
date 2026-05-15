@@ -1,8 +1,10 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 from typing import List
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import asyncio
+
+BANGKOK = timezone(timedelta(hours=7))
 
 router = APIRouter()
 
@@ -27,14 +29,13 @@ class ConnectionManager:
             self.active.remove(ws)
 
     async def broadcast(self, data: dict):
-        dead = []
-        for ws in self.active:
+        async def _send(ws: WebSocket):
             try:
                 await ws.send_json(data)
             except Exception:
-                dead.append(ws)
-        for ws in dead:
-            self.disconnect(ws)
+                self.disconnect(ws)
+
+        await asyncio.gather(*[_send(ws) for ws in list(self.active)])
 
 
 manager = ConnectionManager()
@@ -51,11 +52,16 @@ def compute_status() -> dict:
         is_open = True
     elif start and end:
         try:
-            now = datetime.now(timezone.utc)
-            s = datetime.fromisoformat(start.replace("Z", "+00:00"))
-            e = datetime.fromisoformat(end.replace("Z", "+00:00"))
+            now = datetime.now(BANGKOK)
+            s = datetime.fromisoformat(start)
+            e = datetime.fromisoformat(end)
+            # ถ้า naive (ไม่มี timezone) → ถือว่าเป็น Bangkok time
+            if s.tzinfo is None:
+                s = s.replace(tzinfo=BANGKOK)
+            if e.tzinfo is None:
+                e = e.replace(tzinfo=BANGKOK)
             is_open = s <= now <= e
-        except ValueError:
+        except (ValueError, TypeError):
             is_open = False
 
     return {
@@ -122,15 +128,23 @@ async def toggle_override(payload: OverrideIn):
 
 # ── WebSocket ────────────────────────────────────────────────────────────────
 
+PING_INTERVAL = 25  # วินาที — ต่ำกว่า Render load balancer timeout (~55s)
+
 @router.websocket("/ws/system-status")
 async def ws_system_status(ws: WebSocket):
     await manager.connect(ws)
     try:
-        # ส่ง status ทันทีที่ client เชื่อมต่อ
         await ws.send_json(compute_status())
         while True:
-            text = await ws.receive_text()
-            if text == "get-status":
-                await ws.send_json(compute_status())
+            try:
+                # รอ message จาก client ไม่เกิน PING_INTERVAL วินาที
+                text = await asyncio.wait_for(ws.receive_text(), timeout=PING_INTERVAL)
+                if text == "get-status":
+                    await ws.send_json(compute_status())
+            except asyncio.TimeoutError:
+                # ไม่มี traffic → ส่ง ping เพื่อ keep-alive
+                await ws.send_json({"type": "ping"})
     except WebSocketDisconnect:
+        manager.disconnect(ws)
+    except Exception:
         manager.disconnect(ws)
