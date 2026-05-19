@@ -6,6 +6,7 @@ from collections import defaultdict
 
 from database import get_db
 from models.leave_booking.daily_quota import LeaveDailyQuota
+from models.leave_booking.monthly_quota import MonthlyLeaveQuota
 from models.leave_booking.booking import DriverLeaveBooking
 from models.master_model import MasterDriver
 from models.master.plant import PlantMaster
@@ -63,7 +64,22 @@ def get_calendar(
     ).all()
 
     # =========================
-    # Booking query
+    # Fleet-level daily quota (from MonthlyLeaveQuota)
+    # fleet_daily_quota = max bookings allowed across ALL plants in fleet per day
+    # =========================
+    fleet_daily_quota: int | None = None
+    if fleet:
+        monthly_quota = db.query(MonthlyLeaveQuota).filter(
+            MonthlyLeaveQuota.fleet == fleet,
+            MonthlyLeaveQuota.year == year,
+            MonthlyLeaveQuota.month == month,
+            MonthlyLeaveQuota.is_latest == True
+        ).first()
+        if monthly_quota:
+            fleet_daily_quota = monthly_quota.daily_quota
+
+    # =========================
+    # Booking query (plant-level — filtered)
     # =========================
     booking_query = db.query(
         DriverLeaveBooking.booking_id,
@@ -87,6 +103,21 @@ def get_calendar(
         booking_query = booking_query.filter(DriverLeaveBooking.plant == plant)
 
     bookings = booking_query.all()
+
+    # =========================
+    # Fleet-level booking count per day (all plants, no plant filter)
+    # used to check if fleet daily_quota is reached
+    # =========================
+    fleet_used_per_day: dict[date, int] = {}
+    if fleet and fleet_daily_quota is not None:
+        fleet_bookings = db.query(DriverLeaveBooking.leave_date).filter(
+            DriverLeaveBooking.leave_date >= start_date,
+            DriverLeaveBooking.leave_date <= end_date,
+            DriverLeaveBooking.fleet == fleet,
+            DriverLeaveBooking.status.in_(["pending", "approve"])
+        ).all()
+        for b in fleet_bookings:
+            fleet_used_per_day[b.leave_date] = fleet_used_per_day.get(b.leave_date, 0) + 1
 
     # =========================
     # Batch lookup driver_name / plant_name
@@ -145,6 +176,11 @@ def get_calendar(
         used = len(bookings_on_day)
         remaining = max(0, r.quota - used)
 
+        fleet_used = fleet_used_per_day.get(r.date, 0)
+        fleet_is_full = (
+            fleet_daily_quota is not None and fleet_used >= fleet_daily_quota
+        )
+
         item = {
             "date": r.date,
             "fleet": r.fleet,
@@ -153,7 +189,7 @@ def get_calendar(
             "quota": r.quota,
             "used": used,
             "remaining": remaining,
-            "is_full": used >= r.quota,
+            "is_full": (used >= r.quota) or fleet_is_full,
             "bookings": bookings_on_day
         }
 

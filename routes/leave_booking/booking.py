@@ -101,7 +101,7 @@ def validate_booking_quota(
     if plant_used >= quota.quota:
         raise HTTPException(
             status_code=400,
-            detail="plant quota full"
+            detail="จำนวนโควต้าของวันดังกล่าวเต็มแล้ว (plant quota full)"
         )
 
     # =========================
@@ -139,7 +139,7 @@ def validate_booking_quota(
     if fleet_used >= monthly_quota.daily_quota:
         raise HTTPException(
             status_code=400,
-            detail="fleet daily quota full"
+            detail="จำนวนโควต้าของวันดังกล่าวเต็มแล้ว (fleet daily quota full)"
         )
 
     return {
@@ -153,7 +153,7 @@ def validate_booking_quota(
 
 
 # ======================================================
-# 🚀 CREATE BOOKING
+# 🚀 USERS CREATE BOOKING
 # ======================================================
 @router.post("/driver")
 def create_booking(payload: dict, db: Session = Depends(get_db)):
@@ -284,6 +284,147 @@ def create_booking(payload: dict, db: Session = Depends(get_db)):
             }
         }
     }
+
+# ======================================================
+# 🚀 ADMIN CREATE BOOKING (BYPASS_QUOTA)
+# - leave_type == "emergency" => skip all quota / blackout / monthly limit
+# - other leave_type           => full validation same as driver endpoint
+# ======================================================
+@router.post("/admin")
+def create_booking_admin(payload: dict, db: Session = Depends(get_db)):
+    # =========================
+    # 🔥 normalize input
+    # =========================
+    fleet = str(payload.get("fleet") or "").strip()
+    plant = str(payload.get("plant") or "").strip()
+    driver_id = str(payload.get("driver_id") or "").strip()
+    leave_type = str(payload.get("leave_type") or "").strip().lower()
+    d = parse_date(payload.get("leave_date"))
+
+    if not fleet or not plant or not driver_id or not leave_type:
+        raise HTTPException(400, "missing required fields: fleet, plant, driver_id, leave_date, leave_type")
+
+    is_emergency = leave_type == "emergency"
+
+    # =========================
+    # 🔁 duplicate check (always enforce)
+    # same driver cannot book same day + plant
+    # =========================
+    exists = db.query(DriverLeaveBooking).filter(
+        DriverLeaveBooking.fleet == fleet,
+        DriverLeaveBooking.plant == plant,
+        DriverLeaveBooking.driver_id == driver_id,
+        DriverLeaveBooking.leave_date == d
+    ).first()
+
+    if exists:
+        raise HTTPException(400, "already booked")
+
+    quota_summary = None
+
+    if is_emergency:
+        # =========================
+        # ⚡ EMERGENCY — bypass all quota checks
+        # =========================
+        bypass_note = "emergency bypass: quota / blackout / monthly limit skipped"
+
+    else:
+        # =========================
+        # 🚫 blackout
+        # =========================
+        if is_blackout(db, fleet, plant, d):
+            raise HTTPException(400, "blackout")
+
+        # =========================
+        # 🚧 monthly driver limit
+        # =========================
+        year = d.year
+        month = d.month
+        month_days = calendar.monthrange(year, month)[1]
+        month_start = date(year, month, 1)
+        month_end = date(year, month, month_days)
+
+        monthly_limit = get_driver_monthly_limit(year, month)
+
+        current_used = db.query(
+            func.count(DriverLeaveBooking.booking_id)
+        ).filter(
+            DriverLeaveBooking.driver_id == driver_id,
+            DriverLeaveBooking.leave_date >= month_start,
+            DriverLeaveBooking.leave_date <= month_end,
+            DriverLeaveBooking.status.in_(["pending", "approve"])
+        ).scalar() or 0
+
+        if current_used >= monthly_limit:
+            raise HTTPException(
+                400,
+                f"monthly limit reached ({monthly_limit} days)"
+            )
+
+        # =========================
+        # 📊 quota
+        # =========================
+        quota_summary = validate_booking_quota(
+            db=db,
+            fleet=fleet,
+            plant=plant,
+            leave_date=d
+        )
+
+        bypass_note = None
+
+    # =========================
+    # 💾 create
+    # status default = "approve" for admin booking
+    # =========================
+    b = DriverLeaveBooking(
+        fleet=fleet,
+        plant=plant,
+        driver_id=driver_id,
+        leave_date=d,
+        status=payload.get("status", "approve"),
+        leave_type=leave_type,
+        remark=payload.get("remark")
+    )
+
+    db.add(b)
+    db.commit()
+    db.refresh(b)
+
+    response = {
+        "status": "success",
+        "message": "admin booking created",
+        "bypass": is_emergency,
+        "bypass_note": bypass_note,
+        "data": {
+            "booking_id": b.booking_id,
+            "fleet": b.fleet,
+            "plant": b.plant,
+            "driver_id": b.driver_id,
+            "leave_date": b.leave_date,
+            "status": b.status,
+            "leave_type": b.leave_type,
+            "remark": b.remark
+        }
+    }
+
+    if quota_summary:
+        response["data"]["quota_summary"] = {
+            "plant_quota": quota_summary["plant_quota"],
+            "plant_used_after_create": quota_summary["plant_used"] + 1,
+            "plant_remaining_after_create": max(
+                0,
+                quota_summary["plant_quota"] - (quota_summary["plant_used"] + 1)
+            ),
+            "fleet_daily_quota": quota_summary["fleet_daily_quota"],
+            "fleet_used_after_create": quota_summary["fleet_used"] + 1,
+            "fleet_remaining_after_create": max(
+                0,
+                quota_summary["fleet_daily_quota"] - (quota_summary["fleet_used"] + 1)
+            )
+        }
+
+    return response
 
 
 # ======================================================
@@ -505,7 +646,7 @@ def update_booking_status(
     if not booking:
         raise HTTPException(
             status_code=404,
-            detail="booking not found"
+            detail="ไม่พบการจองนี้ในระบบ"
         )
 
     # =========================
@@ -555,3 +696,6 @@ def update_booking_status(
             "remark": booking.remark
         }
     }
+
+
+# ====================================================== ทำเส้น by pass หลังบ้าน ======================================================
