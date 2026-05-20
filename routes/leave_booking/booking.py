@@ -3,7 +3,6 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 from datetime import date, datetime
 import calendar
-import json
 
 from database import get_db
 from models.leave_booking.booking import DriverLeaveBooking
@@ -492,14 +491,7 @@ def get_admin_booking(
     # =========================
     # Normalize filters
     # =========================
-    if fleet:
-        try:
-            parsed = json.loads(fleet)
-            fleet = [f.strip() for f in parsed if isinstance(f, str) and f.strip()]
-        except (json.JSONDecodeError, TypeError):
-            fleet = [fleet.strip()]
-    else:
-        fleet = None
+    fleet = [f.strip() for f in fleet.split(",") if f.strip()] if fleet else None
     plant = plant.strip() if plant else None
 
     query = db.query(DriverLeaveBooking)
