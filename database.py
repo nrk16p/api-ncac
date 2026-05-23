@@ -18,15 +18,29 @@ if not DATABASE_URL:
 
 # -------------------------------------------------------
 # POSTGRESQL ENGINE WITH CONNECTION POOL
+#
+# Pool sizing formula:
+#   pool_size + max_overflow <= (db_max_connections / num_workers) - 2
+#
+# Render Starter (0.5 CPU, 1 worker):
+#   thread pool ~5 → pool_size=5, max_overflow=5 (10 total)
+#   Render PostgreSQL max connections = 25 → stays well under limit
+#
+# To tune per environment set env vars:
+#   DB_POOL_SIZE     (default 5)
+#   DB_MAX_OVERFLOW  (default 5)
 # -------------------------------------------------------
+_pool_size     = int(os.getenv("DB_POOL_SIZE", "5"))
+_max_overflow  = int(os.getenv("DB_MAX_OVERFLOW", "5"))
+
 engine = create_engine(
     DATABASE_URL,
-    pool_size=10,            # default is 5 — increase for concurrent API calls
-    max_overflow=20,         # how many extra temporary connections can be opened
-    pool_timeout=30,         # seconds to wait before raising error if pool is full
+    pool_size=_pool_size,
+    max_overflow=_max_overflow,
+    pool_timeout=10,         # fail fast — don't let requests queue for 30s
     pool_recycle=1800,       # recycle connection every 30 min (prevent stale connections)
     pool_pre_ping=True,      # check if connection is alive before using it
-    echo=False,              # set to True for SQL debug logging
+    echo=False,
     future=True,
 )
 

@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, text
 from datetime import date, datetime
 import calendar
+import hashlib
 
 from database import get_db
 from models.leave_booking.booking import DriverLeaveBooking
@@ -55,6 +56,17 @@ def get_driver_monthly_limit(year: int, month: int) -> int:
 
 
 # ======================================================
+# 🔒 Helper: advisory lock per driver
+# Serializes concurrent bookings for the same driver so the
+# monthly limit check + insert is atomic. Lock is transaction-
+# scoped — released automatically on commit or rollback.
+# ======================================================
+def acquire_driver_lock(db: Session, driver_id: str):
+    key = int(hashlib.md5(driver_id.encode()).hexdigest()[:8], 16) % (2 ** 31)
+    db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": key})
+
+
+# ======================================================
 # 🧠 Helper: validate booking quota
 # Rule:
 # 1) 1 plant / 1 day cannot exceed LeaveDailyQuota.quota
@@ -68,13 +80,13 @@ def validate_booking_quota(
     exclude_booking_id: int | None = None
 ):
     # =========================
-    # 1) Plant daily quota
+    # 1) Plant daily quota — lock row to prevent concurrent overbooking
     # =========================
     quota = db.query(LeaveDailyQuota).filter(
         LeaveDailyQuota.fleet == fleet,
         LeaveDailyQuota.plant == plant,
         LeaveDailyQuota.date == leave_date
-    ).first()
+    ).with_for_update().first()
 
     if not quota:
         raise HTTPException(
@@ -105,7 +117,7 @@ def validate_booking_quota(
         )
 
     # =========================
-    # 2) Fleet daily quota
+    # 2) Fleet daily quota — lock row to prevent concurrent overbooking
     # =========================
     monthly_quota = db.query(MonthlyLeaveQuota).filter(
         MonthlyLeaveQuota.fleet == fleet,
@@ -113,7 +125,7 @@ def validate_booking_quota(
         MonthlyLeaveQuota.month == leave_date.month,
         MonthlyLeaveQuota.is_latest == True,
         MonthlyLeaveQuota.is_active == True
-    ).first()
+    ).with_for_update().first()
 
     if not monthly_quota:
         raise HTTPException(
@@ -191,7 +203,12 @@ def create_booking(payload: dict, db: Session = Depends(get_db)):
     # =========================
     # 🚧 monthly driver limit
     # each driver must work at least 27 days/month
+    # Acquire advisory lock first to serialize concurrent requests
+    # for the same driver — prevents two requests from both reading
+    # current_used=N and both passing the limit check simultaneously.
     # =========================
+    acquire_driver_lock(db, driver_id)
+
     year = d.year
     month = d.month
     month_days = calendar.monthrange(year, month)[1]
@@ -236,7 +253,7 @@ def create_booking(payload: dict, db: Session = Depends(get_db)):
         plant=plant,
         driver_id=driver_id,
         leave_date=d,
-        status=payload.get("status", "pending"),
+        status="pending",
         leave_type=payload.get("leave_type"),
         remark=payload.get("remark")
     )
@@ -338,6 +355,8 @@ def create_booking_admin(payload: dict, db: Session = Depends(get_db)):
         # =========================
         # 🚧 monthly driver limit
         # =========================
+        acquire_driver_lock(db, driver_id)
+
         year = d.year
         month = d.month
         month_days = calendar.monthrange(year, month)[1]
