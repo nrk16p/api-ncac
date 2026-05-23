@@ -142,7 +142,7 @@ def get_driver_by_id(driver_id: str, db: Session = Depends(get_db)):
         "plant_name": driver.plant_name,
         "fleet": plant.fleet if plant else None,
         "truck_number": driver.truck_number,
-        "truck_type": driver.truck_type,
+        "truck_type": plant.truck_type if plant else driver.truck_type,
         "status": driver.status,
         "number_plate": driver.number_plate,
         "month_year": driver.month_year,

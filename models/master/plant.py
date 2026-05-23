@@ -8,3 +8,4 @@ class PlantMaster(Base):
     fleet = Column(String(100), primary_key=True)
 
     plant_name = Column(String(100))
+    truck_type = Column(String(100), nullable=True)
