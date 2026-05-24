@@ -7,7 +7,7 @@ from models import MasterDriver
 from models.master.plant import PlantMaster
 from sqlalchemy.dialects.postgresql import insert
 
-router = APIRouter(prefix="/masterdrivers", tags=["Master Drivers"])
+router = APIRouter(prefix="/masterdrivers", tags=["Master Drivers Data"])
 
 class MasterDriverBase(BaseModel):
     first_name: Optional[str] = None
