@@ -128,8 +128,9 @@ def get_driver_by_id(driver_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Driver not found")
 
     plant = db.query(PlantMaster).filter(
-        PlantMaster.plant_code == driver.plant_code
-    ).first() if driver.plant_code else None
+        PlantMaster.plant_code == driver.plant_code,
+        PlantMaster.truck_type == driver.truck_type
+    ).first() if driver.plant_code and driver.truck_type else None
 
     return {
         "driver_id": driver.driver_id,
