@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import func, text
+from sqlalchemy import func, text, cast, Date
 from datetime import date, datetime
 import calendar
 import hashlib
@@ -172,22 +172,19 @@ def create_booking(payload: dict, db: Session = Depends(get_db)):
     # =========================
     # 🔥 normalize input
     # =========================
-    fleet = str(payload.get("fleet") or "").strip()
-    plant = str(payload.get("plant") or "").strip()
-    driver_id = str(payload.get("driver_id") or "").strip()
+    fleet            = str(payload.get("fleet")             or "").strip()
+    plant            = str(payload.get("plant")             or "").strip()
+    driver_id        = str(payload.get("driver_id")         or "").strip()
+    created_by_admin = str(payload.get("created_by_admin")  or "").strip()
     d = parse_date(payload.get("leave_date"))
 
     if not fleet or not plant or not driver_id:
         raise HTTPException(400, "missing required fields")
 
-    # =========================
-    # 🚫 blackout
-    # =========================
-    if is_blackout(db, fleet, plant, d):
-        raise HTTPException(400, "blackout")
+    is_admin_override = bool(created_by_admin)
 
     # =========================
-    # 🔁 duplicate check
+    # 🔁 duplicate check (always enforce)
     # same driver cannot book same day
     # =========================
     exists = db.query(DriverLeaveBooking).filter(
@@ -200,50 +197,84 @@ def create_booking(payload: dict, db: Session = Depends(get_db)):
     if exists:
         raise HTTPException(400, "already booked")
 
-    # =========================
-    # 🚧 monthly driver limit
-    # each driver must work at least 27 days/month
-    # Acquire advisory lock first to serialize concurrent requests
-    # for the same driver — prevents two requests from both reading
-    # current_used=N and both passing the limit check simultaneously.
-    # =========================
-    acquire_driver_lock(db, driver_id)
+    monthly_limit  = None
+    current_used   = None
+    quota_summary  = None
 
-    year = d.year
-    month = d.month
-    month_days = calendar.monthrange(year, month)[1]
-    month_start = date(year, month, 1)
-    month_end = date(year, month, month_days)
+    if is_admin_override:
+        # =========================
+        # ⚡ ADMIN OVERRIDE — skip blackout / monthly limit / quota / daily submission limit
+        # =========================
+        pass
 
-    monthly_limit = get_driver_monthly_limit(year, month)
+    else:
+        # =========================
+        # 🚫 daily submission limit
+        # normal user can only submit 1 booking per calendar day
+        # =========================
+        today_count = db.query(
+            func.count(DriverLeaveBooking.booking_id)
+        ).filter(
+            DriverLeaveBooking.driver_id == driver_id,
+            cast(DriverLeaveBooking.created_at, Date) == date.today()
+        ).scalar() or 0
 
-    current_used = db.query(
-        func.count(DriverLeaveBooking.booking_id)
-    ).filter(
-        DriverLeaveBooking.driver_id == driver_id,
-        DriverLeaveBooking.leave_date >= month_start,
-        DriverLeaveBooking.leave_date <= month_end,
-        DriverLeaveBooking.status.in_(["pending", "approve"])
-    ).scalar() or 0
+        if today_count >= 1:
+            raise HTTPException(
+                400,
+                "สามารถสร้างการจองได้เพียง 1 ครั้งต่อวัน"
+            )
 
-    if current_used >= monthly_limit:
-        raise HTTPException(
-            400,
-            f"monthly limit reached ({monthly_limit} days)"
+        # =========================
+        # 🚫 blackout
+        # =========================
+        if is_blackout(db, fleet, plant, d):
+            raise HTTPException(400, "blackout")
+
+        # =========================
+        # 🚧 monthly driver limit
+        # each driver must work at least 27 days/month
+        # Acquire advisory lock first to serialize concurrent requests
+        # for the same driver — prevents two requests from both reading
+        # current_used=N and both passing the limit check simultaneously.
+        # =========================
+        acquire_driver_lock(db, driver_id)
+
+        year = d.year
+        month = d.month
+        month_days = calendar.monthrange(year, month)[1]
+        month_start = date(year, month, 1)
+        month_end = date(year, month, month_days)
+
+        monthly_limit = get_driver_monthly_limit(year, month)
+
+        current_used = db.query(
+            func.count(DriverLeaveBooking.booking_id)
+        ).filter(
+            DriverLeaveBooking.driver_id == driver_id,
+            DriverLeaveBooking.leave_date >= month_start,
+            DriverLeaveBooking.leave_date <= month_end,
+            DriverLeaveBooking.status.in_(["pending", "approve"])
+        ).scalar() or 0
+
+        if current_used >= monthly_limit:
+            raise HTTPException(
+                400,
+                f"monthly limit reached ({monthly_limit} days)"
+            )
+
+        # =========================
+        # 📊 quota
+        # Rule:
+        # 1) this plant cannot exceed plant daily quota
+        # 2) all plants combined cannot exceed fleet daily quota
+        # =========================
+        quota_summary = validate_booking_quota(
+            db=db,
+            fleet=fleet,
+            plant=plant,
+            leave_date=d
         )
-
-    # =========================
-    # 📊 quota
-    # Rule:
-    # 1) this plant cannot exceed plant daily quota
-    # 2) all plants combined cannot exceed fleet daily quota
-    # =========================
-    quota_summary = validate_booking_quota(
-        db=db,
-        fleet=fleet,
-        plant=plant,
-        leave_date=d
-    )
 
     # =========================
     # 💾 create
@@ -253,53 +284,54 @@ def create_booking(payload: dict, db: Session = Depends(get_db)):
         plant=plant,
         driver_id=driver_id,
         leave_date=d,
-        status="pending",
+        status="approve" if is_admin_override else "pending",
         leave_type=payload.get("leave_type"),
-        remark=payload.get("remark")
+        remark=payload.get("remark"),
+        created_by_admin=created_by_admin if is_admin_override else None
     )
 
     db.add(b)
     db.commit()
     db.refresh(b)
 
-    return {
-        "status": "success",
-        "message": "booking created",
-        "data": {
-            "booking_id": b.booking_id,
-            "fleet": b.fleet,
-            "plant": b.plant,
-            "driver_id": b.driver_id,
-            "leave_date": b.leave_date,
-            "status": b.status,
-            "leave_type": b.leave_type,
-            "remark": b.remark,
+    data: dict = {
+        "booking_id":        b.booking_id,
+        "fleet":             b.fleet,
+        "plant":             b.plant,
+        "driver_id":         b.driver_id,
+        "leave_date":        b.leave_date,
+        "status":            b.status,
+        "leave_type":        b.leave_type,
+        "remark":            b.remark,
+        "created_by_admin":  b.created_by_admin,
+        "admin_override":    is_admin_override,
+    }
 
-            # Driver monthly leave rule
-            "monthly_limit": monthly_limit,
-            "current_used_after_create": current_used + 1,
-            "remaining_monthly_quota": max(
+    if not is_admin_override and monthly_limit is not None and current_used is not None:
+        data["monthly_limit"] = monthly_limit
+        data["current_used_after_create"] = current_used + 1
+        data["remaining_monthly_quota"] = max(0, monthly_limit - (current_used + 1))
+
+    if quota_summary:
+        data["quota_summary"] = {
+            "plant_quota": quota_summary["plant_quota"],
+            "plant_used_after_create": quota_summary["plant_used"] + 1,
+            "plant_remaining_after_create": max(
                 0,
-                monthly_limit - (current_used + 1)
+                quota_summary["plant_quota"] - (quota_summary["plant_used"] + 1)
             ),
-
-            # Quota summary
-            "quota_summary": {
-                "plant_quota": quota_summary["plant_quota"],
-                "plant_used_after_create": quota_summary["plant_used"] + 1,
-                "plant_remaining_after_create": max(
-                    0,
-                    quota_summary["plant_quota"] - (quota_summary["plant_used"] + 1)
-                ),
-
-                "fleet_daily_quota": quota_summary["fleet_daily_quota"],
-                "fleet_used_after_create": quota_summary["fleet_used"] + 1,
-                "fleet_remaining_after_create": max(
-                    0,
-                    quota_summary["fleet_daily_quota"] - (quota_summary["fleet_used"] + 1)
-                )
-            }
+            "fleet_daily_quota": quota_summary["fleet_daily_quota"],
+            "fleet_used_after_create": quota_summary["fleet_used"] + 1,
+            "fleet_remaining_after_create": max(
+                0,
+                quota_summary["fleet_daily_quota"] - (quota_summary["fleet_used"] + 1)
+            )
         }
+
+    return {
+        "status":  "success",
+        "message": "booking created (admin override)" if is_admin_override else "booking created",
+        "data":    data,
     }
 
 # ======================================================

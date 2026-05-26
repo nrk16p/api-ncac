@@ -18,6 +18,8 @@ class DriverLeaveBooking(Base):
 
     status = Column(String(20), default="pending")  # pending/approve/reject
 
+    created_by_admin = Column(String(100), nullable=True)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
