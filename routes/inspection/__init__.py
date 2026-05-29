@@ -7,6 +7,7 @@ from .ppe import router as ppe_router
 from .vehicle import router as vehicle_router
 from .safety_talk import router as safety_talk_router
 from .performance import router as performance_router
+from .report_inspection import router as report_router
 
 router = APIRouter(prefix="/inspection", tags=["inspection"])
 
@@ -17,3 +18,4 @@ router.include_router(ppe_router)
 router.include_router(vehicle_router)
 router.include_router(safety_talk_router)
 router.include_router(performance_router)
+router.include_router(report_router)

@@ -30,7 +30,7 @@ ALLOWED_GOOGLE_DOMAIN = "menatransport.co.th"
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
-print("✅ GOOGLE_CLIENT_ID =", GOOGLE_CLIENT_ID)
+print("[OK] GOOGLE_CLIENT_ID =", GOOGLE_CLIENT_ID)
 
 # ============================================================
 # JWT
