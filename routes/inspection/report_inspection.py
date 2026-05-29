@@ -7,6 +7,35 @@ from models import inspection as models
 
 router = APIRouter(prefix="/report", tags=["Inspection Report"])
 
+VEHICLE_SECTIONS = [
+    ("front",  "ด้านหน้า"),
+    ("left",   "ด้านซ้าย"),
+    ("rear",   "ด้านหลัง"),
+    ("right",  "ด้านขวา"),
+    ("inside", "ภายในรถ"),
+]
+
+
+def _section_result(items: list) -> str:
+    if not items:
+        return "—"
+    statuses = [i.get("status") for i in items]
+    if any(s == "ไม่ผ่าน" for s in statuses):
+        return "fail"
+    if any(s is None for s in statuses):
+        return "pending"
+    return "pass"
+
+
+def _section_fail_items(items: list) -> str:
+    failed = []
+    for i in items:
+        if i.get("status") == "ไม่ผ่าน":
+            name = i.get("item", "")
+            remark = i.get("remark") or "ไม่มีเหตุผล"
+            failed.append(f"{name} ({remark})")
+    return ", ".join(failed) if failed else "—"
+
 
 @router.get("/driver-summary")
 def get_driver_summary(
@@ -32,6 +61,7 @@ def get_driver_summary(
                 "plant_name": task.plant_name,
                 "client_name": task.client_name,
                 "trainer_id": task.trainer_id,
+                "driver_status": d.inspection_task_driver_status,
                 "driver_id": d.driver_id,
                 "first_name": d.first_name,
                 "last_name": d.last_name,
@@ -80,6 +110,12 @@ def get_driver_summary(
             ) if d.vehicle_inspect_id else None
 
             row["vehicle_status"] = vehicle.vechicle_status if vehicle else None
+
+            checklist = vehicle.checklist if vehicle else {}
+            for key, label in VEHICLE_SECTIONS:
+                items = checklist.get(key, [])
+                row[f"vehicle_{key}_result"] = _section_result(items)
+                row[f"vehicle_{key}_fail_items"] = _section_fail_items(items)
 
             result.append(row)
 
