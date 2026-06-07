@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from fastapi.encoders import jsonable_encoder
@@ -56,7 +58,8 @@ def create_task(
         drivers = db.query(MasterDriver).filter(
             MasterDriver.client_name == payload.client_name,
             MasterDriver.plant_code == payload.plant_code,
-            MasterDriver.plant_name == payload.plant_name
+            MasterDriver.plant_name == payload.plant_name,
+            MasterDriver.month_year == datetime.today().strftime("%Y-%m")
         ).all()
 
         if not drivers:

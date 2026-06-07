@@ -1,5 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
+from sqlalchemy import extract
+from typing import List
 from database import get_db
 from models import inspection as models
 
@@ -8,14 +10,26 @@ router = APIRouter(prefix="/performance")
 @router.get("/{trainer_id}")
 def get_performance(
     trainer_id: str,
+    years: List[int] = Query(default=[]),
+    months: List[int] = Query(default=[]),
     db: Session = Depends(get_db)
 ):
-    tasks = db.query(models.InspectionTask).filter(
+    query = db.query(models.InspectionTask).filter(
         models.InspectionTask.trainer_id == trainer_id
-    ).all()
+    )
+
+    if years:
+        query = query.filter(extract("year", models.InspectionTask.plan_date).in_(years))
+    if months:
+        query = query.filter(extract("month", models.InspectionTask.plan_date).in_(months))
+
+    tasks = query.all()
 
     if not tasks:
-        raise HTTPException(404, "No tasks found for this trainer")
+        return {
+            "summary": {"open_count": 0, "pending_count": 0, "completed_count": 0, "total_count": 0},
+            "open": [], "pending": [], "completed": []
+        }
 
     drivers = db.query(models.InspectionTaskDriver).filter(
         models.InspectionTaskDriver.inspection_task_id.in_(
