@@ -49,21 +49,21 @@ def create_task(
         inspection_task_status=payload.inspection_task_status
     )
 
+    # -----------------------------
+    # GET DRIVERS (before try — validate first)
+    # -----------------------------
+    drivers = db.query(MasterDriver).filter(
+        MasterDriver.client_name == payload.client_name,
+        MasterDriver.plant_code == payload.plant_code,
+        MasterDriver.plant_name == payload.plant_name,
+        MasterDriver.month_year == datetime.today().strftime("%m-%Y")
+    ).all()
+
+    if not drivers:
+        raise HTTPException(404, "No drivers found")
+
     try:
         db.add(task)
-
-        # -----------------------------
-        # GET DRIVERS
-        # -----------------------------
-        drivers = db.query(MasterDriver).filter(
-            MasterDriver.client_name == payload.client_name,
-            MasterDriver.plant_code == payload.plant_code,
-            MasterDriver.plant_name == payload.plant_name,
-            MasterDriver.month_year == datetime.today().strftime("%Y-%m")
-        ).all()
-
-        if not drivers:
-            raise HTTPException(404, "No drivers found")
 
         # -----------------------------
         # UNIQUE DRIVERS (กัน duplicate)
@@ -148,6 +148,9 @@ def create_task(
             "drivers_created": created
         }
 
+    except HTTPException:
+        db.rollback()
+        raise
     except Exception as e:
         db.rollback()
         raise HTTPException(500, str(e))
