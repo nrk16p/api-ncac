@@ -140,6 +140,21 @@ async def startup_event():
     from routes.leave_booking.system_status import periodic_broadcast
     asyncio.create_task(periodic_broadcast())
 
+    # Schedule pipelines at 02:00 Bangkok time (Asia/Bangkok = UTC+7)
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from apscheduler.triggers.cron import CronTrigger
+    from pytz import timezone as tz
+    from routes.pipeline.pipeline_routes import _run
+
+    scheduler = AsyncIOScheduler(timezone=tz("Asia/Bangkok"))
+    # Run LD → SCCO → CPAC sequentially so they don't hammer ATMS at the same time
+    scheduler.add_job(_run, CronTrigger(hour=2, minute=0),  args=["ld"],   id="sched_ld")
+    scheduler.add_job(_run, CronTrigger(hour=2, minute=20), args=["scco"], id="sched_scco")
+    scheduler.add_job(_run, CronTrigger(hour=2, minute=40), args=["cpac"], id="sched_cpac")
+    scheduler.start()
+    import logging
+    logging.getLogger(__name__).info("Pipeline scheduler started — LD 02:00, SCCO 02:20, CPAC 02:40 (BKK)")
+
 
 # ------------------------------
 # Root
