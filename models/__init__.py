@@ -9,3 +9,4 @@ from .case_report_model import (
     CaseReportDoc,
 )
 from .accident_case_model import AccidentCase, AccidentCaseDoc
+from .drivingdistance_model import DrivingDistance

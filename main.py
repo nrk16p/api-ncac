@@ -76,6 +76,7 @@ from routes.allocation import allocation_routes
 from routes.inspection import router as inspection_router
 from routes.leave_booking.router import router as leave_booking_router
 from routes.pipeline.pipeline_routes import router as pipeline_router
+from routes.drivingdistance import router as drivingdistance_router
 
 
 # ------------------------------
@@ -111,6 +112,9 @@ app.include_router(leave_booking_router)
 
 # Pipeline runner
 app.include_router(pipeline_router)
+
+# Analytics
+app.include_router(drivingdistance_router)
 
 # ------------------------------
 # 🚨 Forms Order (สำคัญ) 
