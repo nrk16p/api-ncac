@@ -75,6 +75,7 @@ from routes.forms.form_master_routes import router as form_master_router
 from routes.allocation import allocation_routes
 from routes.inspection import router as inspection_router
 from routes.leave_booking.router import router as leave_booking_router
+from routes.pipeline.pipeline_routes import router as pipeline_router
 
 
 # ------------------------------
@@ -107,6 +108,9 @@ app.include_router(inspection_router)
 
 #booking leave
 app.include_router(leave_booking_router)
+
+# Pipeline runner
+app.include_router(pipeline_router)
 
 # ------------------------------
 # 🚨 Forms Order (สำคัญ) 
