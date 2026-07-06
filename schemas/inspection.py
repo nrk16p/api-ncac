@@ -8,9 +8,10 @@ class InspectionTaskCreate(BaseModel):
     client_name: Optional[str] = None
     plant_code: Optional[str] = None
     plant_name: Optional[str] = None   # 👈 เพิ่มตัวนี้
-    plan_date:  Optional[date]= None 
-    action_date: Optional[date]= None 
+    plan_date:  Optional[date]= None
+    action_date: Optional[date]= None
     inspection_task_status: str
+    partner_trainer_ids: Optional[List[str]] = None
 
 
 
@@ -63,6 +64,7 @@ class InspectionTaskUpdate(BaseModel):
     action_date: Optional[date] = None
     inspection_task_status: Optional[str] = None
     drug_test_attachment: Optional[str] = None
+    partner_trainer_ids: Optional[List[str]] = None
 
 class DrugTestCreate(BaseModel):
     alcohol: Optional[float] = None

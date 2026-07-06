@@ -102,7 +102,8 @@ class InspectionTask(Base):
 
     inspection_task_id = Column(String, primary_key=True, index=True)
 
-    trainer_id = Column(String)    
+    trainer_id = Column(String)
+    partner_trainer_ids = Column(ARRAY(String), nullable=True)
     client_name = Column(String)
     plant_code = Column(String)
     plant_name = Column(String)

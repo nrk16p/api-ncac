@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import extract
+from sqlalchemy import extract, or_
 from typing import List
 from database import get_db
 from models import inspection as models
@@ -15,7 +15,10 @@ def get_performance(
     db: Session = Depends(get_db)
 ):
     query = db.query(models.InspectionTask).filter(
-        models.InspectionTask.trainer_id == trainer_id
+        or_(
+            models.InspectionTask.trainer_id == trainer_id,
+            models.InspectionTask.partner_trainer_ids.any(trainer_id),
+        )
     )
 
     if years:

@@ -41,6 +41,11 @@ def create_task(
     task = models.InspectionTask(
         inspection_task_id=inspection_task_id,
         trainer_id=payload.trainer_id,
+        # partner ต้องไม่ซ้ำและไม่ใช่เจ้าของงานเอง / [] เก็บเป็น NULL
+        partner_trainer_ids=(
+            [p for p in dict.fromkeys(payload.partner_trainer_ids or []) if p != payload.trainer_id]
+            or None
+        ),
         client_name=payload.client_name,
         plant_code=payload.plant_code,
         plant_name=payload.plant_name,
@@ -292,6 +297,16 @@ def update_task(
 
         if "plan_date" in update_data:
             raise HTTPException(400, "plan_date cannot be updated")
+
+        # -----------------------------
+        # PARTNER: dedupe + ตัดเจ้าของงานออก / [] เก็บเป็น NULL
+        # (เทียบกับ trainer_id ใหม่ถ้าถูกส่งมาพร้อมกัน)
+        # -----------------------------
+        if update_data.get("partner_trainer_ids") is not None:
+            owner_id = update_data.get("trainer_id") or task.trainer_id
+            update_data["partner_trainer_ids"] = [
+                p for p in dict.fromkeys(update_data["partner_trainer_ids"]) if p != owner_id
+            ] or None
 
         # -----------------------------
         # UPDATE ONLY SENT FIELDS
