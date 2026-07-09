@@ -2,13 +2,13 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from fastapi.encoders import jsonable_encoder
 
 from database import get_db
 from models import inspection as models
 from schemas import inspection as schemas
 from models.master_model import MasterDriver
-from models import inspection as models
 
 
 router = APIRouter(prefix="/task")
@@ -69,6 +69,7 @@ def create_task(
 
     try:
         db.add(task)
+        db.flush()  # ensure task is in DB before FK-constrained driver inserts
 
         # -----------------------------
         # UNIQUE DRIVERS (กัน duplicate)
@@ -76,18 +77,7 @@ def create_task(
         drivers_unique = {d.driver_id: d for d in drivers}.values()
 
         # -----------------------------
-        # GET EXISTING DRIVER IDS
-        # -----------------------------
-        existing_ids = set(
-            r[0] for r in db.query(
-                models.InspectionTaskDriver.inspection_task_driver_id
-            ).filter(
-                models.InspectionTaskDriver.inspection_task_id == inspection_task_id
-            ).all()
-        )
-
-        # -----------------------------
-        # CREATE DRIVER RECORDS
+        # CREATE DRIVER RECORDS (upsert — กัน duplicate / race condition)
         # -----------------------------
         created = 0
 
@@ -95,10 +85,7 @@ def create_task(
 
             inspection_task_driver_id = f"{inspection_task_id}-{d.driver_id}"
 
-            if inspection_task_driver_id in existing_ids:
-                continue
-
-            driver = models.InspectionTaskDriver(
+            stmt = pg_insert(models.InspectionTaskDriver).values(
                 inspection_task_driver_id=inspection_task_driver_id,
                 inspection_task_id=inspection_task_id,
                 driver_id=d.driver_id,
@@ -108,10 +95,23 @@ def create_task(
                 first_name=d.first_name,
                 last_name=d.last_name,
                 inspection_task_driver_status="open"
+            ).on_conflict_do_update(
+                index_elements=["inspection_task_driver_id"],
+                set_={
+                    "inspection_task_id": inspection_task_id,
+                    "driver_id": d.driver_id,
+                    "number_plate": d.number_plate,
+                    "truck_number": d.truck_number,
+                    "truck_type": d.truck_type,
+                    "first_name": d.first_name,
+                    "last_name": d.last_name,
+                    "inspection_task_driver_status": "open",
+                }
             )
 
-            db.add(driver)
-            created += 1
+            result = db.execute(stmt)
+            if result.rowcount:
+                created += 1
 
         # -----------------------------
         # CREATE SAFETY TALK (AUTO)

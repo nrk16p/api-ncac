@@ -17,7 +17,7 @@ class SafetyTalk(Base):
 
     inspection_task_id = Column(
         String,
-        ForeignKey("inspection_task.inspection_task_id"),
+        ForeignKey("inspection_task.inspection_task_id", ondelete="CASCADE"),
         unique=True
     )
 
@@ -114,7 +114,7 @@ class InspectionTask(Base):
     drug_test_attachment = Column(String)
     inspection_task_status = Column(String)
 
-    drivers = relationship("InspectionTaskDriver", back_populates="task")
+    drivers = relationship("InspectionTaskDriver", back_populates="task", cascade="all, delete-orphan")
 
 class InspectionTaskDriver(Base):
     __tablename__ = "inspection_task_driver"
@@ -127,7 +127,7 @@ class InspectionTaskDriver(Base):
 
     inspection_task_id = Column(
         String,
-        ForeignKey("inspection_task.inspection_task_id")
+        ForeignKey("inspection_task.inspection_task_id", ondelete="CASCADE")
     )
 
     driver_id = Column(String)      # changed to string
@@ -140,19 +140,19 @@ class InspectionTaskDriver(Base):
 
     drug_test_id = Column(
         Integer,
-        ForeignKey("drug_test.drug_test_id"),
+        ForeignKey("drug_test.drug_test_id", ondelete="CASCADE"),
         nullable=True
     )
 
     ppe_test_id = Column(
         Integer,
-        ForeignKey("ppe_test.ppe_test_id"),
+        ForeignKey("ppe_test.ppe_test_id", ondelete="CASCADE"),
         nullable=True
     )
 
     vehicle_inspect_id = Column(
         Integer,
-        ForeignKey("vehicle_inspect.vehicle_inspect_id"),
+        ForeignKey("vehicle_inspect.vehicle_inspect_id", ondelete="CASCADE"),
         nullable=True
     )
 

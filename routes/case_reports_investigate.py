@@ -208,7 +208,7 @@ def update_investigation(
             document_no=document_no
         ).first()
         if case_report:
-            case_report.casestatus = "Investigation Completed"
+            case_report.casestatus = "Completed Investigate"
             db.commit()
 
     return record
