@@ -64,8 +64,7 @@ from routes import (
     provinces,
     districts,
     sub_districts,
-    case_reports_investigate,complaint,fuel_routes,mixer_compensation,master_root_cause,
-    pdf,
+    case_reports_investigate,complaint,fuel_routes,mixer_compensation,master_root_cause
 )
 
 # 👉 Forms (แยกตาม topic)
@@ -107,9 +106,6 @@ app.include_router(fuel_routes.router)
 app.include_router(mixer_compensation.router)
 app.include_router(master_root_cause.router)
 app.include_router(inspection_router)
-
-# PDF (Office → PDF ผ่าน Gotenberg/LibreOffice)
-app.include_router(pdf.router)
 
 #booking leave
 app.include_router(leave_booking_router)
