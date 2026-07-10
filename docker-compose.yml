@@ -1,0 +1,25 @@
+# Self-host ทั้ง stack (api-ncac + Gotenberg) บน VPS/เครื่องเดียว
+#   docker compose up -d
+# api เรียก Gotenberg ผ่านชื่อ service ภายใน network → http://gotenberg:3000
+services:
+  gotenberg:
+    image: gotenberg/gotenberg:8
+    restart: unless-stopped
+    # ไม่ต้อง expose ออกนอกก็ได้ (api คุยกันภายใน network) — เปิดไว้เผื่อ debug
+    ports:
+      - "3000:3000"
+    command:
+      - "gotenberg"
+      - "--api-timeout=120s"
+
+  api:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      GOTENBERG_URL: "http://gotenberg:3000"
+    env_file:
+      - .env
+    depends_on:
+      - gotenberg
