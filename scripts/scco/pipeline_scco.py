@@ -24,6 +24,10 @@ load_dotenv(Path(__file__).parent.parent / ".env")
 BASE_DIR = Path(__file__).parent
 PIPELINE = "scco"
 BASE_URL = "https://www.mena-atms.com"
+VEHICLE_MASTER_URL = (
+    f"{BASE_URL}/veh/vehicle/index.export/"
+    "?page=1&order_by=v.code%20asc&search-toggle-status=&order_by=v.code%20asc"
+)
 
 ATMS_USERNAME = os.getenv("ATMS_USERNAME")
 ATMS_PASSWORD = os.getenv("ATMS_PASSWORD")
@@ -37,6 +41,13 @@ MONGODB_URI = os.getenv("MONGODB_URI")
 warnings.simplefilter("ignore", urllib3.exceptions.InsecureRequestWarning)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
+
+
+def _pick(val, fallback):
+    """Return val unless it is missing/blank (MySQL sends '' for unset datetimes)."""
+    if val is None or (isinstance(val, str) and not val.strip()) or pd.isna(val):
+        return fallback
+    return val
 
 
 # ── Step 1: MySQL ─────────────────────────────────────────────────────────────
@@ -101,9 +112,7 @@ def fetch_ldt() -> tuple[pd.DataFrame, pd.DataFrame]:
     df["วันที่ครบกำหนด"] = df["วันที่"]
     for col in ["วันเวลาอ้างอิง 1", "วันเวลาอ้างอิง 2", "วันเวลาอ้างอิง 3",
                 "วันเวลาอ้างอิง 4", "เวลาออกเดินทาง"]:
-        df[col] = df.apply(
-            lambda row: row["LoadAt"] if pd.notna(row.get("LoadAt")) else row["วันที่"], axis=1
-        )
+        df[col] = df.apply(lambda row: _pick(row.get("LoadAt"), row["วันที่"]), axis=1)
     df["Type"] = "single drop"
     df["ประเภทการวิ่ง"] = "legacy"
     df["ประเภทการขนส่งขากลับ"] = ""
@@ -111,12 +120,8 @@ def fetch_ldt() -> tuple[pd.DataFrame, pd.DataFrame]:
     df["Service Parameter A"] = ""
     df["Service Parameter B"] = ""
     df["dropoffs"] = ""
-    df["วันเวลาลงสินค้า"] = df.apply(
-        lambda row: row["PlantMoveOutAt"] if pd.notna(row.get("PlantMoveOutAt")) else row["วันที่"], axis=1
-    )
-    df["วันเวลาปิด LDT"] = df.apply(
-        lambda row: row["ArriveToPlantAt"] if pd.notna(row.get("ArriveToPlantAt")) else row["วันที่"], axis=1
-    )
+    df["วันเวลาลงสินค้า"] = df.apply(lambda row: _pick(row.get("PlantMoveOutAt"), row["วันที่"]), axis=1)
+    df["วันเวลาปิด LDT"] = df.apply(lambda row: _pick(row.get("ArriveToPlantAt"), row["วันที่"]), axis=1)
 
     selected = [
         "LDT", "แพล้นท์", "วันที่", "ทะเบียนหัว", "Ship To",
@@ -180,6 +185,48 @@ def fetch_vehicle_daily(session: requests.Session, target_date: str) -> pd.DataF
         final_df["ทะเบียน"] = final_df["ทะเบียน"].str.replace("สบ.", "", regex=False)
     log.info(f"Vehicle daily: {len(final_df)} rows")
     return final_df
+
+
+# ── Step 2b: ATMS vehicle master (fallback truck type) ──────────────────────
+
+def fetch_vehiclemaster(session: requests.Session) -> pd.DataFrame:
+    resp = session.get(VEHICLE_MASTER_URL, verify=False, timeout=60)
+    resp.raise_for_status()
+    if not resp.encoding:
+        resp.encoding = resp.apparent_encoding
+    tables = pd.read_html(io.StringIO(resp.text), displayed_only=False)
+    if not tables:
+        return pd.DataFrame()
+    df = max(tables, key=lambda t: t.shape[0] * t.shape[1])
+    df.columns = df.columns.map(lambda c: str(c).strip())
+    df = df.loc[:, ~df.columns.astype(str).str.contains(r"^Unnamed", case=False)]
+    df = df.astype(str)
+    keep = ["ทะเบียน", "เลขรถ", "ประเภทยานพาหนะ"]
+    df = df[[c for c in keep if c in df.columns]]
+    log.info(f"Vehicle master: {len(df)} rows")
+    return df
+
+
+def fill_missing_service(df_ldt: pd.DataFrame, vehicle: pd.DataFrame) -> pd.DataFrame:
+    """Trucks absent from truck_type.xlsx get บริการ/นน ปลายทาง from ATMS vehicle master
+    (Mixer 10 ล้อ → Scco ML/M001, Mixer 6 ล้อ → Scco MS/M002)."""
+    if df_ldt.empty or vehicle.empty or "บริการ" not in df_ldt.columns:
+        return df_ldt
+    vm = vehicle.copy()
+    vm["ทะเบียน"] = vm["ทะเบียน"].astype(str).str.replace("สบ.", "", regex=False).str.strip()
+    type_map = vm.set_index("ทะเบียน")["ประเภทยานพาหนะ"].to_dict()
+    vtype = df_ldt["ทะเบียนหัว"].astype(str).str.strip().map(type_map)
+    missing = df_ldt["บริการ"].isna()
+    is_ms = missing & (vtype == "Mixer 6 ล้อ")
+    is_ml = missing & (vtype == "Mixer 10 ล้อ")
+    df_ldt.loc[is_ms, "บริการ"] = "M002"
+    df_ldt.loc[is_ms, "นน ปลายทาง"] = 1
+    df_ldt.loc[is_ml, "บริการ"] = "M001"
+    df_ldt.loc[is_ml, "นน ปลายทาง"] = df_ldt.loc[is_ml, "นน ต้นทาง"].apply(lambda x: 4 if x < 4 else x)
+    filled = int(is_ms.sum() + is_ml.sum())
+    still = int((df_ldt["บริการ"].isna()).sum())
+    log.info(f"Truck-type fallback: filled {filled} rows from vehicle master, {still} still missing")
+    return df_ldt
 
 
 # ── Step 3: Merge LDT + driver + zone ────────────────────────────────────────
@@ -427,8 +474,14 @@ if __name__ == "__main__":
     with requests.Session() as session:
         atms_login(session)
         df_driver = fetch_vehicle_daily(session, target_date)
+        try:
+            df_vehicle = fetch_vehiclemaster(session)
+        except Exception as e:
+            log.warning(f"Vehicle master fetch failed ({e}) — skipping truck-type fallback")
+            df_vehicle = pd.DataFrame()
         df_ship_to = fetch_ship_to(session)
 
+    df_ldt_raw = fill_missing_service(df_ldt_raw, df_vehicle)
     df_processed = process_ldt(df_ldt_raw, df_driver, df_zone)
     df_ldt_final, df_new_ship_to = build_output(df_processed, df_ship_to, raw_ldt, df_zone)
 
