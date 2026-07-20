@@ -33,12 +33,12 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 
 def _fmt_date(val):
     if pd.isna(val): return ""
-    dt = pd.to_datetime(val, errors="coerce")
+    dt = pd.to_datetime(val, dayfirst=True, errors="coerce")
     return "" if pd.isna(dt) else dt.strftime("%d/%m/%Y")
 
 def _fmt_datetime(val):
     if pd.isna(val): return ""
-    dt = pd.to_datetime(val, errors="coerce")
+    dt = pd.to_datetime(val, dayfirst=True, errors="coerce")
     if pd.isna(dt): return str(val)
     return dt.strftime("%d/%m/%Y") if (dt.hour == 0 and dt.minute == 0) else dt.strftime("%d/%m/%Y %H:%M")
 
@@ -100,7 +100,7 @@ def fetch_ldt():
     df["dropoffs"] = ""
     df = df[df["แพล้นท์"].str.startswith(("SU", "SX"))]
 
-    cols = ["LDT","แพล้นท์","วันที่","ทะเบียนหัว","Ship To","เลขที่ตั๋วเพิ่ม 2","เลขที่ตั๋วเพิ่ม 4",
+    cols = ["LDT","แพล้นท์","วันที่","ทะเบียนหัว","TruckNo","Ship To","เลขที่ตั๋วเพิ่ม 2","เลขที่ตั๋วเพิ่ม 4",
             "สาขา","ผลิตภัณฑ์","นน ปลายทาง","นน ต้นทาง","วันเวลาลงสินค้า","วันเวลาปิด LDT",
             "วันเวลาอ้างอิง 1","วันเวลาอ้างอิง 2","วันเวลาอ้างอิง 3","วันเวลาอ้างอิง 4",
             "เวลาออกเดินทาง","วันที่ครบกำหนด","Type","ประเภทการวิ่ง","ประเภทการขนส่งขากลับ",
@@ -118,15 +118,24 @@ def atms_login(session):
 
 
 def fetch_driver(session, target_date):
-    r = session.post(
-        f"{BASE_URL}/report/print.out/print.excel/type/vehicle.daily.transaction",
-        data={"fleet_group_id": "", "fleet_id": "1", "t_date": target_date,
-              "num_of_day": "1", "submit": "พิมพ์",
-              "display_type": "multiple-day", "report_type": "vehicle.daily.transaction"},
-        verify=False, timeout=120,
-    )
-    r.raise_for_status()
-    df = pd.read_excel(io.BytesIO(r.content), header=2, engine="openpyxl")
+    """Vehicle daily transaction (จัดส่ง) for fleet groups 1+2 — covers trucks
+    outside fleet_id=1 (e.g. F-series) that the old fleet_id filter missed."""
+    frames = []
+    for fgid in ["1", "2"]:
+        r = session.post(
+            f"{BASE_URL}/report/print.out/print.excel/type/vehicle.daily.transaction",
+            data={"fleet_group_id": fgid, "fleet_id": "", "t_date": target_date,
+                  "num_of_day": "1", "submit": "พิมพ์",
+                  "display_type": "multiple-day", "report_type": "vehicle.daily.transaction"},
+            verify=False, timeout=120,
+        )
+        r.raise_for_status()
+        df = pd.read_excel(io.BytesIO(r.content), header=2, engine="openpyxl")
+        if "เบอร์รถ" not in df.columns:
+            logging.warning(f"vehicle daily fleet_group={fgid}: unexpected layout, skipping")
+            continue
+        frames.append(df)
+    df = pd.concat(frames, ignore_index=True)
     return df[["เบอร์รถ","ทะเบียน","สถานะ","คนขับ","รหัส.1","ชื่อ.1"]]
 
 
@@ -135,9 +144,27 @@ def fetch_driver(session, target_date):
 def process_ldt(df_ldt, df_driver, df_zone):
     df_driver = df_driver.copy()
     df_driver["ทะเบียน"] = df_driver["ทะเบียน"].str.replace("สบ.", "", regex=False)
-    df_driver = df_driver[["ทะเบียน","สถานะ","รหัส.1","ชื่อ.1"]]
+    dispatch_cols = ["ทะเบียน","สถานะ","รหัส.1"]
 
-    df = df_ldt.merge(df_driver, left_on="ทะเบียนหัว", right_on="ทะเบียน", how="left")
+    # Primary join: terminus TruckNo ↔ dispatch เบอร์รถ — plate/driver code/status
+    # come from the จัดส่ง system (the GPS/terminus plate can be stale)
+    by_no = df_driver.dropna(subset=["เบอร์รถ"]).drop_duplicates("เบอร์รถ", keep="last")
+    df = df_ldt.merge(by_no[["เบอร์รถ"] + dispatch_cols],
+                      left_on="TruckNo", right_on="เบอร์รถ", how="left")
+
+    # Fallback join by GPS plate when the dispatch report has no matching เบอร์รถ
+    by_plate = df_driver.dropna(subset=["ทะเบียน"]).drop_duplicates("ทะเบียน", keep="last")
+    fb = df_ldt[["ทะเบียนหัว"]].merge(by_plate[dispatch_cols],
+                                       left_on="ทะเบียนหัว", right_on="ทะเบียน", how="left")
+    found = df["ทะเบียน"].notna()
+    for c in dispatch_cols:
+        df[c] = df[c].where(found, fb[c].values)
+    logging.info(f"Dispatch join: {int(found.sum())} by เบอร์รถ, "
+                 f"{int((~found & df['ทะเบียน'].notna()).sum())} by plate fallback, "
+                 f"{int(df['ทะเบียน'].isna().sum())} unmatched")
+
+    df["ทะเบียนหัว"] = df["ทะเบียน"].fillna(df["ทะเบียนหัว"])
+    df = df.drop(columns=["เบอร์รถ","ทะเบียน","TruckNo"], errors="ignore")
     df = df.rename(columns={"รหัส.1": "รหัส พจส 1"})
     df["ประเภทรถร่วม"] = df["สถานะ"].apply(lambda x: "OT-MT02" if x == "พจร" else "OT-MT01")
     df = df.assign(บริการ="M005", **{c: "" for c in ["Base Plant","เลขที่ตั๋วเพิ่ม 2","เลขที่ตั๋วเพิ่ม 3",
