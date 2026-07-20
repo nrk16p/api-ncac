@@ -10,9 +10,10 @@ from models.master_model import (
     FormApprovalLog,
     FormMaster,
 )
-from models import User, Position
+from models import User, Position, Department
 from models.form_approver_department import FormApproverDepartment
 from schemas.form_approver_schema import ApproverDepartmentCreate
+from datetime import datetime, timedelta
 
 router = APIRouter(prefix="/forms", tags=["Forms - Approval"])
 
@@ -20,6 +21,17 @@ router = APIRouter(prefix="/forms", tags=["Forms - Approval"])
 # ============================================================
 # Helpers
 # ============================================================
+
+def parse_dt(val):
+    if not val:
+        return None
+    if isinstance(val, datetime):
+        return val
+    try:
+        return datetime.fromisoformat(val)
+    except Exception:
+        return None
+
 
 def get_user_by_employee_id(db: Session, employee_id: str) -> User | None:
     return db.query(User).filter(User.employee_id == employee_id).first()
@@ -176,6 +188,84 @@ def get_pending_approvals(
                 "image_url": requester.image_url,
                 
             })
+
+    return result
+
+
+# ============================================================
+# 🕘 Approval History (งานที่อนุมัติ/ปฏิเสธไปแล้ว)
+# ============================================================
+
+@router.get("/approval-history")
+def get_approval_history(
+    employee_id: str = Query(...),
+    start_date: str | None = Query(None),
+    end_date: str | None = Query(None),
+    db: Session = Depends(get_db),
+):
+    approver = get_user_by_employee_id(db, employee_id)
+    if not approver:
+        return []
+
+    query = (
+        db.query(FormApprovalLog, FormSubmission)
+        .join(FormSubmission, FormApprovalLog.submission_id == FormSubmission.id)
+        .filter(
+            FormApprovalLog.action_by == approver.id,
+            FormApprovalLog.action.in_(["APPROVED", "REJECTED"]),
+        )
+    )
+
+    if start_date and end_date:
+        start = parse_dt(start_date)
+        end = parse_dt(end_date)
+        if start and end:
+            query = query.filter(
+                FormApprovalLog.action_at >= start,
+                FormApprovalLog.action_at < end + timedelta(days=1),
+            )
+
+    rows = query.order_by(FormApprovalLog.action_at.desc()).all()
+
+    result = []
+    seen_submissions = set()
+
+    for log, sub in rows:
+        # one row per submission — keep only the latest action of this approver
+        if sub.id in seen_submissions:
+            continue
+        seen_submissions.add(sub.id)
+
+        requester = get_user_by_employee_id(db, sub.created_by)
+        department = None
+        if requester and requester.department_id:
+            department = db.query(Department).filter(
+                Department.department_id == requester.department_id
+            ).first()
+
+        result.append({
+            "submission_id": sub.id,
+            "form_id": sub.form_id,
+            "form_code": sub.form.form_code,
+            "form_name": sub.form.form_name,
+            "current_level": sub.current_approval_level,
+            "level_no": log.level_no,
+            "status": sub.status,
+            "status_approve": "Approved" if log.action == "APPROVED" else "Rejected",
+            "submission_status_approve": sub.status_approve,
+            "action": log.action,
+            "action_at": log.action_at,
+            "action_by_firstname": approver.firstname,
+            "action_by_lastname": approver.lastname,
+            "remark": log.remark,
+            "created_by": sub.created_by,
+            "created_at": sub.created_at,
+            "firstname": requester.firstname if requester else None,
+            "lastname": requester.lastname if requester else None,
+            "email": requester.email if requester else None,
+            "image_url": requester.image_url if requester else None,
+            "department_name_th": department.department_name_th if department else None,
+        })
 
     return result
 
