@@ -377,7 +377,7 @@ def submit_form(
 def update_status(
     form_id: str,
     background_tasks: BackgroundTasks,   # 👈 add this
-    new_status: str = Query(..., regex="^(Open|In-Progress|Done|Backlog|Rejected)$"),
+    new_status: str = Query(..., regex="^(Open|In-Progress|Done|Backlog|Coordinate|Rejected)$"),
     employee_id: str = Query(...),
     db: Session = Depends(get_db),
     ):
@@ -387,6 +387,7 @@ def update_status(
     2. In-Progress  -> user starts working
     3. Done         -> close
     4. Backlog      -> send back to queue
+    5. Coordinate    -> send to another user (not implemented)
     """
 
     # 🔍 หา submission ล่าสุดของ form_id
@@ -469,7 +470,7 @@ def get_form(
     form_id: Optional[str] = Query(None),
     start_date: Optional[str] = Query(None),
     end_date: Optional[str] = Query(None),
-    status: Optional[str] = Query(None, regex="^(Open|In-Progress|Done|Backlog|Rejected)$")
+    status: Optional[str] = Query(None, regex="^(Open|In-Progress|Done|Backlog|Coordinate|Rejected)$")
 ):
 
     # =====================================================
