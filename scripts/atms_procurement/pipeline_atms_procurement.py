@@ -326,7 +326,9 @@ def _collect_codes(session, index_url, id_pat, from_date, order_by):
     return pairs
 
 
-def _scrape_items(session, kind, from_date, db, workers=12):
+def _scrape_items(session, kind, from_date, db, workers=None):
+    if workers is None:
+        workers = int(os.getenv("ATMS_ITEM_WORKERS", "8"))   # เบาลงบน Render Starter (512MB)
     cfg = {
         "pr": {"index": f"{BASE}/inv/purchase.request/index",
                "view": f"{BASE}/inv/purchase.request/view/id/",
@@ -387,8 +389,9 @@ def main():
     started = datetime.utcnow()
     ict = started + timedelta(hours=7)                       # Asia/Bangkok
     first_this = ict.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    from_date = (first_this - timedelta(days=1)).replace(day=1).strftime("%d/%m/%Y")  # 1st of last month
-    log("window from", from_date)
+    # ปกติ = วันที่ 1 ของเดือนก่อน · ตั้ง ATMS_FROM_DATE (DD/MM/YYYY) เพื่อ override (เทสรอบแรกแบบเบา)
+    from_date = os.getenv("ATMS_FROM_DATE") or (first_this - timedelta(days=1)).replace(day=1).strftime("%d/%m/%Y")
+    log("window from", from_date, "· item workers", os.getenv("ATMS_ITEM_WORKERS", "8"))
 
     client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=10_000)
     db = client["atms"]
