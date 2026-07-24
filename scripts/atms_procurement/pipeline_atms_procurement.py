@@ -388,9 +388,13 @@ def main():
         log("MONGODB_URI not set"); sys.exit(1)
     started = datetime.utcnow()
     ict = started + timedelta(hours=7)                       # Asia/Bangkok
-    first_this = ict.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    # ปกติ = วันที่ 1 ของเดือนก่อน · ตั้ง ATMS_FROM_DATE (DD/MM/YYYY) เพื่อ override (เทสรอบแรกแบบเบา)
-    from_date = os.getenv("ATMS_FROM_DATE") or (first_this - timedelta(days=1)).replace(day=1).strftime("%d/%m/%Y")
+    # default = ย้อนหลัง 2 เดือน (วันที่ 1 ของเดือน 2 เดือนก่อน) — จับข้อมูลใหม่+อัปเดตย้อนหลัง
+    # override ได้ด้วย env ATMS_FROM_DATE (DD/MM/YYYY) เช่นเทสรอบแรกแบบเบา
+    y, mth = ict.year, ict.month - 2
+    while mth <= 0:
+        mth += 12
+        y -= 1
+    from_date = os.getenv("ATMS_FROM_DATE") or f"01/{mth:02d}/{y}"
     log("window from", from_date, "· item workers", os.getenv("ATMS_ITEM_WORKERS", "8"))
 
     client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=10_000)
