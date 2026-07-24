@@ -1,0 +1,21 @@
+name: ATMS procurement refresh
+
+# ยิง pipeline atms_procurement บน api-ncac ทุกวัน 03:00 เวลาไทย (20:00 UTC)
+# ต้องตั้ง repo secret: PIPELINE_API_KEY (= ค่าเดียวกับ env PIPELINE_API_KEY บน Render)
+on:
+  schedule:
+    - cron: "0 20 * * *"      # 20:00 UTC = 03:00 Asia/Bangkok
+  workflow_dispatch: {}        # ยิงเองได้จากแท็บ Actions
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger atms_procurement pipeline
+        run: |
+          echo "Triggering ATMS procurement refresh..."
+          curl -fsS -X POST \
+            "https://api-ncac.onrender.com/pipeline/run/atms_procurement" \
+            -H "x-api-key: ${{ secrets.PIPELINE_API_KEY }}"
+          echo ""
+          echo "Triggered. Pipeline runs in the background on Render (~5-10 min)."

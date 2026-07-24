@@ -20,3 +20,4 @@ pymongo
 pymysql
 numpy
 apscheduler
+beautifulsoup4

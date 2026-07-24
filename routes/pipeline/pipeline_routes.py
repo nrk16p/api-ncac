@@ -15,9 +15,24 @@ PIPELINE_SCRIPTS = {
     "ld":   SCRIPTS_DIR / "ld"   / "pipeline_ld.py",
     "scco": SCRIPTS_DIR / "scco" / "pipeline_scco.py",
     "cpac": SCRIPTS_DIR / "cpac" / "pipeline_cpac.py",
+    "deliver_result": SCRIPTS_DIR / "deliver_result" / "pipeline_deliver_result.py",
+    "driver_cost": SCRIPTS_DIR / "driver_cost" / "pipeline_driver_cost.py",
+    "atms_procurement": SCRIPTS_DIR / "atms_procurement" / "pipeline_atms_procurement.py",
 }
 
-PIPELINE_NAMES = {"ld": "asia", "scco": "scco", "cpac": "cpac"}
+PIPELINE_NAMES = {"ld": "asia", "scco": "scco", "cpac": "cpac",
+                  "deliver_result": "deliver_result", "driver_cost": "driver_cost",
+                  "atms_procurement": "atms_procurement"}
+
+# Where each pipeline logs its runs: (db, collection)
+RUN_LOG_LOCATION = {
+    "ld":   ("atms", "ldt_runs"),
+    "scco": ("atms", "ldt_runs"),
+    "cpac": ("atms", "ldt_runs"),
+    "deliver_result": ("mena-bi", "pipeline_runs"),
+    "driver_cost": ("mena-bi", "pipeline_runs"),
+    "atms_procurement": ("atms", "procurement_runs"),
+}
 
 # In-memory run state (single-process; reset on restart)
 _running: dict[str, bool] = {k: False for k in PIPELINE_SCRIPTS}
@@ -78,8 +93,9 @@ async def pipeline_status(pipeline_type: str):
         uri = os.getenv("MONGODB_URI")
         if uri:
             client = MongoClient(uri, serverSelectionTimeoutMS=3000)
-            db = client["atms"]
-            doc = db["ldt_runs"].find_one(
+            db_name, coll_name = RUN_LOG_LOCATION[pipeline_type]
+            db = client[db_name]
+            doc = db[coll_name].find_one(
                 {"pipeline": PIPELINE_NAMES[pipeline_type]},
                 sort=[("created_at", -1)],
                 projection={"ldt_rows": 0, "new_ship_to_rows": 0},
