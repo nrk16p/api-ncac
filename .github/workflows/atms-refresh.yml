@@ -1,10 +1,10 @@
 name: ATMS procurement refresh
 
-# ยิง pipeline atms_procurement บน api-ncac ทุกวัน 03:00 เวลาไทย (20:00 UTC)
+# ยิง pipeline atms_procurement บน api-ncac ทุกวัน 06:00 เวลาไทย (23:00 UTC)
 # ต้องตั้ง repo secret: PIPELINE_API_KEY (= ค่าเดียวกับ env PIPELINE_API_KEY บน Render)
 on:
   schedule:
-    - cron: "0 20 * * *"      # 20:00 UTC = 03:00 Asia/Bangkok
+    - cron: "0 23 * * *"      # 23:00 UTC = 06:00 Asia/Bangkok
   workflow_dispatch: {}        # ยิงเองได้จากแท็บ Actions
 
 jobs:
