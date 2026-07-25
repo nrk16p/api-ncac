@@ -153,6 +153,8 @@ async def startup_event():
     # cpac is NOT scheduled here — it must run locally (launchd com.mena.mena-data-cpac
     # on the office Mac) because fleetlink/CPAC access is local-only. Manual trigger
     # via POST /pipeline/run/cpac remains available.
+    # atms_procurement (PR/PO/deposit/items → mena-wms /pr) — 06:00 BKK
+    scheduler.add_job(_run, CronTrigger(hour=6, minute=0), args=["atms_procurement"], id="sched_atms_procurement")
     scheduler.start()
     import logging
     logging.getLogger(__name__).info("Pipeline scheduler started — LD 02:00, SCCO 02:20 (BKK); CPAC runs locally")
