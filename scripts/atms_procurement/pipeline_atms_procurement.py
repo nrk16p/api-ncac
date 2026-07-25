@@ -76,10 +76,22 @@ def get_session():
 
 
 # ── html helpers ────────────────────────────────────────────────────────────
+def _get(session, url, params=None, tries=4):
+    """GET พร้อม retry+backoff — ทน ConnectionAborted/transient จาก ATMS throttle"""
+    last = None
+    for a in range(tries):
+        try:
+            r = session.get(url, params=params, timeout=45)
+            r.raise_for_status()
+            return r
+        except requests.RequestException as e:
+            last = e
+            time.sleep(2 * (a + 1))   # 2s, 4s, 6s
+    raise last
+
+
 def soup_of(session, url, params=None):
-    r = session.get(url, params=params, timeout=45)
-    r.raise_for_status()
-    return BeautifulSoup(r.text, "html.parser")
+    return BeautifulSoup(_get(session, url, params).text, "html.parser")
 
 
 def data_table(soup):
