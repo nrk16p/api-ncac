@@ -424,7 +424,7 @@ def main():
 
     finished = datetime.utcnow()
     db["procurement_runs"].insert_one({
-        "pipeline": "atms_procurement", "created_at": finished,
+        "pipeline": os.getenv("ATMS_RUN_LABEL", "atms_procurement"), "created_at": finished,
         "started_at": started, "finished_at": finished, "from_date": from_date,
         "counts": counts, "ok": err is None, "error": err,
         "duration_sec": round((finished - started).total_seconds(), 1),

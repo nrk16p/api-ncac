@@ -18,11 +18,13 @@ PIPELINE_SCRIPTS = {
     "deliver_result": SCRIPTS_DIR / "deliver_result" / "pipeline_deliver_result.py",
     "driver_cost": SCRIPTS_DIR / "driver_cost" / "pipeline_driver_cost.py",
     "atms_procurement": SCRIPTS_DIR / "atms_procurement" / "pipeline_atms_procurement.py",
+    "atms_procurement_light": SCRIPTS_DIR / "atms_procurement" / "pipeline_atms_procurement_light.py",
 }
 
 PIPELINE_NAMES = {"ld": "asia", "scco": "scco", "cpac": "cpac",
                   "deliver_result": "deliver_result", "driver_cost": "driver_cost",
-                  "atms_procurement": "atms_procurement"}
+                  "atms_procurement": "atms_procurement",
+                  "atms_procurement_light": "atms_procurement_light"}
 
 # Where each pipeline logs its runs: (db, collection)
 RUN_LOG_LOCATION = {
@@ -32,6 +34,7 @@ RUN_LOG_LOCATION = {
     "deliver_result": ("mena-bi", "pipeline_runs"),
     "driver_cost": ("mena-bi", "pipeline_runs"),
     "atms_procurement": ("atms", "procurement_runs"),
+    "atms_procurement_light": ("atms", "procurement_runs"),
 }
 
 # In-memory run state (single-process; reset on restart)
