@@ -153,9 +153,11 @@ async def startup_event():
     # cpac is NOT scheduled here — it must run locally (launchd com.mena.mena-data-cpac
     # on the office Mac) because fleetlink/CPAC access is local-only. Manual trigger
     # via POST /pipeline/run/cpac remains available.
-    # atms_procurement (PR/PO/deposit/items → mena-wms /pr)
-    # scheduler ทำงานเป็น UTC จริง (tz ไม่ apply) → 23:00 UTC = 06:00 น. ไทย
-    scheduler.add_job(_run, CronTrigger(hour=23, minute=0), args=["atms_procurement"], id="sched_atms_procurement")
+    # atms_procurement → mena-wms /pr · scheduler ทำงานเป็น UTC จริง (tz ไม่ apply)
+    # ทุก 4 ชม. 06:00–22:00 น. ไทย → 06:00 full (2 เดือน), 10/14/18/22 light (7 วัน)
+    # BKK→UTC (−7): 06→23(prev) · 10→03 · 14→07 · 18→11 · 22→15
+    scheduler.add_job(_run, CronTrigger(hour=23, minute=0), args=["atms_procurement"], id="sched_atms_procurement")            # 06:00 BKK full
+    scheduler.add_job(_run, CronTrigger(hour="3,7,11,15", minute=0), args=["atms_procurement_light"], id="sched_atms_procurement_light")  # 10/14/18/22 BKK light
     scheduler.start()
     import logging
     logging.getLogger(__name__).info("Pipeline scheduler started — LD 02:00, SCCO 02:20 (BKK); CPAC runs locally")
