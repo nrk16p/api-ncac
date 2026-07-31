@@ -4,7 +4,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, Header, HTTPException
 from pymongo import MongoClient
 
 router = APIRouter(prefix="/pipeline", tags=["Pipeline"])
@@ -19,12 +19,20 @@ PIPELINE_SCRIPTS = {
     "driver_cost": SCRIPTS_DIR / "driver_cost" / "pipeline_driver_cost.py",
     "atms_procurement": SCRIPTS_DIR / "atms_procurement" / "pipeline_atms_procurement.py",
     "atms_procurement_light": SCRIPTS_DIR / "atms_procurement" / "pipeline_atms_procurement_light.py",
+    "engineon": SCRIPTS_DIR / "engineon" / "pipeline_engineon.py",
+    "drivercost_ticket": SCRIPTS_DIR / "engineon" / "pipeline_drivercost_ticket.py",
+    "engineon_trip_summary": SCRIPTS_DIR / "engineon" / "pipeline_engineon_trip_summary.py",
+    "vehiclemaster": SCRIPTS_DIR / "engineon" / "pipeline_vehiclemaster.py",
 }
 
 PIPELINE_NAMES = {"ld": "asia", "scco": "scco", "cpac": "cpac",
                   "deliver_result": "deliver_result", "driver_cost": "driver_cost",
                   "atms_procurement": "atms_procurement",
-                  "atms_procurement_light": "atms_procurement_light"}
+                  "atms_procurement_light": "atms_procurement_light",
+                  "engineon": "engineon",
+                  "drivercost_ticket": "drivercost_ticket",
+                  "engineon_trip_summary": "engineon_trip_summary",
+                  "vehiclemaster": "vehiclemaster"}
 
 # Where each pipeline logs its runs: (db, collection)
 RUN_LOG_LOCATION = {
@@ -35,6 +43,10 @@ RUN_LOG_LOCATION = {
     "driver_cost": ("mena-bi", "pipeline_runs"),
     "atms_procurement": ("atms", "procurement_runs"),
     "atms_procurement_light": ("atms", "procurement_runs"),
+    "engineon": ("analytics", "etl_jobs"),
+    "drivercost_ticket": ("analytics", "etl_jobs"),
+    "engineon_trip_summary": ("analytics", "etl_jobs"),
+    "vehiclemaster": ("analytics", "etl_jobs"),
 }
 
 # In-memory run state (single-process; reset on restart)
@@ -48,12 +60,16 @@ def _verify_key(x_api_key: str = Header(..., alias="x-api-key")):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
-async def _run(pipeline_type: str):
+async def _run(pipeline_type: str, params: dict | None = None):
     script = PIPELINE_SCRIPTS[pipeline_type]
     _running[pipeline_type] = True
     _last_started[pipeline_type] = datetime.now(timezone.utc).isoformat()
     try:
         env = os.environ.copy()
+        # Optional run params (e.g. {"year": 2026, "month": 7}) become UPPERCASE env
+        # vars for the subprocess — scripts fall back to sensible defaults without them
+        if params:
+            env.update({str(k).upper(): str(v) for k, v in params.items() if v is not None})
         proc = await asyncio.create_subprocess_exec(
             sys.executable, str(script),
             stdout=asyncio.subprocess.PIPE,
@@ -76,14 +92,15 @@ async def _run(pipeline_type: str):
 async def run_pipeline(
     pipeline_type: str,
     background_tasks: BackgroundTasks,
+    params: dict | None = Body(default=None),
     _: str = Depends(_verify_key),
 ):
     if pipeline_type not in PIPELINE_SCRIPTS:
         raise HTTPException(status_code=400, detail=f"Unknown pipeline: {pipeline_type}")
     if _running.get(pipeline_type):
         return {"status": "already_running", "pipeline": pipeline_type}
-    background_tasks.add_task(_run, pipeline_type)
-    return {"status": "started", "pipeline": pipeline_type}
+    background_tasks.add_task(_run, pipeline_type, params)
+    return {"status": "started", "pipeline": pipeline_type, "params": params}
 
 
 @router.get("/status/{pipeline_type}")

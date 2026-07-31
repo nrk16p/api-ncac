@@ -150,6 +150,11 @@ async def startup_event():
     # Run LD → SCCO → CPAC sequentially so they don't hammer ATMS at the same time
     scheduler.add_job(_run, CronTrigger(hour=2, minute=0),  args=["ld"],   id="sched_ld")
     scheduler.add_job(_run, CronTrigger(hour=2, minute=20), args=["scco"], id="sched_scco")
+    # deliver_result runs at 03:30 — after ATMS regenerates the monthly batch
+    # files (~02:45-02:50) and clear of ld/scco
+    scheduler.add_job(_run, CronTrigger(hour=3, minute=30), args=["deliver_result"], id="sched_deliver_result")
+    # driver_cost runs at 05:45 — ATMS regenerates its batch files later (~05:00-05:05)
+    scheduler.add_job(_run, CronTrigger(hour=5, minute=45), args=["driver_cost"], id="sched_driver_cost")
     # cpac is NOT scheduled here — it must run locally (launchd com.mena.mena-data-cpac
     # on the office Mac) because fleetlink/CPAC access is local-only. Manual trigger
     # via POST /pipeline/run/cpac remains available.
@@ -158,9 +163,15 @@ async def startup_event():
     # BKK→UTC (−7): 06→23(prev) · 10→03 · 14→07 · 18→11 · 22→15
     scheduler.add_job(_run, CronTrigger(hour=23, minute=0), args=["atms_procurement"], id="sched_atms_procurement")            # 06:00 BKK full
     scheduler.add_job(_run, CronTrigger(hour="3,7,11,15", minute=0), args=["atms_procurement_light"], id="sched_atms_procurement_light")  # 10/14/18/22 BKK light
+    # engineon chain (BKK→UTC −7): GPS crunch 04:00 BKK → 21:00 UTC (prev day);
+    # drivercost_ticket 06:10 BKK → 23:10 UTC (หลัง ATMS regen batch files ~05:00 BKK,
+    # เหลื่อมจาก atms_procurement 23:00); trip summary 06:30 BKK → 23:30 UTC
+    scheduler.add_job(_run, CronTrigger(hour=21, minute=0),  args=["engineon"], id="sched_engineon")                          # 04:00 BKK
+    scheduler.add_job(_run, CronTrigger(hour=23, minute=10), args=["drivercost_ticket"], id="sched_drivercost_ticket")        # 06:10 BKK
+    scheduler.add_job(_run, CronTrigger(hour=23, minute=30), args=["engineon_trip_summary"], id="sched_engineon_trip_summary")  # 06:30 BKK
     scheduler.start()
     import logging
-    logging.getLogger(__name__).info("Pipeline scheduler started — LD 02:00, SCCO 02:20 (BKK); CPAC runs locally")
+    logging.getLogger(__name__).info("Pipeline scheduler started — LD 02:00, SCCO 02:20, deliver_result 03:30, driver_cost 05:45 (BKK); CPAC runs locally; engineon 04:00 / drivercost_ticket 06:10 / trip_summary 06:30 (BKK)")
 
 
 # ------------------------------
