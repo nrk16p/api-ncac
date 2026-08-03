@@ -4,6 +4,8 @@
 #    POST /atms/openjob/item      section 2 แยกเส้น (ต่อจาก maintenance_request_id)
 #    GET  /atms/openjob/options   ค่า dropdown จริงจาก ATMS (branch / ประเภทซ่อม / ตำแหน่งยาง)
 #    GET  /atms/openjob/lookup    autocomplete ทะเบียนรถ / คนขับ / ช่าง
+#    GET  /atms/openjob/search    ค้นรายการ job (ตามเลขที่เอกสาร / ทะเบียน / ช่วงวันที่)
+#    GET  /atms/openjob/{ref}     ดึง job ที่เปิดไว้ — ref = id (175039) หรือ code (SBMR26070457)
 #    ทุกเส้นส่ง cookie ผ่าน header X-PHPSESSID (ไม่ส่ง = login ด้วย env)
 # ======================================================
 from typing import Any, Dict, List, Optional
@@ -14,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from services.atms_openjob_service import (
     AtmsAuthError,
     AtmsClient,
+    AtmsNotFoundError,
     AtmsOpenJobError,
     LOOKUP_URLS,
     get_client,
@@ -83,6 +86,8 @@ def _run(fn, *args, **kw):
         return fn(*args, **kw)
     except AtmsAuthError as e:
         raise HTTPException(status_code=401, detail=str(e))
+    except AtmsNotFoundError as e:                       # ต้องมาก่อน AtmsOpenJobError (เป็นลูกของมัน)
+        raise HTTPException(status_code=404, detail=str(e))
     except AtmsOpenJobError as e:
         raise HTTPException(status_code=422, detail=str(e))
 
@@ -137,3 +142,47 @@ def job_lookup(
     if kind not in LOOKUP_URLS:
         raise HTTPException(status_code=422, detail=f"kind ต้องเป็นหนึ่งใน {sorted(LOOKUP_URLS)}")
     return {"kind": kind, "q": q, "results": _run(_client(x_phpsessid).lookup, kind, q, limit)}
+
+
+@router.get("/search", summary="ค้นรายการ job ที่เปิดไว้")
+def search_jobs(
+    code: Optional[str] = Query(None, description="เลขที่แจ้งซ่อม เช่น SBMR26070457"),
+    plate_no: Optional[str] = Query(None, description="ทะเบียนรถ เช่น 1ฒย-838"),
+    vehicle_no: Optional[str] = Query(None, description="เลขรถ เช่น T-0031"),
+    branch_id: Optional[str] = Query(None, description="ดูค่าได้จาก GET /atms/openjob/options"),
+    flow: Optional[str] = Query(None, description="request tire | request maintenance"),
+    from_schedule_at: Optional[str] = Query(None, description="แจ้งซ่อมตั้งแต่ DD/MM/YYYY"),
+    to_schedule_at: Optional[str] = Query(None, description="แจ้งซ่อมถึง DD/MM/YYYY"),
+    order_by: Optional[str] = Query(None, description="เช่น mr.code desc"),
+    limit: int = Query(50, ge=1, le=200),
+    x_phpsessid: Optional[str] = Header(None, alias="X-PHPSESSID"),
+) -> Dict[str, Any]:
+    """
+    ชื่อ query string ตรงกับช่องค้นหาของ ATMS ตรง ๆ — `fields` ใน response คือรายชื่อ
+    ช่องที่ ATMS มีจริง (อ่านสดจากฟอร์ม) ส่วน filter ที่ ATMS ไม่รู้จักจะไม่ล้ม
+    แต่ถูกรายงานไว้ใน `ignored`
+    """
+    return _run(_client(x_phpsessid).search_jobs, limit,
+                code=code, plate_no=plate_no, vehicle_no=vehicle_no, branch_id=branch_id,
+                flow=flow, from_schedule_at=from_schedule_at, to_schedule_at=to_schedule_at,
+                order_by=order_by)
+
+
+@router.get("/{ref}", summary="ดึงข้อมูล job — ใส่ id หรือเลขที่เอกสารก็ได้")
+def get_job(
+    ref: str,
+    items: bool = Query(True, description="ดึงรายการซ่อมของ job มาด้วย"),
+    raw: bool = Query(False, description="แนบ HTML ดิบมาด้วย (ไว้ debug ตอน ATMS เปลี่ยนหน้า)"),
+    x_phpsessid: Optional[str] = Header(None, alias="X-PHPSESSID"),
+) -> Dict[str, Any]:
+    """
+    `ref` เลขล้วน = maintenance_request_id (175039) · อย่างอื่น = เลขที่เอกสาร (SBMR26070457)
+    ซึ่งจะถูกค้นเป็น id ให้ก่อนจากหน้า index
+
+    response
+      info   ป้ายภาษาไทย–ค่า แบบที่เห็นในหน้าเว็บ
+      fields ชื่อฟิลด์ตรงกับตอน POST (vehicle_id, branch_id) — แก้แล้วยิงกลับได้เลย
+      labels ความหมายของ id ในฟิลด์ (branch_id "4" → ชื่อสาขา)
+      items  รายการซ่อมของ job นี้
+    """
+    return _run(_client(x_phpsessid).job, ref, with_items=items, raw=raw)

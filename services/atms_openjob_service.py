@@ -3,8 +3,10 @@ ATMS — เปิด job แจ้งซ่อม / ขอเปลี่ยน
 
 ┌ SECTION 1  POST /veh/maintenance.request/add                         (urlencoded)
 │            สร้างหัว job → 302 Location .../maintenance_request_id/<id>
-└ SECTION 2  POST /veh/maintenance.request.item/add/maintenance_request_id/<id>
-             เพิ่มรายการซ่อม (multipart — แนบรูปได้ 3 รูป) ใส่ได้หลายรายการ
+├ SECTION 2  POST /veh/maintenance.request.item/add/maintenance_request_id/<id>
+│            เพิ่มรายการซ่อม (multipart — แนบรูปได้ 3 รูป) ใส่ได้หลายรายการ
+└ อ่านกลับ    GET  /veh/maintenance.request/view|edit/id/<id>  +  .../index (ค้นหา)
+             .job(ref) รับได้ทั้ง id (175039) และเลขที่เอกสาร (SBMR26070457)
 
 ทำไมต้องอ่าน 302 เอง
     ฟอร์มเป็น PHP แบบ Post/Redirect/Get — สำเร็จแล้ว "ต้อง" ได้ 302 เสมอ
@@ -48,6 +50,11 @@ BASE = "https://www.mena-atms.com"
 LOGIN_URL = f"{BASE}/account/user/login"
 JOB_ADD_URL = f"{BASE}/veh/maintenance.request/add"
 ITEM_ADD_URL = f"{BASE}/veh/maintenance.request.item/add/maintenance_request_id/"
+# อ่านกลับ (GET) — ATMS ใช้รูป /<module>/<controller>/<action>/id/<n> เหมือนกันทั้งระบบ
+JOB_INDEX_URL = f"{BASE}/veh/maintenance.request/index"
+JOB_VIEW_URL = f"{BASE}/veh/maintenance.request/view/id/"
+JOB_EDIT_URL = f"{BASE}/veh/maintenance.request/edit/id/"
+ITEM_INDEX_URL = f"{BASE}/veh/maintenance.request.item/index/maintenance_request_id/"
 DOMAIN = "www.mena-atms.com"
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
@@ -81,6 +88,7 @@ AUTO_RESOLVE = {"vehicle": "vehicle", "driver": "driver",
 
 ID_PATTERN = re.compile(r"/(?:maintenance_request_id|id)/(\d+)")
 TIRE_CODE = re.compile(r"^\s*([A-Za-z]+\s*\d+)")   # "RA3ล้อหลัง..." → "RA3"
+ROW_ID = re.compile(r"/(?:view|edit)/id/(\d+)")    # ดึง id จากลิงก์ในตาราง index
 
 
 class AtmsAuthError(RuntimeError):
@@ -89,6 +97,10 @@ class AtmsAuthError(RuntimeError):
 
 class AtmsOpenJobError(RuntimeError):
     """ฟอร์มไม่ผ่าน validation หรือ ATMS ตอบผิดรูปแบบ"""
+
+
+class AtmsNotFoundError(AtmsOpenJobError):
+    """ไม่มีเอกสารนี้ใน ATMS (id / เลขที่เอกสารผิด หรือถูกลบไปแล้ว)"""
 
 
 def _s(v: Any) -> str:
@@ -115,6 +127,8 @@ class AtmsClient:
         self._sess: requests.Session | None = None
         self._options_cache: dict[str, dict[str, dict[str, str]]] = {}
         self._lookup_cache: dict[tuple[str, str], list[dict]] = {}
+        self._job_id_cache: dict[str, int] = {}
+        self._index_fields: set[str] | None = None
 
     # ── transport ───────────────────────────────────────────────────────────
     @property
@@ -157,6 +171,33 @@ class AtmsClient:
                 last = e
                 time.sleep(1.5 * (attempt + 1))
         raise AtmsOpenJobError(f"ต่อ ATMS ไม่ได้: {last}")
+
+    def _get_html(self, url: str, params: Mapping[str, Any] | None = None) -> str:
+        """
+        GET หน้า HTML แบบรู้ว่า session หมดอายุ — ATMS ตอบ 302 → /account/user/login
+        เมื่อ cookie ตาย ถ้าปล่อยตาม redirect เองจะได้ HTML หน้า login มาแบบเงียบ ๆ
+        แล้ว parser จะคืน dict ว่างโดยไม่มีใครรู้ว่าจริง ๆ แล้ว auth หลุด
+        """
+        r = self._request("GET", url, params=params, allow_redirects=False)
+        if r.status_code in (301, 302, 303, 307, 308):
+            loc = r.headers.get("Location", "")
+            if "account/user/login" in loc:
+                if self._can_relogin:
+                    self._sess = None
+                    r = self._request("GET", url, params=params, allow_redirects=False)
+                    loc = r.headers.get("Location", "")
+                if "account/user/login" in loc:
+                    raise AtmsAuthError("PHPSESSID หมดอายุ — ATMS เด้งกลับหน้า login")
+            if r.status_code in (301, 302, 303, 307, 308):    # redirect อื่น ตามไปตามปกติ
+                r = self._request("GET", urljoin(BASE, loc))
+        if r.status_code == 404:
+            raise AtmsNotFoundError(f"ATMS ไม่พบหน้า {url}")
+        if r.status_code != 200:
+            raise AtmsOpenJobError(f"ATMS ตอบ HTTP {r.status_code} ที่ {url}")
+        return r.text
+
+    def _get_soup(self, url: str, params: Mapping[str, Any] | None = None) -> BeautifulSoup:
+        return BeautifulSoup(self._get_html(url, params), "html.parser")
 
     def _submit(self, url: str, fields: list[tuple[str, str]],
                 files: list[tuple] | None = None, follow: bool = False) -> dict[str, Any]:
@@ -204,7 +245,7 @@ class AtmsClient:
         """
         if form not in self._options_cache:
             url = JOB_ADD_URL if form == "job" else f"{ITEM_ADD_URL}0"
-            soup = BeautifulSoup(self._request("GET", url).text, "html.parser")
+            soup = self._get_soup(url)
             self._options_cache[form] = {
                 sel["name"]: {o.get("value", ""): o.get_text(strip=True)
                               for o in sel.find_all("option") if o.get("value")}
@@ -326,6 +367,100 @@ class AtmsClient:
             raise AtmsOpenJobError(f"เปิด job แล้วแต่หา id ใน Location ไม่เจอ: {job.get('location')}")
         return {"job": job, "items": self.add_items(rid, items) if items else []}
 
+    # ── อ่านกลับ (GET) ──────────────────────────────────────────────────────
+    def search_jobs(self, limit: int = 50, **filters) -> dict[str, Any]:
+        """
+        ค้นจากหน้า index — ชื่อช่องค้นหา "อ่านจากฟอร์มจริง" ไม่ฝังไว้ในโค้ด
+        คืน `searched` / `ignored` มาด้วย เพื่อให้รู้ทันทีว่า filter ไหน ATMS ไม่รู้จัก
+        """
+        soup = None
+        if self._index_fields is None:            # อ่านชื่อช่องครั้งแรกครั้งเดียว แล้วใช้ซ้ำทั้ง client
+            soup = self._get_soup(JOB_INDEX_URL)
+            self._index_fields = {el["name"] for el in soup.find_all(["input", "select"])
+                                  if el.get("name")}
+        params: dict[str, Any] = {"submit": "ค้นหา"}
+        ignored: list[str] = []
+        for k, v in filters.items():
+            if v in (None, ""):
+                continue
+            (params.__setitem__(k, v) if k in self._index_fields else ignored.append(k))
+        if len(params) > 1 or soup is None:       # มี filter → ค้นใหม่; ไม่มีก็ใช้หน้าที่เพิ่งโหลด
+            soup = self._get_soup(JOB_INDEX_URL, params)
+        return {"fields": sorted(self._index_fields),
+                "searched": {k: v for k, v in params.items() if k != "submit"},
+                "ignored": ignored, "rows": _table_rows(soup)[:limit]}
+
+    def find_job_id(self, code: str) -> int | None:
+        """เลขที่เอกสาร (เช่น SBMR26070457) → maintenance_request_id"""
+        code = _s(code).strip()
+        if not code:
+            return None
+        if code not in self._job_id_cache:
+            res = self.search_jobs(limit=200, code=code)
+            hit = next((r for r in res["rows"] if r.get("id") and _has_text(r, code)), None)
+            if not hit:
+                return None
+            self._job_id_cache[code] = int(hit["id"])
+        return self._job_id_cache[code]
+
+    def job_items(self, request_id: int | str) -> list[dict[str, Any]]:
+        """
+        รายการซ่อมของ job จากหน้า item index
+        ของจริงเส้นนี้ตอบ 500 (ATMS ไม่ได้ทำหน้านี้ไว้ — รายการโชว์ในหน้า job อยู่แล้ว)
+        จึงกลืน error แล้วให้ `job()` ไปหยิบจากตารางในหน้า view แทน ไม่ล้มทั้ง request
+        """
+        try:
+            return _table_rows(self._get_soup(f"{ITEM_INDEX_URL}{request_id}"))
+        except AtmsOpenJobError:
+            return []
+
+    def job(self, ref: int | str, with_items: bool = True,
+            raw: bool = False) -> dict[str, Any]:
+        """
+        ดึงข้อมูล job ที่เปิดไว้ — `ref` ใส่ได้ทั้ง maintenance_request_id (175039)
+        และเลขที่เอกสาร (SBMR26070457) โดยเลขล้วน = id ส่วนอื่น = code แล้วค้น id ให้ก่อน
+
+        อ่าน 2 ชั้นเพราะแต่ละหน้าให้คนละอย่าง
+          view → ป้ายภาษาไทยแบบที่คนอ่าน ("ทะเบียนรถ": "1ฒย-838")
+          edit → ชื่อฟิลด์ตรงกับตอน POST (vehicle_id, branch_id) เอาไปยิงต่อได้เลย
+        หน้าไหนใช้ไม่ได้ก็ข้าม แล้วรายงานใน `sources` ว่าได้มาจากไหนบ้าง
+        """
+        rid = int(_s(ref)) if _s(ref).strip().isdigit() else self.find_job_id(_s(ref))
+        if not rid:
+            raise AtmsNotFoundError(f"ไม่พบเอกสาร {ref!r} ใน ATMS")
+
+        out: dict[str, Any] = {"maintenance_request_id": rid, "sources": [],
+                               "info": {}, "fields": {}, "tables": []}
+        for name, url in (("view", f"{JOB_VIEW_URL}{rid}"), ("edit", f"{JOB_EDIT_URL}{rid}")):
+            try:
+                html = self._get_html(url)
+            except AtmsOpenJobError:
+                continue          # id ที่ไม่มีจริง ATMS ตอบ 500 (ไม่ใช่ 404) — ข้ามไปลองอีกหน้า
+            soup = BeautifulSoup(html, "html.parser")
+            info, fields, tables = _label_pairs(soup), _form_values(soup), _all_tables(soup)
+            if not (info or fields):
+                continue
+            out["sources"].append({"name": name, "url": url})
+            out["info"] = {**info, **out["info"]}          # หน้าแรกที่อ่านได้ชนะ
+            out["fields"] = {**fields, **out["fields"]}
+            out["tables"] = out["tables"] or tables
+            if raw:
+                out.setdefault("html", {})[name] = html
+        if not out["sources"]:
+            raise AtmsNotFoundError(f"ไม่พบ job id {rid} ใน ATMS (อ่านหน้า view/edit ไม่ได้)")
+
+        out["labels"] = self._labels_of(out["fields"])
+        if with_items:
+            # หน้า item index ใช้ไม่ได้ → ถอยไปเอาตารางที่มีคอลัมน์ "อาการ" ในหน้า job
+            out["items"] = self.job_items(rid) or _pick_items(out["tables"])
+        return out
+
+    def _labels_of(self, fields: Mapping[str, Any]) -> dict[str, str]:
+        """แปลง id ในฟอร์ม (branch_id="4") เป็นข้อความที่คนอ่านรู้เรื่อง โดยเทียบกับ dropdown"""
+        opts = {**self.options("job"), **self.options("item")}
+        return {k: opts[k][v] for k, v in fields.items()
+                if k in opts and isinstance(v, str) and v in opts[k]}
+
 
 # ── helper ระดับโมดูล ────────────────────────────────────────────────────────
 def _as_dict(payload: Mapping[str, Any] | Iterable[Mapping[str, Any]]) -> dict[str, Any]:
@@ -340,6 +475,116 @@ def _as_dict(payload: Mapping[str, Any] | Iterable[Mapping[str, Any]]) -> dict[s
         else:
             out[k] = v
     return out
+
+
+def _has_text(row: Mapping[str, Any], needle: str) -> bool:
+    return needle.upper() in " ".join(_s(v).upper() for v in row.values())
+
+
+def _form_values(soup: BeautifulSoup) -> dict[str, Any]:
+    """
+    อ่านค่าที่กรอกไว้จากฟอร์ม (หน้า edit) → dict ที่หน้าตาเหมือน payload ตอน POST
+    ใช้ชื่อฟิลด์จริงของ ATMS เลย จึงเอาผลลัพธ์ไปแก้แล้วยิงกลับได้ทันที
+    """
+    out: dict[str, Any] = {}
+    for el in soup.find_all(["input", "select", "textarea"]):
+        name = el.get("name")
+        kind = (el.get("type") or "text").lower()
+        if not name or kind in ("submit", "button", "image", "file", "password"):
+            continue
+        if el.name == "textarea":
+            val = el.get_text()
+        elif el.name == "select":
+            opt = el.find("option", selected=True)
+            val = opt.get("value", "") if opt else ""
+        else:
+            if kind in ("checkbox", "radio") and not el.has_attr("checked"):
+                continue
+            val = el.get("value", "")
+        if name.endswith("[]"):
+            if val:            # ฟอร์มมี hidden ค่าว่างคู่กับ checkbox เสมอ — ตัดทิ้งไม่ให้ปนของจริง
+                out.setdefault(name[:-2], []).append(val)
+        else:
+            out.setdefault(name, val)
+    return out
+
+
+def _label_pairs(soup: BeautifulSoup) -> dict[str, str]:
+    """หน้า view/edit ของ ATMS วางเป็นคู่ ป้าย–ค่า (tr 2 ช่อง หรือ dt/dd) → dict"""
+    out: dict[str, str] = {}
+
+    def put(k: str, v: str):
+        k = k.strip().rstrip(":").strip()
+        if k and k not in out:
+            out[k] = v.strip()
+
+    for tr in soup.find_all("tr"):
+        cells = tr.find_all(["th", "td"], recursive=False) or tr.find_all(["th", "td"])
+        if len(cells) == 2:
+            put(cells[0].get_text(" ", strip=True), cells[1].get_text(" ", strip=True))
+    for dt in soup.find_all("dt"):
+        dd = dt.find_next_sibling("dd")
+        if dd:
+            put(dt.get_text(" ", strip=True), dd.get_text(" ", strip=True))
+    return out
+
+
+def _table_rows(soup: BeautifulSoup) -> list[dict[str, Any]]:
+    """แถวของตารางหลัก (ตารางที่มี tr เยอะสุด) + id ที่แกะจากลิงก์ในแถว"""
+    tables = soup.find_all("table")
+    table = max(tables, key=lambda t: len(t.find_all("tr")), default=None)
+    return _rows_of(table) if table is not None else []
+
+
+def _all_tables(soup: BeautifulSoup) -> list[dict[str, Any]]:
+    """ทุกตารางที่มีข้อมูลจริง — job 1 ใบมีได้หลายตาราง (รายการซ่อม / ยาง / ประวัติ)"""
+    out = []
+    for t in soup.find_all("table"):
+        if all(len(tr.find_all(["th", "td"])) <= 2 for tr in t.find_all("tr")):
+            continue                                # ตารางวางป้าย–ค่า — เก็บไว้ใน info แล้ว
+        rows = _rows_of(t)
+        if rows:
+            out.append({"caption": (t.find("caption").get_text(" ", strip=True)
+                                    if t.find("caption") else ""), "rows": rows})
+    return out
+
+
+ITEM_HINTS = ("อาการ", "ประเภทการซ่อม", "รายการ")
+TOTAL_ROW = {"grand total", "total", "รวม", "รวมทั้งหมด"}
+
+
+def _pick_items(tables: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """เลือกตาราง 'รายการซ่อม' จากตารางทั้งหมดในหน้า job — ดูจากชื่อคอลัมน์"""
+    for t in tables:
+        cols = " ".join(t["rows"][0].keys()) if t["rows"] else ""
+        if any(h in cols or h in t["caption"] for h in ITEM_HINTS):
+            return t["rows"]
+    return []
+
+
+def _rows_of(table) -> list[dict[str, Any]]:
+    trs = table.find_all("tr")
+    if len(trs) < 2:
+        return []
+    head = trs[0].find_all(["th", "td"])
+    headers = [c.get_text(" ", strip=True) for c in head]
+    rows: list[dict[str, Any]] = []
+    for tr in trs[1:]:
+        cells = tr.find_all(["th", "td"])
+        if not cells or len(cells) == 1:            # แถว "ไม่พบข้อมูล" / แถวสรุปที่ merge ช่อง
+            continue
+        vals = [c.get_text(" ", strip=True) for c in cells]
+        if vals[0].strip().lower() in TOTAL_ROW:
+            continue          # แถวสรุปยอด — ช่องถูก merge ทำให้ค่าไปตรงกับหัวคอลัมน์ผิดตัว
+        row = {h: v for h, v in zip(headers, vals) if h}
+        if not any(row.values()):
+            continue
+        ids = [int(m.group(1)) for a in tr.find_all("a", href=True)
+               if (m := ROW_ID.search(a["href"]))]
+        if ids:
+            row["id"] = ids[0]
+        rows.append(row)
+    return rows
 
 
 def _image_parts(images: Any) -> list[tuple[str, tuple]]:
@@ -417,6 +662,11 @@ def add_job_items(maintenance_request_id, items, phpsessid=None, session=None, *
 
 def open_job_with_items(payload, items, phpsessid=None, session=None, **kw):
     return _client_of(phpsessid, session).create_job(payload, items, **kw)
+
+
+def get_job(ref, phpsessid=None, session=None, **kw):
+    """ดึง job ที่เปิดไว้ — ref เป็น id (175039) หรือเลขที่เอกสาร (SBMR26070457) ก็ได้"""
+    return _client_of(phpsessid, session).job(ref, **kw)
 
 
 def _client_of(phpsessid: str | None, session: AtmsClient | None) -> AtmsClient:

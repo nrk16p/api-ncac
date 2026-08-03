@@ -24,6 +24,23 @@ POST /atms/openjob/	เปิด job — ใส่ items มาด้วยไ�
 POST /atms/openjob/item	เพิ่มรายการซ่อมแยก (ต่อจาก maintenance_request_id)
 GET /atms/openjob/options	ค่า dropdown จริง — frontend ไม่ต้องฝัง magic number
 GET /atms/openjob/lookup?kind=vehicle&q=	ค้นทะเบียนรถ / คนขับ / ช่าง
+GET /atms/openjob/search?code=SBMR26070457	ค้นรายการ job (code / vehicle / ช่วงวันที่)
+GET /atms/openjob/{ref}	ดึง job ที่เปิดไว้ — ref เป็น id (175039) หรือ code (SBMR26070457)
+
+อ่านกลับ (GET /{ref})
+ref เลขล้วน = maintenance_request_id ยิงเข้า /veh/maintenance.request/view/id/<id> ตรง ๆ · ไม่ใช่เลข = เลขที่แจ้งซ่อม ค้นจากหน้า index ให้ก่อนแล้วค่อยเปิด view (cache code→id ไว้ ไม่ค้นซ้ำ)
+อ่าน 2 หน้าเพราะให้คนละอย่าง — view ได้ป้ายภาษาไทยแบบที่คนอ่าน (info), edit ได้ชื่อฟิลด์ตรงกับตอน POST (fields) เอาไปแก้แล้วยิงกลับได้เลย, labels แปลง id เป็นข้อความจาก dropdown ให้
+ATMS เปลี่ยนหน้าเมื่อไหร่ → เรียกด้วย ?raw=true จะได้ HTML ดิบมาดูด้วย
+ช่องค้นหาใน /search อ่านสดจากฟอร์มจริง — filter ที่ ATMS ไม่รู้จักจะไม่ล้ม แต่ถูกรายงานไว้ใน ignored (fields บอกชื่อช่องที่ใช้ได้จริง)
+
+ผลทดสอบจริง (id 175039 = SBMR26070457, session จริง)
+เส้น	ผล
+GET /veh/maintenance.request/view/id/175039	200 — ใช้เป็นแหล่งหลัก
+GET /veh/maintenance.request/edit/id/175039	200 — ได้ vehicle_id/branch_id/driver_id ครบ
+GET /veh/maintenance.request/index?code=...	200 — ค้น code → id ได้ (SBMR26070457 → 175039)
+GET /veh/maintenance.request.item/index/...	500 — ATMS ไม่ได้ทำหน้านี้ไว้ จึงกลืน error แล้วดึง items จากตารางในหน้า view แทน
+id ที่ไม่มีจริง	ATMS ตอบ 500 ไม่ใช่ 404 — เราแปลงเป็น HTTP 404 ให้ผู้เรียก
+ช่องค้นหาจริงในหน้า index: code, plate_no, vehicle_no, branch_id, project_id, flow, driver, mechanic, accident, supplier, owner_type_id, is_broken, from/to_schedule_at, from/to_garage_entry_at, from/to_garage_finish_at, from/to_estimate_finish_at, from/to_close_at, order_by
 ตัวอย่างสั้นสุด:
 
 
