@@ -79,6 +79,7 @@ from routes.pipeline.pipeline_routes import router as pipeline_router
 from routes.drivingdistance import router as drivingdistance_router
 from routes.atms_maintenance import router as atms_maintenance_router
 from routes.atms_tms import router as atms_tms_router
+from routes.atms.openjob import router as atms_openjob_router
 
 
 # ------------------------------
@@ -123,6 +124,9 @@ app.include_router(atms_maintenance_router)
 
 # ATMS TMS — deliver order / ship to
 app.include_router(atms_tms_router)
+
+# ATMS (เปิด job แจ้งซ่อม / ขอเปลี่ยนยาง)
+app.include_router(atms_openjob_router)
 
 # ------------------------------
 # 🚨 Forms Order (สำคัญ) 
