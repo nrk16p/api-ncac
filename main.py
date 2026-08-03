@@ -77,6 +77,7 @@ from routes.inspection import router as inspection_router
 from routes.leave_booking.router import router as leave_booking_router
 from routes.pipeline.pipeline_routes import router as pipeline_router
 from routes.drivingdistance import router as drivingdistance_router
+from routes.atms_maintenance import router as atms_maintenance_router
 
 
 # ------------------------------
@@ -115,6 +116,9 @@ app.include_router(pipeline_router)
 
 # Analytics
 app.include_router(drivingdistance_router)
+
+# ATMS แจ้งซ่อม / ขอเปลี่ยนยาง
+app.include_router(atms_maintenance_router)
 
 # ------------------------------
 # 🚨 Forms Order (สำคัญ) 
