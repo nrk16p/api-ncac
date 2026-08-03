@@ -38,6 +38,9 @@ LOOKUP_URLS = {
     "driver": f"{BASE_URL}/veh/driver/name.json/",
     "mechanic": f"{BASE_URL}/account/user/mechanic.json/",
     "accident": f"{BASE_URL}/veh/accident/code.json/",
+    "maintenance_request": f"{BASE_URL}/veh/maintenance.request/code.json/",
+    "ship_to": f"{BASE_URL}/tms/ship.to/code.json/",
+    "location": f"{BASE_URL}/tms/location/ac.json/",
 }
 
 _session: Optional[requests.Session] = None
@@ -119,6 +122,14 @@ def lookup(kind: str, q: str):
     if kind not in LOOKUP_URLS:
         raise HTTPException(status_code=404, detail=f"unknown kind '{kind}'")
     return _atms_lookup(kind, q)
+
+
+@router.get("/maintenance-request/by-code/{code}", dependencies=[Depends(_verify_key)])
+def maintenance_request_by_code(code: str):
+    """แปลงเลขที่ใบแจ้งซ่อม เช่น BKMR26080001 → internal id สำหรับ URL view/edit."""
+    row = _resolve("maintenance_request", code)
+    return {"code": row["name"], "id": row["id"],
+            "view_url": f"{BASE_URL}/veh/maintenance.request/view/id/{row['id']}"}
 
 
 @router.post("/maintenance-request", dependencies=[Depends(_verify_key)])
