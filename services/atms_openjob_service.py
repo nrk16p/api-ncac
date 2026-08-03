@@ -81,6 +81,7 @@ LOOKUP_URLS = {
     "driver":   f"{BASE}/veh/driver/name.json/",
     "mechanic": f"{BASE}/account/user/mechanic.json/",
     "accident": f"{BASE}/veh/accident/code.json/",
+    "maintenance_request": f"{BASE}/veh/maintenance.request/code.json/",   # เลขที่แจ้งซ่อม → id
 }
 # ฟิลด์ที่เติม id ให้อัตโนมัติเมื่อผู้เรียกส่งมาแต่ชื่อ  {ชื่อฟิลด์: kind}
 AUTO_RESOLVE = {"vehicle": "vehicle", "driver": "driver",
@@ -391,13 +392,20 @@ class AtmsClient:
                 "ignored": ignored, "rows": _table_rows(soup)[:limit]}
 
     def find_job_id(self, code: str) -> int | None:
-        """เลขที่เอกสาร (เช่น SBMR26070457) → maintenance_request_id"""
+        """
+        เลขที่แจ้งซ่อม (เช่น SBMR26070457) → maintenance_request_id
+        ใช้ autocomplete เป็นหลัก (1 request ได้ JSON เลย) แล้วค่อยถอยไป scrape
+        หน้า index ถ้า ATMS ปิดเส้นนั้น — หน้า index หนักกว่าหลายเท่า
+        """
         code = _s(code).strip()
         if not code:
             return None
         if code not in self._job_id_cache:
-            res = self.search_jobs(limit=200, code=code)
-            hit = next((r for r in res["rows"] if r.get("id") and _has_text(r, code)), None)
+            hit = next((r for r in self.lookup("maintenance_request", code, limit=5)
+                        if _s(r.get("name")).strip().upper() == code.upper()), None)
+            if not hit:
+                rows = self.search_jobs(limit=200, code=code)["rows"]
+                hit = next((r for r in rows if r.get("id") and _has_text(r, code)), None)
             if not hit:
                 return None
             self._job_id_cache[code] = int(hit["id"])

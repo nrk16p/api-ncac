@@ -23,7 +23,7 @@ Endpoints
 POST /atms/openjob/	เปิด job — ใส่ items มาด้วยได้ จบใน call เดียว
 POST /atms/openjob/item	เพิ่มรายการซ่อมแยก (ต่อจาก maintenance_request_id)
 GET /atms/openjob/options	ค่า dropdown จริง — frontend ไม่ต้องฝัง magic number
-GET /atms/openjob/lookup?kind=vehicle&q=	ค้นทะเบียนรถ / คนขับ / ช่าง
+GET /atms/openjob/lookup?kind=vehicle&q=	ค้นทะเบียนรถ / คนขับ / ช่าง / เลขที่แจ้งซ่อม (kind=maintenance_request)
 GET /atms/openjob/search?code=SBMR26070457	ค้นรายการ job (code / vehicle / ช่วงวันที่)
 GET /atms/openjob/{ref}	ดึง job ที่เปิดไว้ — ref เป็น id (175039) หรือ code (SBMR26070457)
 
@@ -37,7 +37,8 @@ ATMS เปลี่ยนหน้าเมื่อไหร่ → เรี�
 เส้น	ผล
 GET /veh/maintenance.request/view/id/175039	200 — ใช้เป็นแหล่งหลัก
 GET /veh/maintenance.request/edit/id/175039	200 — ได้ vehicle_id/branch_id/driver_id ครบ
-GET /veh/maintenance.request/index?code=...	200 — ค้น code → id ได้ (SBMR26070457 → 175039)
+GET /veh/maintenance.request/code.json/?q=...	200 — [{"id":175039,"name":"SBMR26070457"}] ใช้เป็นทางหลักของ code→id (1 request)
+GET /veh/maintenance.request/index?code=...	200 — ค้นได้เหมือนกันแต่หนักกว่า ใช้เป็น fallback
 GET /veh/maintenance.request.item/index/...	500 — ATMS ไม่ได้ทำหน้านี้ไว้ จึงกลืน error แล้วดึง items จากตารางในหน้า view แทน
 id ที่ไม่มีจริง	ATMS ตอบ 500 ไม่ใช่ 404 — เราแปลงเป็น HTTP 404 ให้ผู้เรียก
 ช่องค้นหาจริงในหน้า index: code, plate_no, vehicle_no, branch_id, project_id, flow, driver, mechanic, accident, supplier, owner_type_id, is_broken, from/to_schedule_at, from/to_garage_entry_at, from/to_garage_finish_at, from/to_estimate_finish_at, from/to_close_at, order_by
