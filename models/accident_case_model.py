@@ -108,6 +108,14 @@ class AccidentCase(Base):
         cascade="all, delete-orphan"
     )
 
+    # ผลการสอบสวน (Part 2) — 1 เอกสาร : 1 การสอบสวน
+    investigation = relationship(
+        "AccidentCaseInvestigate",
+        back_populates="accident_case",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+
     # --- Serializer ---
     def to_dict(self):
         return {

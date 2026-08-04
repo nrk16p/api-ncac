@@ -64,6 +64,20 @@ from .case_report_investigate_schema import (
 from .corrective_action_schema import CorrectiveActionItem
 
 # ============================================================
+# ACCIDENT CASE INVESTIGATION (Part 2)
+# ============================================================
+from .accident_case_investigate_schema import (
+    ACWhyItem,
+    ACRootCauseItem,
+    ACMeasureItem,
+    ACInvestigatorItem,
+    AccidentCaseInvestigateCreate,
+    AccidentCaseInvestigateUpdate,
+    AccidentCaseInvestigateOut,
+    AccidentCaseInvestigateSummary,
+)
+
+# ============================================================
 # MASTER (VEHICLE / DRIVER / CAUSE)
 # ============================================================
 from .master_schema import (
