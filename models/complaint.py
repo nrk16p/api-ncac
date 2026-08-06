@@ -38,6 +38,11 @@ class DriverComplaint(Base):
     tracking_no = Column(String(20), unique=True, nullable=False)
 
     driver_id = Column(String(50), nullable=False)
+
+    # ชื่อคนขับ resolve จาก masterdrivers ตอน create/แก้ driver_id
+    # NULL ได้ถ้า driver_id ไม่มีใน masterdrivers
+    driver_name = Column(String(200), nullable=True)
+
     department_id = Column(Integer, ForeignKey("departments.department_id"), nullable=True)
 
     subject = Column(String(255), nullable=False)

@@ -9,10 +9,11 @@ from models.complaint import (
     ComplaintStatus,
     ReviewStatus
 )
+from models.master_model import MasterDriver
 from schemas.complaint import ComplaintCreate, ComplaintResponse, ReviewCreate,ComplaintOut
 from datetime import datetime
-from sqlalchemy import text
-from typing import Optional ,List
+from sqlalchemy import text, func
+from typing import Optional ,List, Iterable
 
 
 router = APIRouter(prefix="/complaints", tags=["Complaints"])
@@ -63,6 +64,53 @@ def generate_tracking(db: Session):
 
 
 # =========================================================
+# DRIVER NAME RESOLVER
+#
+# masterdrivers.driver_id is TEXT (many values are not numeric, e.g.
+# 'test-952777'), so match as trimmed text — never cast to integer.
+# Unmatched ids simply resolve to None.
+# =========================================================
+def _driver_key(driver_id) -> Optional[str]:
+    if driver_id is None:
+        return None
+
+    return str(driver_id).strip() or None
+
+
+def build_driver_name_map(db: Session, driver_ids: Iterable) -> dict:
+    """Resolve many driver_ids in a single query -> {driver_id: full name}."""
+
+    keys = {k for k in (_driver_key(d) for d in driver_ids) if k is not None}
+
+    if not keys:
+        return {}
+
+    trimmed_id = func.trim(MasterDriver.driver_id)
+
+    rows = db.query(
+        trimmed_id,
+        MasterDriver.first_name,
+        MasterDriver.last_name
+    ).filter(
+        trimmed_id.in_(keys)
+    ).all()
+
+    name_map = {}
+
+    for driver_id, first_name, last_name in rows:
+        full_name = " ".join(p for p in (first_name, last_name) if p).strip()
+        name_map[driver_id] = full_name or None
+
+    return name_map
+
+
+def get_driver_name(db: Session, driver_id) -> Optional[str]:
+    """Single-record convenience wrapper. Returns None when unmatched."""
+
+    return build_driver_name_map(db, [driver_id]).get(_driver_key(driver_id))
+
+
+# =========================================================
 # CREATE COMPLAINT (Safe Retry Version)
 # =========================================================
 @router.post("/", response_model=ComplaintResponse)
@@ -70,9 +118,13 @@ def create_complaint(data: ComplaintCreate, db: Session = Depends(get_db)):
 
     tracking_no = generate_tracking(db)
 
+    # resolve ชื่อคนขับตอนสร้าง — None ได้ถ้า map ไม่เจอ
+    driver_name = get_driver_name(db, data.driver_id)
+
     complaint = DriverComplaint(
         tracking_no=tracking_no,
         driver_id=data.driver_id,
+        driver_name=driver_name,
         subject=data.subject,
         detail=data.detail,
         complaint_type=data.complaint_type,
@@ -145,6 +197,7 @@ def get_complaints(
 
     for c in complaints:
 
+        # driver_name เป็นคอลัมน์จริงแล้ว จึงติดมากับ loop นี้เลย
         complaint_dict = {
             column.name: getattr(c, column.name)
             for column in c.__table__.columns
@@ -324,44 +377,6 @@ def close_complaint(
     db.commit()
 
     return {"message": "Complaint closed"}
-# =========================================================
-# GET ALL WITH FILTER
-# =========================================================
-@router.get("/")
-def get_complaints(
-    driver_id: Optional[str] = None,
-    status: Optional[ComplaintStatus] = None,
-    department_id: Optional[int] = None,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
-    db: Session = Depends(get_db)
-):
-
-    query = db.query(DriverComplaint).filter(
-        DriverComplaint.is_deleted == False
-    )
-
-    # Filter by driver
-    if driver_id:
-        query = query.filter(DriverComplaint.driver_id == driver_id)
-
-    # Filter by status
-    if status:
-        query = query.filter(DriverComplaint.status == status)
-
-    # Filter by department
-    if department_id:
-        query = query.filter(DriverComplaint.department_id == department_id)
-
-    # Filter by date range
-    if start_date and end_date:
-        start = datetime.fromisoformat(start_date)
-        end = datetime.fromisoformat(end_date)
-        query = query.filter(
-            DriverComplaint.created_at.between(start, end)
-        )
-
-    return query.order_by(DriverComplaint.created_at.desc()).all()
 
 
 from schemas.complaint import ComplaintUpdate
@@ -432,6 +447,10 @@ def update_complaint(
     # =====================================================
     for key, value in update_data.items():
         setattr(complaint, key, value)
+
+    # เปลี่ยนคนขับ → ชื่อเดิมใช้ไม่ได้แล้ว ต้อง resolve ใหม่
+    if "driver_id" in update_data:
+        complaint.driver_name = get_driver_name(db, complaint.driver_id)
 
     complaint.updated_at = datetime.utcnow()
 

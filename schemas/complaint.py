@@ -18,6 +18,7 @@ class ComplaintResponse(BaseModel):
     tracking_no: str
     status: str
     created_at: datetime
+    driver_name: Optional[str] = None   # resolve จาก masterdrivers, null ถ้าไม่เจอ
 
     class Config:
         orm_mode = True
@@ -58,6 +59,7 @@ class ComplaintOut(BaseModel):
     id: int
     tracking_no: str
     driver_id: str
+    driver_name: Optional[str] = None   # resolve จาก masterdrivers, null ถ้าไม่เจอ
     department_id: Optional[int]
     subject: str
     detail: str
