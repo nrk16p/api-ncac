@@ -48,6 +48,7 @@ def build_user_response(user: User, db: Session):
         "site": site_name,
         "position": position_name,
         "position_level": position_level,
+        "image_url": user.image_url
     }
 
 class UserBase(BaseModel):
@@ -60,6 +61,7 @@ class UserBase(BaseModel):
     employee_status : Optional[str]
     firstname : Optional[str]
     lastname : Optional[str]
+    image_url : Optional[str] = None
 
 class UserCreate(UserBase):
     password: str
@@ -79,7 +81,7 @@ class UserResponse(BaseModel):
     site: Optional[str]
     position: Optional[str]
     position_level: Optional[str]
-
+    image_url: Optional[str]
     class Config:
         orm_mode = True
 
@@ -93,6 +95,8 @@ class UserUpdate(BaseModel):
     employee_status: Optional[str] = None
     firstname: Optional[str] = None
     lastname: Optional[str] = None
+    image_url: Optional[str] = None
+
 @router.put("/{employee_id}", response_model=UserResponse)
 def update_user(
     employee_id: str,

@@ -286,7 +286,9 @@ def login_google(payload: GoogleLoginRequest, db: Session = Depends(get_db)):
     else:
         user.last_login = now
 
-        if image_url:
+        # ✅ บันทึกรูปจาก Google เฉพาะครั้งแรก (ยังไม่มีรูป)
+        # ครั้งถัดไปไม่ทับ เพื่อให้ user เปลี่ยนรูปเองผ่าน PUT /users/{employee_id} ได้
+        if image_url and not user.image_url:
             user.image_url = image_url
 
         if user.email and user.username == user.email:
