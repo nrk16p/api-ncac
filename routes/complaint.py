@@ -24,6 +24,30 @@ router = APIRouter(prefix="/complaints", tags=["Complaints"])
 # Format: DCYYYYMMXXXX
 # Example: DC2026020001
 # =========================================================
+# =========================================================
+# ACTOR GUARD
+#
+# complaint_logs.action_by_employee_id มี FK ไป users.employee_id
+# (constraint ชื่อ fk_log_user) ส่ง employee_id ที่ไม่มีอยู่จริงมา แถว log จะ insert
+# ไม่ผ่าน แล้วทั้ง transaction ถูก rollback — เดิมหลุดออกไปเป็น 500 Internal Server
+# Error ซึ่งฝั่งเรียกอ่านแล้วไม่รู้เลยว่าผิดตรงไหน จึงเช็กก่อนแล้วตอบ 400 พร้อมเหตุผล
+#
+# เช็กด้วย SQL ตรง ๆ เพื่อไม่ต้องผูกกับ model ของ users ในไฟล์นี้
+# =========================================================
+def ensure_employee_exists(db: Session, employee_id: str, field: str):
+
+    exists = db.execute(
+        text("SELECT 1 FROM users WHERE employee_id = :eid LIMIT 1"),
+        {"eid": employee_id}
+    ).first()
+
+    if not exists:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown employee_id '{employee_id}' for {field}"
+        )
+
+
 def generate_tracking(db: Session):
 
     now = datetime.utcnow()
@@ -349,6 +373,10 @@ def close_complaint(
     if not complaint:
         raise HTTPException(status_code=404, detail="Complaint not found")
 
+    # ต้องเช็กก่อนแตะสถานะ — ไม่งั้น log insert พังท้ายสุดแล้ว rollback ทั้งชุด
+    # ผู้ใช้เห็นแค่ 500 ทั้งที่สาเหตุจริงคือรหัสพนักงานไม่มีอยู่
+    ensure_employee_exists(db, closer_employee_id, "closer_employee_id")
+
     # If no review defined, allow direct close
     review_exists = db.query(ComplaintReview).filter(
         ComplaintReview.complaint_id == complaint.id
@@ -377,6 +405,83 @@ def close_complaint(
     db.commit()
 
     return {"message": "Complaint closed"}
+
+
+# =========================================================
+# DELETE (SOFT)
+#
+# ตั้ง is_deleted = True เท่านั้น — ไม่ลบแถวจริง เพราะ complaint_reviews และ
+# complaint_logs ผูก FK ไว้แบบ CASCADE การลบจริงจะพาประวัติหายไปด้วยทั้งชุด
+# GET / และ PUT /{tracking_no} กรอง is_deleted == False อยู่แล้ว คำร้องจึงหาย
+# จากทุกหน้าจอทันทีโดยไม่ต้องแก้ที่อื่น
+#
+# มีไว้สำหรับเรื่องแจ้งผิด / แจ้งซ้ำ / เคสทดสอบ ซึ่งเกิดที่ต้นทางทั้งนั้น จึงล็อกไว้
+# ที่ OPEN / ASSIGNED และต้องยังไม่มี review เลย — พอมีคนถูกตั้งเป็นผู้อนุมัติแล้ว
+# เอกสารกลายเป็นหลักฐาน เส้นทางที่ถูกคือ /close ไม่ใช่ทำให้หายจากประวัติ
+#
+# กู้คืนยังไม่มี endpoint — ทำที่ฐานข้อมูลโดยตรง (UPDATE ... SET is_deleted = false)
+# =========================================================
+@router.delete("/{tracking_no}")
+def delete_complaint(
+    tracking_no: str,
+    deleted_by_employee_id: str,
+    remark: str | None = None,
+    db: Session = Depends(get_db)
+):
+
+    complaint = db.query(DriverComplaint).filter(
+        DriverComplaint.tracking_no == tracking_no,
+        DriverComplaint.is_deleted == False
+    ).first()
+
+    if not complaint:
+        raise HTTPException(status_code=404, detail="Complaint not found")
+
+    ensure_employee_exists(db, deleted_by_employee_id, "deleted_by_employee_id")
+
+    if complaint.status not in (
+        ComplaintStatus.OPEN,
+        ComplaintStatus.ASSIGNED
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Cannot delete complaint in status {complaint.status.value} "
+                "— close it instead"
+            )
+        )
+
+    review_exists = db.query(ComplaintReview).filter(
+        ComplaintReview.complaint_id == complaint.id
+    ).first()
+
+    if review_exists:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot delete complaint that already has a reviewer assigned "
+                   "— close it instead"
+        )
+
+    complaint.is_deleted = True
+    complaint.updated_at = datetime.utcnow()
+
+    # เก็บร่องรอยไว้ในตารางเดิม — แถวยังอยู่ ประวัติจึงตามได้ว่าใครลบและเพราะอะไร
+    log = ComplaintLog(
+        complaint_id=complaint.id,
+        action="DELETE",
+        remark=remark,
+        action_by_employee_id=deleted_by_employee_id,
+        created_at=datetime.utcnow()
+    )
+
+    db.add(log)
+    db.commit()
+
+    return {
+        "message": "Complaint deleted",
+        "tracking_no": complaint.tracking_no,
+        "is_deleted": True
+    }
 
 
 from schemas.complaint import ComplaintUpdate
