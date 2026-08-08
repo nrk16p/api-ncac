@@ -10,6 +10,7 @@ from models.complaint import (
     ReviewStatus
 )
 from models.master_model import MasterDriver
+from models.user_model import User
 from schemas.complaint import ComplaintCreate, ComplaintResponse, ReviewCreate,ComplaintOut
 from datetime import datetime
 from sqlalchemy import text, func
@@ -256,6 +257,71 @@ def get_complaints(
     return result
 
 # =========================================================
+# ACTIVITY LOG
+#
+# ประวัติว่า "ใครทำอะไรกับคำร้องไหน" — อ่านจาก complaint_logs ตรง ๆ
+#
+# ต่างจาก GET / ตรงที่ **รวมคำร้องที่ถูกลบไปแล้วด้วย** (ไม่กรอง is_deleted)
+# เพราะจุดประสงค์ทั้งหมดของหน้านี้คือให้เห็นว่ามีการลบเกิดขึ้น ถ้ากรองออก
+# รายการ DELETE ก็จะหายไปพร้อมกับคำร้อง กลายเป็นล็อกที่ปิดบังเรื่องสำคัญที่สุด
+#
+# ต้องประกาศไว้ก่อน route ที่ขึ้นต้นด้วย path param เสมอ ไม่งั้น "logs"
+# จะถูกจับเป็น tracking_no
+#
+# action_by_employee_id เป็น NULL ได้ (CREATE มาจากคนขับ ไม่ใช่ผู้ใช้ในระบบ ·
+# ASSIGNED/RESUBMIT เกิดจาก PUT ซึ่งไม่ได้รับรหัสผู้ทำเข้ามา) ฝั่งหน้าจอต้อง
+# รองรับค่าว่างเสมอ อย่าไปเดาว่าเป็นใคร
+# =========================================================
+@router.get("/logs")
+def list_complaint_logs(
+    action: Optional[str] = None,
+    tracking_no: Optional[str] = None,
+    limit: int = 100,
+    db: Session = Depends(get_db)
+):
+
+    limit = max(1, min(limit, 500))
+
+    rows = (
+        db.query(ComplaintLog, DriverComplaint, User)
+        .join(DriverComplaint, ComplaintLog.complaint_id == DriverComplaint.id)
+        .outerjoin(User, User.employee_id == ComplaintLog.action_by_employee_id)
+        .order_by(ComplaintLog.created_at.desc(), ComplaintLog.id.desc())
+    )
+
+    if action:
+        rows = rows.filter(ComplaintLog.action == action.upper())
+
+    if tracking_no:
+        rows = rows.filter(DriverComplaint.tracking_no == tracking_no)
+
+    result = []
+
+    for log, complaint, user in rows.limit(limit).all():
+
+        actor_name = None
+        if user:
+            actor_name = " ".join(
+                p for p in (user.firstname, user.lastname) if p
+            ).strip() or None
+
+        result.append({
+            "id": log.id,
+            "action": log.action,
+            "remark": log.remark,
+            "created_at": log.created_at,
+            "tracking_no": complaint.tracking_no,
+            "subject": complaint.subject,
+            # บอกหน้าจอว่าคำร้องนี้ถูกลบไปแล้ว จะได้ไม่ลิงก์ไปหน้าที่เปิดไม่ได้
+            "complaint_is_deleted": bool(complaint.is_deleted),
+            "action_by_employee_id": log.action_by_employee_id,
+            "action_by_name": actor_name,
+        })
+
+    return result
+
+
+# =========================================================
 # DEFINE REVIEWER
 # =========================================================
 @router.post("/{tracking_no}/define-reviewer")
@@ -328,11 +394,13 @@ def approve_complaint(
     current_review.reviewed_at = datetime.utcnow()
     current_review.remark = remark
 
-    # Log approval
+    # Log approval — บันทึกผู้อนุมัติด้วย ไม่งั้นล็อกบอกได้แค่ว่า "มีคนอนุมัติ"
+    # (รหัสนี้ผ่านการเทียบกับ current_review แล้ว จึงเป็นผู้ใช้ที่มีอยู่จริงเสมอ)
     log = ComplaintLog(
         complaint_id=complaint.id,
         action="APPROVE",
-        remark=remark
+        remark=remark,
+        action_by_employee_id=reviewer_employee_id
     )
     db.add(log)
 
@@ -651,11 +719,12 @@ def reject_complaint(
     # Update complaint status
     complaint.status = ComplaintStatus.REJECTED
 
-    # Log action
+    # Log action — บันทึกผู้ปฏิเสธด้วย เหตุผลเดียวกับ APPROVE
     log = ComplaintLog(
         complaint_id=complaint.id,
         action="REJECT",
-        remark=remark
+        remark=remark,
+        action_by_employee_id=reviewer_employee_id
     )
     db.add(log)
 
