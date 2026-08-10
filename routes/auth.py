@@ -1,6 +1,7 @@
 import os
 from datetime import datetime, timedelta, timezone
 import jwt
+import requests
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -70,6 +71,42 @@ class RegisterRequest(BaseModel):
 
 class GoogleLoginRequest(BaseModel):
     id_token: str
+    access_token: str | None = None   # ✅ ใช้ดึง picture จาก userinfo endpoint
+
+
+GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
+
+
+# ============================================================
+# Helper: ดึง picture จาก Google userinfo ด้วย access token
+# ============================================================
+def fetch_google_picture(access_token: str, expected_sub: str | None = None):
+    """
+    ยิง access token ไปที่ Google userinfo เพื่อเอา URL รูปโปรไฟล์ล่าสุด
+    คืน None ถ้าล้มเหลว — ไม่ให้ login พังเพราะดึงรูปไม่ได้
+    """
+    try:
+        resp = requests.get(
+            GOOGLE_USERINFO_URL,
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=5,
+        )
+        if resp.status_code != 200:
+            print("⚠️ GOOGLE USERINFO =", resp.status_code, resp.text[:200])
+            return None
+
+        info = resp.json()
+
+        # 🔐 กัน access token ของคนอื่นถูกส่งมาปนกับ id_token
+        if expected_sub and info.get("sub") != expected_sub:
+            print("⚠️ GOOGLE USERINFO sub mismatch")
+            return None
+
+        return info.get("picture")
+
+    except Exception as e:
+        print("⚠️ GOOGLE USERINFO ERROR =", e)
+        return None
 
 # ============================================================
 # Helper: Verify Google Token (FIXED)
@@ -253,7 +290,14 @@ def login_google(payload: GoogleLoginRequest, db: Session = Depends(get_db)):
     email = idinfo["email"]
     username = email.split("@")[0]
     employee_id = username
-    image_url = idinfo.get("picture")
+
+    # ✅ รูปโปรไฟล์: ถ้ามี access token ให้ยิง userinfo endpoint เอารูปล่าสุด
+    #    ถ้าไม่มี / ยิงไม่ผ่าน → fallback ไปใช้ claim picture ใน id_token
+    image_url = None
+    if payload.access_token:
+        image_url = fetch_google_picture(payload.access_token, idinfo.get("sub"))
+    if not image_url:
+        image_url = idinfo.get("picture")
 
     user = db.query(User).filter(
         or_(
@@ -286,9 +330,8 @@ def login_google(payload: GoogleLoginRequest, db: Session = Depends(get_db)):
     else:
         user.last_login = now
 
-        # ✅ บันทึกรูปจาก Google เฉพาะครั้งแรก (ยังไม่มีรูป)
-        # ครั้งถัดไปไม่ทับ เพื่อให้ user เปลี่ยนรูปเองผ่าน PUT /users/{employee_id} ได้
-        if image_url and not user.image_url:
+        # ✅ อัปเดตรูปจาก Google ทุกครั้งที่ login
+        if image_url:
             user.image_url = image_url
 
         if user.email and user.username == user.email:
