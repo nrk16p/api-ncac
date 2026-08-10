@@ -5,6 +5,7 @@ from sqlalchemy.orm import joinedload
 
 from pydantic import BaseModel
 from typing import List, Optional
+from datetime import datetime
 from database import get_db
 from models import User , Department, Position,Site
 
@@ -48,7 +49,8 @@ def build_user_response(user: User, db: Session):
         "site": site_name,
         "position": position_name,
         "position_level": position_level,
-        "image_url": user.image_url
+        "image_url": user.image_url,
+        "updated_at": user.updated_at,
     }
 
 class UserBase(BaseModel):
@@ -82,6 +84,7 @@ class UserResponse(BaseModel):
     position: Optional[str]
     position_level: Optional[str]
     image_url: Optional[str]
+    updated_at: Optional[datetime]
     class Config:
         orm_mode = True
 
@@ -188,7 +191,7 @@ def create_user(payload: UserCreate, db: Session = Depends(get_db)):
     db.add(user)
     db.commit()
     db.refresh(user)
-    return user
+    return build_user_response(user, db)
 
 
 @router.get("/{employee_id}", response_model=UserResponse)
