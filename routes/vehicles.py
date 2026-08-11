@@ -10,9 +10,11 @@ router = APIRouter(prefix="/vehicles", tags=["Vehicles"])
 class VehicleBase(BaseModel):
     vehicle_number_plate: Optional[str] = None
     truck_no: Optional[str] = None
+    plate_type: Optional[str] = None
 
 class VehicleCreate(VehicleBase):
     vehicle_number_plate: str
+    plate_type: str
 
 class VehicleResponse(BaseModel):
     vehicle_id: int
@@ -25,7 +27,11 @@ class VehicleResponse(BaseModel):
 
 @router.post("/", response_model=VehicleResponse, status_code=201)
 def create_vehicle(payload: VehicleCreate, db: Session = Depends(get_db)):
-    v = Vehicle(vehicle_number_plate=payload.vehicle_number_plate, truck_no=payload.truck_no or "")
+    v = Vehicle(
+        vehicle_number_plate=payload.vehicle_number_plate,
+        truck_no=payload.truck_no or "",
+        plate_type=payload.plate_type,
+    )
     db.add(v)
     db.commit()
     db.refresh(v)
@@ -44,6 +50,8 @@ def update_vehicle(vehicle_id: int, payload: VehicleBase, db: Session = Depends(
         v.vehicle_number_plate = payload.vehicle_number_plate
     if payload.truck_no is not None:
         v.truck_no = payload.truck_no
+    if payload.plate_type is not None:
+        v.plate_type = payload.plate_type
     db.commit()
     return {"message": "Vehicle updated"}
 
