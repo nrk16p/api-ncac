@@ -16,6 +16,7 @@ from schemas.complaint import ComplaintCreate, ComplaintResponse, ReviewCreate,C
 from datetime import datetime
 from sqlalchemy import text, func
 from typing import Optional ,List, Iterable
+import os
 
 
 router = APIRouter(prefix="/complaints", tags=["Complaints"])
@@ -88,6 +89,58 @@ def resolve_complaint_master(
         )
 
     return master
+
+
+# =========================================================
+# ผู้อนุมัติแทน (approve / reject on behalf)
+#
+# ปกติอนุมัติได้เฉพาะคนที่ถูกตั้งเป็นผู้อนุมัติของระดับที่ค้างอยู่เท่านั้น —
+# แต่ต้องมีทางเดินเรื่องต่อเมื่อผู้อนุมัติตัวจริงลา / ลาออก / ติดต่อไม่ได้
+# ไม่งั้นคำร้องค้างอยู่ที่ PENDING_REVIEW ถาวรโดยไม่มีใครปลดได้เลย
+#
+# ตั้งรายชื่อผ่าน env `SUPER_APPROVER_IDS` (คั่นด้วยคอมมา) เปลี่ยนตัวได้โดย
+# ไม่ต้อง deploy ใหม่ · ค่าเริ่มต้นคือ 680043 ตามที่เจ้าของงานกำหนด (13 ส.ค. 2026)
+#
+# **ร่องรอยต้องไม่โกหก** — แถวใน complaint_reviews ยังเป็นชื่อผู้อนุมัติตัวจริง
+# (เขาคือคนที่ถูกมอบหมายไว้ ข้อเท็จจริงนั้นไม่เปลี่ยน) แต่หมายเหตุจะถูกต่อท้าย
+# ว่าใครกดแทน และ complaint_logs.action_by_employee_id บันทึก "คนที่กดจริง"
+# เสมอ จึงไล่ย้อนได้ว่าใครเป็นคนตัดสิน
+# =========================================================
+def super_approver_ids() -> set:
+
+    raw = os.getenv("SUPER_APPROVER_IDS", "680043")
+    return {v.strip() for v in raw.split(",") if v.strip()}
+
+
+def authorize_reviewer(
+    db: Session,
+    current_review: ComplaintReview,
+    actor_employee_id: str,
+) -> bool:
+    """
+    ตรวจสิทธิ์ตัดสินคำร้องของระดับที่ค้างอยู่ — คืน True ถ้าเป็นการทำแทน
+
+    โยน 400 ข้อความเดิม ("Not current approval level") เมื่อไม่มีสิทธิ์ เพื่อให้
+    ผู้เรียกเดิมที่ดักข้อความนี้อยู่ไม่ต้องแก้ตาม
+    """
+    if current_review.reviewer_employee_id == actor_employee_id:
+        return False
+
+    if actor_employee_id in super_approver_ids():
+        # ผู้ทำแทนไม่ได้ผ่านการเทียบกับ current_review จึงยังไม่การันตีว่ามีตัวตน —
+        # ต้องเช็กก่อน ไม่งั้น FK ของ complaint_logs จะพาทั้ง transaction ล้ม
+        ensure_employee_exists(db, actor_employee_id, "reviewer_employee_id")
+        return True
+
+    raise HTTPException(
+        status_code=400,
+        detail="Not current approval level"
+    )
+
+
+def on_behalf_remark(remark: str, actor: str, assigned: str) -> str:
+    """ต่อท้ายหมายเหตุให้เห็นในทุกหน้าจอที่อ่าน remark ว่าไม่ใช่เจ้าตัวเป็นคนกด"""
+    return f"{remark} [ดำเนินการแทน {assigned} โดย {actor}]"
 
 
 def generate_tracking(db: Session):
@@ -439,23 +492,26 @@ def approve_complaint(
     if not current_review:
         raise HTTPException(status_code=400, detail="No pending review")
 
-    if current_review.reviewer_employee_id != reviewer_employee_id:
-        raise HTTPException(
-            status_code=400,
-            detail="Not current approval level"
-        )
+    # ผู้อนุมัติตัวจริง หรือผู้อนุมัติแทนที่อยู่ใน SUPER_APPROVER_IDS
+    on_behalf = authorize_reviewer(db, current_review, reviewer_employee_id)
+
+    final_remark = (
+        on_behalf_remark(remark, reviewer_employee_id, current_review.reviewer_employee_id)
+        if on_behalf
+        else remark
+    )
 
     # Approve
     current_review.status = ReviewStatus.APPROVED
     current_review.reviewed_at = datetime.utcnow()
-    current_review.remark = remark
+    current_review.remark = final_remark
 
-    # Log approval — บันทึกผู้อนุมัติด้วย ไม่งั้นล็อกบอกได้แค่ว่า "มีคนอนุมัติ"
-    # (รหัสนี้ผ่านการเทียบกับ current_review แล้ว จึงเป็นผู้ใช้ที่มีอยู่จริงเสมอ)
+    # Log approval — บันทึก "คนที่กดจริง" ไม่ใช่คนที่ถูกมอบหมาย ไม่งั้นล็อกจะบอกว่า
+    # ผู้อนุมัติตัวจริงเป็นคนตัดสิน ทั้งที่เจ้าตัวไม่ได้แตะเลย
     log = ComplaintLog(
         complaint_id=complaint.id,
         action="APPROVE",
-        remark=remark,
+        remark=final_remark,
         action_by_employee_id=reviewer_employee_id
     )
     db.add(log)
@@ -770,16 +826,19 @@ def reject_complaint(
     if not current_review:
         raise HTTPException(status_code=400, detail="No pending review")
 
-    if current_review.reviewer_employee_id != reviewer_employee_id:
-        raise HTTPException(
-            status_code=400,
-            detail="Not current approval level"
-        )
+    # ผู้อนุมัติตัวจริง หรือผู้อนุมัติแทนที่อยู่ใน SUPER_APPROVER_IDS
+    on_behalf = authorize_reviewer(db, current_review, reviewer_employee_id)
+
+    final_remark = (
+        on_behalf_remark(remark, reviewer_employee_id, current_review.reviewer_employee_id)
+        if on_behalf
+        else remark
+    )
 
     # Mark current level as REJECTED
     current_review.status = ReviewStatus.REJECTED
     current_review.reviewed_at = datetime.utcnow()
-    current_review.remark = remark
+    current_review.remark = final_remark
 
     # 🔥 Cancel all remaining pending levels
     db.query(ComplaintReview).filter(
@@ -797,7 +856,7 @@ def reject_complaint(
     log = ComplaintLog(
         complaint_id=complaint.id,
         action="REJECT",
-        remark=remark,
+        remark=final_remark,
         action_by_employee_id=reviewer_employee_id
     )
     db.add(log)
