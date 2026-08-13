@@ -51,7 +51,15 @@ class DriverComplaint(Base):
     complaint_type = Column(String(100))
     complaint_details = Column(Text)
     complaint_url = Column(String(500))
-    problem = Column(Text, nullable=True)
+
+    # "ประเภทเรื่อง" — เดิมเก็บเป็นข้อความ ตอนนี้เป็น id ของ complaint_master
+    # (ดู scripts/migrations/2026-08-13_complaint_master.sql ที่แปลงข้อมูลเก่าไว้แล้ว)
+    problem = Column(
+        Integer,
+        ForeignKey("complaint_master.id"),
+        nullable=True,
+        index=True,
+    )
     solution = Column(Text, nullable=True)
     solution_url = Column(Text, nullable=True)
     result = Column(Text, nullable=True)
@@ -72,6 +80,10 @@ class DriverComplaint(Base):
         order_by="ComplaintReview.level"   # 👈 เพิ่มบรรทัดนี้
     )
     logs = relationship("ComplaintLog", back_populates="complaint", cascade="all, delete")
+
+    # ประเภทเรื่องที่ปลายทางของ problem — ใช้ส่งชื่อ/ไอคอนไปกับคำร้องเลย
+    # ฝั่งหน้าจอจะได้ไม่ต้องยิงถาม master ทีละรอบเพื่อแปลง id เป็นข้อความ
+    problem_master = relationship("ComplaintMaster", lazy="joined")
 
 
 # =========================

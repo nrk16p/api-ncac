@@ -36,7 +36,9 @@ class ComplaintUpdate(BaseModel):
     complaint_type: Optional[str] = None
     complaint_details: Optional[str] = None
     complaint_url: Optional[str] = None
-    problem: Optional[str] = None
+    # "ประเภทเรื่อง" — id ของ complaint_master (เดิมเป็นข้อความ)
+    # ส่ง null = ล้างประเภทเรื่องทิ้ง
+    problem: Optional[int] = None
     solution: Optional[str] = None
     solution_url: Optional[str] = None
     result: Optional[str] = None

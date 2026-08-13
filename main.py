@@ -64,7 +64,7 @@ from routes import (
     provinces,
     districts,
     sub_districts,
-    case_reports_investigate,complaint,fuel_routes,mixer_compensation,master_root_cause,
+    case_reports_investigate,complaint,complaint_master,fuel_routes,mixer_compensation,master_root_cause,
     accident_cases_investigate,
 )
 
@@ -106,6 +106,7 @@ app.include_router(sub_districts.router)
 app.include_router(case_reports_investigate.router)
 app.include_router(accident_cases_investigate.router)
 app.include_router(complaint.router)
+app.include_router(complaint_master.router)
 app.include_router(allocation_routes.router)
 app.include_router(fuel_routes.router)
 app.include_router(mixer_compensation.router)

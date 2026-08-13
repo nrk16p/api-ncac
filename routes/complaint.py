@@ -9,6 +9,7 @@ from models.complaint import (
     ComplaintStatus,
     ReviewStatus
 )
+from models.complaint_master import ComplaintMaster
 from models.master_model import MasterDriver
 from models.user_model import User
 from schemas.complaint import ComplaintCreate, ComplaintResponse, ReviewCreate,ComplaintOut
@@ -47,6 +48,46 @@ def ensure_employee_exists(db: Session, employee_id: str, field: str):
             status_code=400,
             detail=f"Unknown employee_id '{employee_id}' for {field}"
         )
+
+
+# =========================================================
+# COMPLAINT TYPE GUARD
+#
+# driver_complaints.problem = id ของ complaint_master ("ประเภทเรื่อง")
+#
+# นอกจากต้องมีอยู่จริงแล้ว **ต้องเป็นประเภทของหน่วยงานที่ถือคำร้องนั้นด้วย** —
+# รายการประเภทเรื่องถูกจัดกลุ่มตามหน่วยงาน การจับคู่ข้ามหน่วยงานจะได้คำร้องที่
+# ดรอปดาวน์ฝั่งหน้าจอหาป้ายไม่เจอ กลายเป็นช่องว่างทั้งที่ในฐานมีค่าอยู่
+#
+# `department_id` ที่ใช้เทียบคือค่า **หลังบันทึกรอบนี้** ไม่ใช่ค่าเดิมในฐาน
+# เพราะการย้ายหน่วยงานกับเลือกประเภทเรื่องมาในคำขอเดียวกันได้
+# =========================================================
+def resolve_complaint_master(
+    db: Session,
+    master_id: Optional[int],
+    department_id: Optional[int],
+) -> Optional[ComplaintMaster]:
+
+    if master_id is None:
+        return None
+
+    master = db.get(ComplaintMaster, master_id)
+    if not master:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown complaint type id '{master_id}'",
+        )
+
+    if department_id is not None and master.department_id != department_id:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Complaint type '{master.name}' belongs to department "
+                f"{master.department_id}, not {department_id}"
+            ),
+        )
+
+    return master
 
 
 def generate_tracking(db: Session):
@@ -190,7 +231,8 @@ def get_complaints(
 
     query = db.query(DriverComplaint).options(
         selectinload(DriverComplaint.reviews),
-        selectinload(DriverComplaint.logs)   # 👈 ต้องมี
+        selectinload(DriverComplaint.logs),   # 👈 ต้องมี
+        selectinload(DriverComplaint.problem_master)
     ).filter(
         DriverComplaint.is_deleted == False
     )
@@ -227,6 +269,20 @@ def get_complaints(
             column.name: getattr(c, column.name)
             for column in c.__table__.columns
         }
+
+        # ✅ ประเภทเรื่อง — `problem` เป็น id ล้วน ๆ ส่งชื่อกับไอคอนไปด้วยเลย
+        # ฝั่งหน้าจอจะได้วาดป้ายได้โดยไม่ต้องยิงถาม /complaint-masters ทีละรอบ
+        # (null เมื่อยังไม่ได้เลือกประเภท — ผู้เรียกต้องรองรับค่าว่างเสมอ)
+        complaint_dict["problem_master"] = (
+            {
+                "id": c.problem_master.id,
+                "department_id": c.problem_master.department_id,
+                "name": c.problem_master.name,
+                "icon": c.problem_master.icon,
+            }
+            if c.problem_master
+            else None
+        )
 
         # ✅ reviews = approval only
         complaint_dict["reviews"] = [
@@ -582,6 +638,16 @@ def update_complaint(
     update_data = data.dict(exclude_unset=True)
 
     # =====================================================
+    # 0️⃣ ประเภทเรื่อง (problem) ต้องมีอยู่จริงและตรงหน่วยงาน
+    #
+    # ตรวจ **ก่อน** แตะอะไรในฐานเลย — ด่านนี้ต้องไม่ทิ้งการเปลี่ยนแปลงครึ่ง ๆ
+    # กลาง ๆ ไว้เมื่อ payload ไม่ผ่าน
+    # =====================================================
+    if "problem" in update_data:
+        target_department = update_data.get("department_id", complaint.department_id)
+        resolve_complaint_master(db, update_data["problem"], target_department)
+
+    # =====================================================
     # 1️⃣ If REJECTED → restart workflow
     # =====================================================
     if complaint.status == ComplaintStatus.REJECTED:
@@ -624,6 +690,14 @@ def update_complaint(
     # เปลี่ยนคนขับ → ชื่อเดิมใช้ไม่ได้แล้ว ต้อง resolve ใหม่
     if "driver_id" in update_data:
         complaint.driver_name = get_driver_name(db, complaint.driver_id)
+
+    # ย้ายหน่วยงานโดยไม่ได้ส่งประเภทเรื่องมาด้วย → ประเภทเดิมเป็นของหน่วยงานเก่า
+    # ล้างทิ้งเลย ดีกว่าปล่อยให้คำร้องถือประเภทที่ไม่มีในรายการของเจ้าของงานคนใหม่
+    if "department_id" in update_data and "problem" not in update_data:
+        if complaint.problem is not None:
+            master = db.get(ComplaintMaster, complaint.problem)
+            if master and master.department_id != complaint.department_id:
+                complaint.problem = None
 
     complaint.updated_at = datetime.utcnow()
 
