@@ -202,13 +202,13 @@ def scrape_po(session, from_date, db):
                         db, "purchase_orders", approval=False)
 
 
-# ── deposit_header (index only) ───────────────────────────────────────────────
+# ── deposit_header + deposit_items ────────────────────────────────────────────
 DEPOSIT_COLS = ["deposit_code", "warehouse", "purchase_order", "withdraw_ref",
                 "supplier", "supplier_ref_no", "amount", "created_at", "received_at",
                 "approver", "user"]
 
 
-def scrape_deposit(session, from_date, db):
+def scrape_deposit(session, from_date, db, collect_ids=None):
     col = db["deposit_header"]
     ensure_index(col, "deposit_id", unique=True, background=True)
     up = page = 0
@@ -244,6 +244,8 @@ def scrape_deposit(session, from_date, db):
             row.update(dict(zip(DEPOSIT_COLS, texts)))
             if dep:
                 rows.append(row)
+                if collect_ids is not None:
+                    collect_ids.append(dep)
         if not rows:
             break
         ops = [ReplaceOne({"deposit_id": r["deposit_id"]}, r, upsert=True) for r in rows]
@@ -255,6 +257,99 @@ def scrape_deposit(session, from_date, db):
         page = nxt
         time.sleep(0.3)
     return {"upserted": up}
+
+
+def parse_deposit_items(html, deposit_id):
+    """แถวสินค้าในหน้า /inv/deposit/view/id/<id> → list ของ dict
+
+    รูปแบบคอลัมน์ยึดตาม atms-extractor (extractor/deposit_parser.parse_deposit_detail)
+    ที่ใช้เก็บ deposit_items ชุดเดิมมาตลอด — ชื่อฟิลด์ต้องตรงกันเป๊ะ เพราะโมดัลรายละเอียดใบ DD
+    ของ mena-wms (/ap-tracking) อ่าน item/qty/unit_price/total ตรงจากฟิลด์พวกนี้
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    table = soup.find("table", class_="defaultTable") or data_table(soup)
+    if not table:
+        return []
+    items = []
+    for tr in table.find_all("tr")[1:]:
+        cells = [c.get_text(" ", strip=True) for c in tr.find_all(["th", "td"])]
+        # แถวสรุป (grand total / VAT) มีคอลัมน์ไม่ครบ — ข้าม
+        if len(cells) < 7:
+            continue
+        items.append({
+            "deposit_id": deposit_id,
+            "parts_group": cells[0], "item": cells[1], "serial_no": cells[2],
+            "qty": cells[3], "unit_price": cells[4], "total": cells[5], "remark": cells[6],
+        })
+    return items
+
+
+def scrape_deposit_items(session, deposit_ids, db, workers=None):
+    """ดึงรายการสินค้าของใบ DD ที่ "ยังไม่มีใน deposit_items" เท่านั้น
+
+    ทำไมต้องมี: หน้า index ให้แค่หัวใบ ไม่มีรายการสินค้า — ก่อนหน้านี้ deposit_items
+    ถูกเติมด้วย atms-extractor (cli.py deposit) ที่รันมือเท่านั้น ทำให้ใบใหม่ ๆ ไม่มีรายการ
+    และโมดัลรายละเอียดใน /ap-tracking ขึ้น "ไม่มีรายการสินค้าในระบบ" ทุกใบ
+
+    ทำไมเอาเฉพาะใบที่ยังไม่มี: หน้า detail ต้องยิงทีละใบ (1 request/ใบ) ถ้าดึงใหม่ทั้งหน้าต่าง
+    ทุกรอบจะกิน 2-4 พัน request ต่อรอบ × 5 รอบ/วัน — รอบแรกจึงเป็นการเติมย้อนหลังให้เอง
+    แล้วรอบถัด ๆ ไปเหลือเฉพาะใบใหม่ของวันนั้น (หลักสิบ)
+    ข้อแลกเปลี่ยน: ใบที่ถูกแก้รายการทีหลังใน ATMS จะไม่ถูกดึงซ้ำ — ล้าง deposit_items ของใบนั้น
+    แล้วให้รอบถัดไปดึงใหม่ ถ้าเจอเคสแบบนั้น
+    """
+    if workers is None:
+        workers = int(os.getenv("ATMS_ITEM_WORKERS", "8"))
+    # เพดานต่อรอบ กันรอบแรก (เติมย้อนหลัง) ลากยาวจนชน timeout ของ Render — ที่เหลือไหลไปรอบถัดไป
+    cap = int(os.getenv("ATMS_DD_ITEM_LIMIT", "1500"))
+    col = db["deposit_items"]
+    ensure_index(col, "deposit_id", background=True)
+
+    ids = sorted({int(i) for i in deposit_ids if i})
+    if not ids:
+        return {"todo": 0, "fetched": 0, "items": 0, "remaining": 0, "errors": 0}
+    # ถามฐานเป็นก้อนละ 1000 id (ใช้ index deposit_id) ว่ามีรายการอยู่แล้วใบไหนบ้าง
+    have = set()
+    for i in range(0, len(ids), 1000):
+        have.update(col.distinct("deposit_id", {"deposit_id": {"$in": ids[i:i + 1000]}}))
+    missing = [i for i in ids if i not in have]
+    todo, remaining = missing[:cap], max(0, len(missing) - cap)
+    if remaining:
+        log(f"deposit_items: ค้างอีก {remaining:,} ใบ (เพดาน {cap:,}/รอบ) — จะดึงต่อในรอบถัดไป")
+    if not todo:
+        return {"todo": 0, "fetched": 0, "items": 0, "remaining": 0, "errors": 0}
+
+    now = datetime.utcnow()
+    fetched = errors = total_items = 0
+
+    def work(dep_id):
+        for _ in range(2):                       # retry 1 ครั้ง (transient/หน้าว่าง)
+            try:
+                r = session.get(f"{BASE}/inv/deposit/view/id/{dep_id}", timeout=45)
+                r.raise_for_status()
+                return parse_deposit_items(r.text, dep_id)
+            except Exception:
+                time.sleep(0.4)
+        return None
+
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futs = {ex.submit(work, d): d for d in todo}
+        for fut in as_completed(futs):
+            dep_id = futs[fut]
+            items = fut.result()
+            if items is None:                    # ยิงไม่สำเร็จ — ปล่อยให้รอบหน้าลองใหม่ (ยังนับว่า missing)
+                errors += 1
+                continue
+            fetched += 1
+            if not items:                        # ใบที่ไม่มีรายการจริง ๆ ก็มี — ไม่ต้องเขียนอะไร
+                continue
+            for it in items:
+                it["scraped_at"] = now
+            col.delete_many({"deposit_id": dep_id})
+            col.insert_many(items, ordered=False)
+            total_items += len(items)
+
+    return {"todo": len(todo), "fetched": fetched, "items": total_items,
+            "remaining": remaining, "errors": errors}
 
 
 # ── PR / PO line items (detail) ───────────────────────────────────────────────
@@ -416,7 +511,10 @@ def main():
         s = get_session()
         counts["purchase_requests"] = scrape_pr(s, from_date, db);   log("PR", counts["purchase_requests"])
         counts["purchase_orders"]   = scrape_po(s, from_date, db);   log("PO", counts["purchase_orders"])
-        counts["deposit_header"]    = scrape_deposit(s, from_date, db); log("DD", counts["deposit_header"])
+        dep_ids = []
+        counts["deposit_header"]    = scrape_deposit(s, from_date, db, dep_ids); log("DD", counts["deposit_header"])
+        # รายการสินค้าของใบ DD — เฉพาะใบที่ยังไม่มีใน deposit_items (ดูเหตุผลใน scrape_deposit_items)
+        counts["deposit_items"]     = scrape_deposit_items(s, dep_ids, db); log("DD items", counts["deposit_items"])
         counts["items"]             = scrape_items(s, from_date, db); log("items", counts["items"])
     except Exception as e:
         err = str(e)
