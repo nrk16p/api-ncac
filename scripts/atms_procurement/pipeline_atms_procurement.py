@@ -17,6 +17,7 @@ Run standalone (invoked as a subprocess by routes/pipeline/pipeline_routes.py):
   python scripts/atms_procurement/pipeline_atms_procurement.py
 """
 
+import calendar
 import os
 import re
 import sys
@@ -489,6 +490,94 @@ def scrape_items(session, from_date, db):
     return {"pr": pr, "po": po}
 
 
+# ── ตรวจความครบถ้วน (audit) ───────────────────────────────────────────────────
+# ทำไมต้องมี: pipeline ดึงย้อนหลังแค่ 2 เดือน — ใบที่ ATMS เพิ่มย้อนหลังเกินหน้าต่างนั้น
+# จะไม่ถูกเก็บและไม่มีใครรู้ · เคยเจอจริง LBDD26051219 (พ.ค.) ที่ deposit_items หายไปใบเดียว
+# กว่าจะเจอต้องไล่มือ · ตรวจทุกวันแล้วเก็บผลไว้ ทำให้เห็นตั้งแต่วันที่มันหลุด
+#
+# วิธีตรวจ: หน้า index ของ ATMS บอกยอดรวมไว้ที่แถบแบ่งหน้า ("1 - 25 / 1,834")
+# ยิงเดือนละ 1 request อ่านแค่เลขนั้นมาเทียบกับที่นับได้ใน Mongo — เบามาก ไม่ต้องไล่ทุกหน้า
+AUDIT_SINCE = os.getenv("ATMS_AUDIT_SINCE", "2026-01")     # เดือนแรกที่มีข้อมูลจริงใน ATMS
+TOTAL_RE = re.compile(r"[\d,]+\s*[-–]\s*[\d,]+\s*/\s*([\d,]+)")
+
+
+def _month_re(y, m):
+    """regex จับ received_at รูป DD/MM/YYYY (+เวลา) ของเดือนที่ต้องการ — เดือนไม่เติมศูนย์ก็จับได้"""
+    return re.compile(rf"^\d{{1,2}}/0?{m}/{y}(?:\s.*)?$")
+
+
+def atms_month_total(session, y, m):
+    """จำนวนใบ DD ที่ ATMS รายงานสำหรับเดือนนั้น (อ่านจากแถบแบ่งหน้า) · อ่านไม่ได้ = None"""
+    last = calendar.monthrange(y, m)[1]
+    params = {"code": "", "purchase_order": "", "supplier": "", "supplier_ref_no": "",
+              "user": "", "from_created_at": "", "to_created_at": "",
+              "from_received_at": f"01/{m:02d}/{y}", "to_received_at": f"{last}/{m:02d}/{y}",
+              "inventory_id": "", "submit": "ค้นหา", "order_by": "gm.code desc"}
+    soup = soup_of(session, f"{BASE}/inv/deposit/index", params)
+    hit = TOTAL_RE.search(soup.get_text(" ", strip=True))
+    return int(hit.group(1).replace(",", "")) if hit else None
+
+
+def audit_completeness(session, db, until_ym):
+    """เทียบ ATMS ↔ Mongo รายเดือน + ดูว่ารายการสินค้าตามมาครบไหม → เขียนลง atms.deposit_audit"""
+    hdr, itm = db["deposit_header"], db["deposit_items"]
+    y0, m0 = (int(x) for x in AUDIT_SINCE.split("-"))
+    y1, m1 = (int(x) for x in until_ym.split("-"))
+    have_items = set(itm.distinct("deposit_id"))
+
+    months, missing_items = [], []
+    y, m = y0, m0
+    while (y, m) <= (y1, m1):
+        rx = _month_re(y, m)
+        rows = list(hdr.find({"received_at": {"$regex": rx}},
+                             {"_id": 0, "deposit_id": 1, "deposit_code": 1, "amount": 1}))
+        with_items = sum(1 for r in rows if r.get("deposit_id") in have_items)
+        # ใบที่ "มียอดเงินแต่ไม่มีรายการสินค้า" = ตกหล่นจริง (ใบยอด 0.00 คือใบเปล่า ATMS ก็ไม่มีรายการ)
+        for r in rows:
+            if r.get("deposit_id") in have_items:
+                continue
+            try:
+                amt = float(str(r.get("amount") or "0").replace(",", "") or 0)
+            except ValueError:
+                amt = 0.0
+            if amt:
+                missing_items.append({"deposit_code": r.get("deposit_code"), "amount": r.get("amount"),
+                                      "month": f"{y}-{m:02d}"})
+        try:
+            total = atms_month_total(session, y, m)
+        except Exception as e:                    # เดือนเดียวพังต้องไม่ทำให้ทั้ง audit ล่ม
+            log(f"audit {y}-{m:02d} อ่าน ATMS ไม่ได้: {e}")
+            total = None
+        months.append({"ym": f"{y}-{m:02d}", "atms": total, "mongo": len(rows),
+                       "diff": None if total is None else total - len(rows),
+                       "with_items": with_items})
+        log(f"audit {y}-{m:02d}: ATMS {total} · Mongo {len(rows)} · มีรายการ {with_items}")
+        m += 1
+        if m > 12:
+            m, y = 1, y + 1
+
+    diffs = [x["diff"] for x in months if x["diff"] is not None]
+    doc = {
+        "at": datetime.utcnow(),
+        "since": AUDIT_SINCE,
+        "months": months,
+        "totals": {
+            "atms": sum(x["atms"] for x in months if x["atms"] is not None),
+            "mongo": sum(x["mongo"] for x in months),
+            "with_items": sum(x["with_items"] for x in months),
+            "diff": sum(diffs) if diffs else 0,
+            "unreadable_months": sum(1 for x in months if x["atms"] is None),
+        },
+        # ใบที่ต้องลงมือจริง — รอบอัตโนมัติย้อนไม่ถึงถ้าหลุดหน้าต่าง 2 เดือนไปแล้ว
+        "missing_items": missing_items[:200],
+        "missing_items_total": len(missing_items),
+    }
+    doc["ok"] = doc["totals"]["diff"] == 0 and not missing_items and not doc["totals"]["unreadable_months"]
+    db["deposit_audit"].insert_one(dict(doc))
+    log("audit done", {k: doc["totals"][k] for k in ("atms", "mongo", "diff")}, "ตกหล่นรายการสินค้า", len(missing_items))
+    return doc
+
+
 # ── main ──────────────────────────────────────────────────────────────────────
 def main():
     if not MONGO_URI:
@@ -516,6 +605,10 @@ def main():
         # รายการสินค้าของใบ DD — เฉพาะใบที่ยังไม่มีใน deposit_items (ดูเหตุผลใน scrape_deposit_items)
         counts["deposit_items"]     = scrape_deposit_items(s, dep_ids, db); log("DD items", counts["deposit_items"])
         counts["items"]             = scrape_items(s, from_date, db); log("items", counts["items"])
+        # ตรวจความครบถ้วนเฉพาะรอบเต็ม (06:00) — รอบ light วิ่ง 4 ครั้ง/วัน ไม่ต้องตรวจซ้ำทุกครั้ง
+        # ปิดได้ด้วย ATMS_AUDIT=0 เวลาต้องการรันเฉพาะการดึงข้อมูล
+        if os.getenv("ATMS_AUDIT", "1") != "0" and os.getenv("ATMS_RUN_LABEL", "atms_procurement") == "atms_procurement":
+            counts["audit"] = audit_completeness(s, db, f"{ict.year}-{ict.month:02d}")["totals"]
     except Exception as e:
         err = str(e)
         log("ERROR:", err)
