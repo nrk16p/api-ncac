@@ -558,7 +558,10 @@ def audit_completeness(session, db, until_ym):
 
     diffs = [x["diff"] for x in months if x["diff"] is not None]
     doc = {
+        # created_at + pipeline ให้ /pipeline/status/atms_audit อ่านได้ด้วย schema เดียวกับ run log อื่น
         "at": datetime.utcnow(),
+        "created_at": datetime.utcnow(),
+        "pipeline": "atms_audit",
         "since": AUDIT_SINCE,
         "months": months,
         "totals": {
