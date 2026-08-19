@@ -184,6 +184,9 @@ async def startup_event():
     scheduler.add_job(_run, CronTrigger(hour=21, minute=0),  args=["engineon"], id="sched_engineon")                          # 04:00 BKK
     scheduler.add_job(_run, CronTrigger(hour=23, minute=10), args=["drivercost_ticket"], id="sched_drivercost_ticket")        # 06:10 BKK
     scheduler.add_job(_run, CronTrigger(hour=23, minute=30), args=["engineon_trip_summary"], id="sched_engineon_trip_summary")  # 06:30 BKK
+    # maintenance (MR sync → maint_* + repair-analysis) 02:00 BKK → 19:00 UTC —
+    # ATMS โหลดต่ำ และก่อน ld/scco (09:00/09:20 BKK จริงตาม UTC)
+    scheduler.add_job(_run, CronTrigger(hour=19, minute=0), args=["maintenance"], id="sched_maintenance")  # 02:00 BKK
     scheduler.start()
     import logging
     logging.getLogger(__name__).info("Pipeline scheduler started — LD 02:00, SCCO 02:20, deliver_result 03:30, driver_cost 05:45 (BKK); CPAC runs locally; engineon 04:00 / drivercost_ticket 06:10 / trip_summary 06:30 (BKK)")

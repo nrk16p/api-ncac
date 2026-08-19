@@ -24,6 +24,7 @@ PIPELINE_SCRIPTS = {
     "drivercost_ticket": SCRIPTS_DIR / "engineon" / "pipeline_drivercost_ticket.py",
     "engineon_trip_summary": SCRIPTS_DIR / "engineon" / "pipeline_engineon_trip_summary.py",
     "vehiclemaster": SCRIPTS_DIR / "engineon" / "pipeline_vehiclemaster.py",
+    "maintenance": SCRIPTS_DIR / "maintenance" / "pipeline_maintenance.py",
 }
 
 PIPELINE_NAMES = {"ld": "asia", "scco": "scco", "cpac": "cpac",
@@ -34,7 +35,8 @@ PIPELINE_NAMES = {"ld": "asia", "scco": "scco", "cpac": "cpac",
                   "engineon": "engineon",
                   "drivercost_ticket": "drivercost_ticket",
                   "engineon_trip_summary": "engineon_trip_summary",
-                  "vehiclemaster": "vehiclemaster"}
+                  "vehiclemaster": "vehiclemaster",
+                  "maintenance": "maintenance"}
 
 # Where each pipeline logs its runs: (db, collection)
 RUN_LOG_LOCATION = {
@@ -50,6 +52,7 @@ RUN_LOG_LOCATION = {
     "drivercost_ticket": ("analytics", "etl_jobs"),
     "engineon_trip_summary": ("analytics", "etl_jobs"),
     "vehiclemaster": ("analytics", "etl_jobs"),
+    "maintenance": ("analytics", "etl_jobs"),
 }
 
 # In-memory run state (single-process; reset on restart)
