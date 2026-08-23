@@ -32,6 +32,7 @@ from .accident_schema import (
     AccidentCaseResponse,
     AccidentCaseDocSchema,
     AccidentCaseDocData,
+    AccidentCaseDamageItem,
 )
 
 # ============================================================

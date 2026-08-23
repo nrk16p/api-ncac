@@ -31,11 +31,14 @@ class _ChildBase(BaseModel):
 # CHILD ITEMS
 # ============================================================
 class ACWhyItem(_ChildBase):
+    # uid ของสาเหตุที่ชุด WHY นี้สังกัด (FE แยกชุด Why-Why ตามแต่ละสาเหตุ)
+    root_cause_id: Optional[str] = None
     problem: Optional[str] = None
     cause: Optional[str] = None
 
 
 class ACRootCauseItem(_ChildBase):
+    problem: Optional[str] = None      # ประเด็นตั้งต้นของชุดวิเคราะห์
     root_cause: Optional[str] = None
     category: Optional[str] = None     # 5M1E
 
@@ -54,6 +57,7 @@ class ACMeasureItem(_ChildBase):
 
 
 class ACInvestigatorItem(_ChildBase):
+    employee_id: Optional[str] = None
     name: Optional[str] = None
     position: Optional[str] = None
 

@@ -8,7 +8,7 @@ from .case_report_model import (
     CaseReportCorrectiveAction,
     CaseReportDoc,
 )
-from .accident_case_model import AccidentCase, AccidentCaseDoc
+from .accident_case_model import AccidentCase, AccidentCaseDoc, AccidentCaseDamageItem
 from .accident_case_investigate_model import (
     AccidentCaseInvestigate,
     AccidentCaseInvestigateWhy,

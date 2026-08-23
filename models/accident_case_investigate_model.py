@@ -187,6 +187,8 @@ class AccidentCaseInvestigateWhy(Base):
     )
     # uid ที่ FE สร้าง — เปิดเผยออก API ในชื่อ "id"
     id = Column("client_id", String(64), nullable=False)
+    # uid ของสาเหตุที่ชุด WHY นี้สังกัด (FE แยกชุด Why-Why ตามแต่ละสาเหตุ)
+    root_cause_id = Column("root_cause_client_id", String(64))
     seq = Column(Integer, nullable=False, default=1)
     problem = Column(Text)
     cause = Column(Text)
@@ -197,6 +199,7 @@ class AccidentCaseInvestigateWhy(Base):
         return {
             "id": self.id,
             "seq": self.seq,
+            "root_cause_id": self.root_cause_id,
             "problem": self.problem,
             "cause": self.cause,
         }
@@ -217,6 +220,8 @@ class AccidentCaseInvestigateRootCause(Base):
     )
     id = Column("client_id", String(64), nullable=False)
     seq = Column(Integer, nullable=False, default=1)
+    # ประเด็นปัญหาตั้งต้นของชุดวิเคราะห์ (= problem ของ WHY1)
+    problem = Column(Text)
     root_cause = Column(Text)
     # man | machine | material | method | measurement | environment
     category = Column(String(30))
@@ -227,6 +232,7 @@ class AccidentCaseInvestigateRootCause(Base):
         return {
             "id": self.id,
             "seq": self.seq,
+            "problem": self.problem,
             "root_cause": self.root_cause,
             "category": self.category,
         }
@@ -285,6 +291,8 @@ class AccidentCaseInvestigateInvestigator(Base):
     )
     id = Column("client_id", String(64), nullable=False)
     seq = Column(Integer, nullable=False, default=1)
+    # รหัสพนักงานจากทะเบียนองค์กร (ว่างได้ กรณีชื่อเดิม/พนักงานลาออก)
+    employee_id = Column(String(50))
     name = Column(String(255))
     position = Column(String(255))
 
@@ -294,6 +302,7 @@ class AccidentCaseInvestigateInvestigator(Base):
         return {
             "id": self.id,
             "seq": self.seq,
+            "employee_id": self.employee_id,
             "name": self.name,
             "position": self.position,
         }

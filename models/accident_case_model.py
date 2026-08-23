@@ -47,6 +47,10 @@ class AccidentCase(Base):
     police_station_area = Column(String(255))
     vehicle_truckno = Column(String(50))
     case_details = Column(Text)
+    # เลขที่ใบแจ้งซ่อม (MR) กรอกเมื่อรถเสียหาย
+    repair_request_no = Column(String(50))
+    # ค่าจาก FE เป็นข้อความไทย ("ไม่สามารถวิ่งต่อได้" = 19 ตัวอักษร) — 20 แคบเกินไป
+    breakdown_status = Column(String(50))
 
     # --- Tests ---
     alcohol_test = Column(Text)
@@ -108,6 +112,14 @@ class AccidentCase(Base):
         cascade="all, delete-orphan"
     )
 
+    # รายการความเสียหายรายบรรทัด (สินค้า / รถและอื่นๆ)
+    damage_items = relationship(
+        "AccidentCaseDamageItem",
+        back_populates="accident_case",
+        cascade="all, delete-orphan",
+        order_by="AccidentCaseDamageItem.seq",
+    )
+
     # ผลการสอบสวน (Part 2) — 1 เอกสาร : 1 การสอบสวน
     investigation = relationship(
         "AccidentCaseInvestigate",
@@ -140,6 +152,8 @@ class AccidentCase(Base):
             "destination": self.destination,
             "vehicle_truckno": self.vehicle_truckno,
             "case_details": self.case_details,
+            "repair_request_no": self.repair_request_no,
+            "breakdown_status": self.breakdown_status,
             "alcohol_test": self.alcohol_test,
             "drug_test": self.drug_test,
             "alcohol_test_result": self.alcohol_test_result,
@@ -169,6 +183,7 @@ class AccidentCase(Base):
             "casestatus": self.casestatus,
             "priority": self.priority,
             "docs": [doc.data for doc in self.docs],
+            "damage_items": [item.to_dict() for item in self.damage_items],
         }
 
 
@@ -183,3 +198,39 @@ class AccidentCaseDoc(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     accident_case = relationship("AccidentCase", back_populates="docs")
+
+
+class AccidentCaseDamageItem(Base):
+    """
+    รายการความเสียหายรายบรรทัดของเอกสารอุบัติเหตุ
+
+    FE (ACForm.tsx) ตีเลข `damage_id` ใหม่ตามลำดับที่แสดงบนฟอร์มทุกครั้งที่โหลด
+    ฝั่ง DB จึงเก็บแค่ `seq` แล้ว map กลับเป็น damage_id ตอนส่งออก
+    ยอดรวมของแต่ละกลุ่มไปลงที่ actual_goods_damage_value / actual_vehicle_damage_value
+    """
+
+    __tablename__ = "accident_case_damage_items"
+
+    damage_item_id = Column(Integer, primary_key=True, autoincrement=True)
+    document_no_ac = Column(
+        String(50),
+        ForeignKey("accident_cases.document_no_ac", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    seq = Column(Integer, nullable=False, default=1)
+    damage_category = Column(String(20))   # goods | vehicle
+    damage_detail = Column(Text)
+    damage_value = Column(Numeric(12, 2), default=0)
+    responsible_party = Column(String(255))
+
+    accident_case = relationship("AccidentCase", back_populates="damage_items")
+
+    def to_dict(self):
+        return {
+            "damage_id": self.seq,
+            "damage_category": self.damage_category or "vehicle",
+            "damage_detail": self.damage_detail,
+            "damage_value": float(self.damage_value) if self.damage_value is not None else 0,
+            "responsible_party": self.responsible_party,
+        }

@@ -67,6 +67,21 @@ class AccidentCaseDocSchema(BaseModel):
 
 
 # ============================================================
+# ACCIDENT CASE DAMAGE ITEM (รายการความเสียหายรายบรรทัด)
+# ============================================================
+class AccidentCaseDamageItem(BaseModel):
+    # FE ตีเลขใหม่ตามลำดับบนฟอร์มทุกครั้ง — รับมาเพื่อคง order เท่านั้น
+    damage_id: Optional[int] = None
+    damage_category: Optional[str] = None   # goods | vehicle
+    damage_detail: Optional[str] = None
+    damage_value: Optional[float] = 0
+    responsible_party: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+# ============================================================
 # ACCIDENT CASE CREATE / UPDATE / RESPONSE
 # ============================================================
 class AccidentCaseCreate(BaseModel):
@@ -95,11 +110,14 @@ class AccidentCaseCreate(BaseModel):
 
     # 🔹 Case & Damage Info
     case_details: Optional[str] = None
+    repair_request_no: Optional[str] = None
+    breakdown_status: Optional[str] = None
     truck_damage: Optional[str] = None
     truck_damage_details: Optional[str] = None
     product_damage: Optional[str] = None
     product_damage_details: Optional[str] = None
     fault_party:Optional[str] = None
+    damage_items: Optional[List[AccidentCaseDamageItem]] = None
 
 
     # 🔹 Test Results
@@ -173,10 +191,13 @@ class AccidentCaseUpdate(BaseModel):
 
     # 🔹 Case & Damage Info
     case_details: Optional[str] = None
+    repair_request_no: Optional[str] = None
+    breakdown_status: Optional[str] = None
     truck_damage: Optional[str] = None
     truck_damage_details: Optional[str] = None
     product_damage: Optional[str] = None
     product_damage_details: Optional[str] = None
+    damage_items: Optional[List[AccidentCaseDamageItem]] = None
 
     # 🔹 Test Results
     alcohol_test: Optional[str] = None
@@ -257,6 +278,9 @@ class AccidentCaseResponse(BaseModel):
     product_damage: Optional[str] = None
     product_damage_details: Optional[str] = None
     case_details: Optional[str] = None
+    repair_request_no: Optional[str] = None
+    breakdown_status: Optional[str] = None
+    damage_items: Optional[List[AccidentCaseDamageItem]] = None
 
     # 🔹 Injury Details
     injured_not_hospitalized: Optional[int] = None

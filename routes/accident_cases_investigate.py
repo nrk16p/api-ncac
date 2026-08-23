@@ -105,11 +105,6 @@ def _apply_children(record, payload, partial: bool):
     partial=True (PUT) : list ที่เป็น None คือ "ไม่แตะ"
     partial=False (POST): list ที่เป็น None คือ "ล้างให้ว่าง"
     """
-    if payload.why_analysis is not None or not partial:
-        record.why_analysis = _rows(
-            payload.why_analysis or [], models.AccidentCaseInvestigateWhy
-        )
-
     if payload.root_causes is not None or not partial:
         record.root_causes = _rows(
             payload.root_causes or [], models.AccidentCaseInvestigateRootCause
@@ -121,10 +116,26 @@ def _apply_children(record, payload, partial: bool):
             models.AccidentCaseInvestigateInvestigator,
         )
 
-    # มาตรการต้องผูกกับสาเหตุที่มีอยู่จริงเสมอ — ที่ผูกกับสาเหตุที่ถูกลบไปแล้ว
-    # (ฝั่ง FE เรียกว่า orphan measure) จะไม่มีวันแสดงบนฟอร์ม จึงตัดทิ้งทุกครั้ง
-    # รวมถึงตอน PUT ที่แก้เฉพาะ root_causes โดยไม่ได้ส่ง measures มาด้วย
+    # ลูกที่อ้างสาเหตุซึ่งถูกลบไปแล้ว (orphan) จะไม่มีวันแสดงบนฟอร์ม จึงตัดทิ้งทุกครั้ง
+    # รวมถึงตอน PUT ที่แก้เฉพาะ root_causes โดยไม่ได้ส่ง measures/why มาด้วย
     valid_ids = {rc.id for rc in record.root_causes if rc.id}
+
+    # WHY ที่ยังไม่ผูกสาเหตุ (root_cause_id ว่าง = ข้อมูลรูปแบบเดิม) เก็บไว้
+    # ให้ FE ผูกกับสาเหตุแรกเอง — ตัดทิ้งเฉพาะที่ชี้ไปยังสาเหตุที่ไม่มีแล้ว
+    def _why_alive(why) -> bool:
+        return not why.root_cause_id or why.root_cause_id in valid_ids
+
+    if payload.why_analysis is not None or not partial:
+        record.why_analysis = _rows(
+            [w for w in (payload.why_analysis or []) if _why_alive(w)],
+            models.AccidentCaseInvestigateWhy,
+        )
+    else:
+        kept_whys = [w for w in record.why_analysis if _why_alive(w)]
+        if len(kept_whys) != len(record.why_analysis):
+            for index, why in enumerate(kept_whys, start=1):
+                why.seq = index
+            record.why_analysis = kept_whys
 
     if payload.measures is not None or not partial:
         kept = [

@@ -81,6 +81,43 @@ def calculate_priority(
         return "Minor"
 
 # -----------------------------------------------------
+# DAMAGE ITEMS (replace ทั้งชุดตาม state ของฟอร์ม)
+# -----------------------------------------------------
+def replace_damage_items(db: Session, document_no_ac: str, items) -> None:
+    """
+    เขียนรายการความเสียหายใหม่ทั้งชุด
+    - ตีเลข seq 1..n ตามลำดับใน array (ให้ตรงกับที่เห็นบนฟอร์ม)
+    - แถวว่างล้วน (ไม่มีรายละเอียดและยอดเป็น 0) ไม่ต้องเก็บ
+    """
+    db.query(models.AccidentCaseDamageItem).filter(
+        models.AccidentCaseDamageItem.document_no_ac == document_no_ac
+    ).delete(synchronize_session=False)
+
+    seq = 0
+    for item in items or []:
+        data = item if isinstance(item, dict) else item.dict()
+        detail = (data.get("damage_detail") or "").strip()
+        value = data.get("damage_value") or 0
+        party = (data.get("responsible_party") or "").strip()
+        if not detail and not party and not value:
+            continue
+
+        seq += 1
+        db.add(
+            models.AccidentCaseDamageItem(
+                document_no_ac=document_no_ac,
+                seq=seq,
+                damage_category="goods"
+                if data.get("damage_category") == "goods"
+                else "vehicle",
+                damage_detail=detail or None,
+                damage_value=value,
+                responsible_party=party or None,
+            )
+        )
+
+
+# -----------------------------------------------------
 # CREATE CASE
 # -----------------------------------------------------
 @router.post("", response_model=schemas.AccidentCaseResponse, status_code=201)
@@ -101,7 +138,16 @@ def create_case(payload: dict, db: Session = Depends(get_db)):
     )
 
     case = models.AccidentCase(
-        **case_data.dict(exclude={"priority", "document_no_ac", "casestatus", "attachments", "docs"}),
+        **case_data.dict(
+            exclude={
+                "priority",
+                "document_no_ac",
+                "casestatus",
+                "attachments",
+                "docs",
+                "damage_items",
+            }
+        ),
         document_no_ac=doc_no,
         priority=priority,
         casestatus="Pending",
@@ -115,7 +161,10 @@ def create_case(payload: dict, db: Session = Depends(get_db)):
     # Create documents if any
     for doc in case_data.docs or []:
         db.add(models.AccidentCaseDoc(document_no_ac=doc_no, data=doc))
+
+    replace_damage_items(db, doc_no, case_data.damage_items)
     db.commit()
+    db.refresh(case)
 
     return case.to_dict()
 
@@ -162,6 +211,7 @@ def get_accident_cases(
         joinedload(models.AccidentCase.district),
         joinedload(models.AccidentCase.sub_district),
         joinedload(models.AccidentCase.docs),
+        joinedload(models.AccidentCase.damage_items),
     )
 
     if document_no_ac:
@@ -230,10 +280,15 @@ def update_case(document_no_ac: str, payload: dict, db: Session = Depends(get_db
             )
             db.add(new_doc)
 
+    # ✅ Handle damage items separately (replace ทั้งชุด)
+    if "damage_items" in payload:
+        replace_damage_items(db, document_no_ac, payload.get("damage_items"))
+
     # ✅ Update other fields
     update_fields = {
         k: v for k, v in payload.items()
-        if k not in {"priority", "document_no_ac", "docs"}
+        if k not in {"priority", "document_no_ac", "docs", "damage_items"}
+        and hasattr(models.AccidentCase, k)
     }
 
     for key, value in update_fields.items():
@@ -327,6 +382,7 @@ def get_accident_case(document_no_ac: str, db: Session = Depends(get_db)):
             joinedload(models.AccidentCase.district),
             joinedload(models.AccidentCase.sub_district),
             joinedload(models.AccidentCase.docs),
+            joinedload(models.AccidentCase.damage_items),
         )
         .filter(models.AccidentCase.document_no_ac == document_no_ac)
         .first()
