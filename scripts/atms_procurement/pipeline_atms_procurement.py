@@ -19,6 +19,7 @@ Run standalone (invoked as a subprocess by routes/pipeline/pipeline_routes.py):
 
 import calendar
 import os
+import urllib.parse
 import re
 import sys
 import time
@@ -77,12 +78,12 @@ def get_session():
 
 
 # ── html helpers ────────────────────────────────────────────────────────────
-def _get(session, url, params=None, tries=4):
+def _get(session, url, params=None, tries=4, timeout=45):
     """GET พร้อม retry+backoff — ทน ConnectionAborted/transient จาก ATMS throttle"""
     last = None
     for a in range(tries):
         try:
-            r = session.get(url, params=params, timeout=45)
+            r = session.get(url, params=params, timeout=timeout)
             r.raise_for_status()
             return r
         except requests.RequestException as e:
@@ -285,8 +286,94 @@ def parse_deposit_items(html, deposit_id):
     return items
 
 
-def scrape_deposit_items(session, deposit_ids, db, workers=None):
-    """ดึงรายการสินค้าของใบ DD ที่ "ยังไม่มีใน deposit_items" เท่านั้น
+LOG_URL = f"{BASE}/account/log/index"
+LOG_ROWS_PER_PAGE = 1000
+LOG_TIMEOUT = int(os.getenv("ATMS_LOG_TIMEOUT", "240"))   # หน้า log ช้ากว่าหน้าปกติมาก
+
+
+def changed_deposit_ids_from_log(session, days=3):
+    """อ่าน activity log ของ ATMS เป็น change feed → id ของใบ DD ที่รายการสินค้าถูกแตะในช่วงนี้
+
+    ทำไมต้องมี: scrape_deposit_items ดึงเฉพาะใบที่ "ยังไม่มีรายการ" ใบที่ถูกแก้ใน ATMS ทีหลัง
+    จึงค้างตลอดไป (เคสจริง LBDD26080471 — ราคาน้ำกลั่นถูกแก้ 8 → 10 เมื่อ 21/08/2026 11:38
+    หลังเราดึงไปแล้ว หัวใบขึ้นเป็น 3,750 เพราะรีเฟรชทุกรอบ แต่รายการค้างที่ 3,510 อยู่ 3 วัน)
+    การไล่ยิงหน้า detail ทุกใบทุกรอบเป็นไปไม่ได้ (2-4 พัน request/รอบ × 5 รอบ/วัน) log จึงเป็น
+    ทางเดียวที่บอกได้ว่า "ใบไหนเปลี่ยน" ด้วยต้นทุนไม่กี่ request
+
+    หมายเหตุการใช้งานจริง:
+      · ต้องกรองด้วย model + app_controller เสมอ — กรองด้วยช่วงวันที่อย่างเดียว ATMS จะ timeout
+      · ATMS แก้รายการด้วยการ "ลบแล้ว add ใหม่" ทั้งชุด จึงไม่กรอง app_action (เอาทั้ง add/delete)
+      · row-per-page เก็บฝั่ง session ต้องตั้งก่อน ไม่งั้นโดนตัดที่ค่า default แล้วเงียบ
+    """
+    ids = set()
+    try:
+        session.get(f"{BASE}/account/user/set.row.per.page/?row-per-page={LOG_ROWS_PER_PAGE}", timeout=60)
+    except requests.RequestException as e:
+        log("log feed: ตั้ง row-per-page ไม่สำเร็จ —", e)
+
+    today = datetime.utcnow() + timedelta(hours=7)          # ATMS เดินตามเวลาไทย
+    frm = (today - timedelta(days=max(0, days - 1))).strftime("%d/%m/%Y")
+    to  = today.strftime("%d/%m/%Y")
+    path = (f"/model/good_movement_item/app_controller/deposit.item"
+            f"/from_created_at/{urllib.parse.quote(frm, safe='')}"
+            f"/to_created_at/{urllib.parse.quote(to, safe='')}"
+            f"/order_by/created_at+desc/search-toggle-status/hide/show_params/y")
+    try:
+        r = _get(session, LOG_URL + path, tries=2, timeout=LOG_TIMEOUT)
+    except requests.RequestException as e:
+        # ดึง log ไม่ได้ไม่ควรล้มทั้งรอบ — ชั้น stale_deposit_ids ยังทำงานต่อได้
+        log(f"log feed {frm}-{to}: ดึงไม่สำเร็จ —", e)
+        return ids
+    soup = BeautifulSoup(r.text, "html.parser")
+    table = soup.find("table", class_="defaultTable") or data_table(soup)
+    rows = table.find_all("tr")[1:] if table else []
+    for tr in rows:
+        for m in re.finditer(r'"good_movement_id"\s*:\s*"?(\d+)"?', tr.get_text(" ", strip=True)):
+            ids.add(int(m.group(1)))
+    # ชนเพดานหน้า = อาจมีของตกหล่น — ไม่เงียบ ให้เห็นใน log ว่าต้องลด ATMS_LOG_DAYS หรือเพิ่มเพดาน
+    if len(rows) >= LOG_ROWS_PER_PAGE:
+        log(f"log feed: ชนเพดาน {LOG_ROWS_PER_PAGE} แถว — อาจมีใบตกหล่น")
+    log(f"log feed {frm}-{to}: {len(rows)} แถว → {len(ids)} ใบ DD ที่รายการถูกแตะ")
+    return ids
+
+
+def stale_deposit_ids(db, deposit_ids):
+    """ใบที่ผลรวมรายการ != ยอดหัวใบ = รายการค้าง (ชั้นกันเหนียวของ changed_deposit_ids_from_log)
+
+    หัวใบถูก ReplaceOne ทุกรอบอยู่แล้ว การเทียบจึงฟรี ไม่ต้องยิง ATMS เพิ่มสักครั้ง
+    ชั้นนี้จับสิ่งที่ log จับไม่ได้ — ใบที่ scrape ครั้งแรกไม่ครบ หรือช่วงที่ log ขาด
+    ATMS ปัดเศษ "รวม" ทีละบรรทัด ใบยาวจึงเพี้ยนได้ระดับสตางค์ → เผื่อ tolerance ตามจำนวนบรรทัด
+    (วัดจริงทั้งคอลเลกชัน 16,472 ใบ: เพี้ยนสูงสุด 0.03 บาทที่ 39 บรรทัด)
+    """
+    ids = sorted({int(i) for i in deposit_ids if i})
+    if not ids:
+        return set()
+    sums = {}
+    for i in range(0, len(ids), 1000):
+        chunk = ids[i:i + 1000]
+        for r in db["deposit_items"].aggregate([
+            {"$match": {"deposit_id": {"$in": chunk}}},
+            {"$group": {"_id": "$deposit_id", "n": {"$sum": 1},
+                        "sum": {"$sum": {"$toDouble": {"$replaceAll": {
+                            "input": {"$ifNull": ["$total", "0"]}, "find": ",", "replacement": ""}}}}}},
+        ]):
+            sums[r["_id"]] = r
+    stale = set()
+    for h in db["deposit_header"].find({"deposit_id": {"$in": ids}},
+                                       {"_id": 0, "deposit_id": 1, "amount": 1}):
+        got = sums.get(h["deposit_id"])
+        if not got:
+            continue                                  # ยังไม่มีรายการ — scrape_deposit_items จับอยู่แล้ว
+        amount = num(str(h.get("amount") or "")) or 0
+        if amount <= 0:
+            continue                                  # ใบคืนสต็อกไม่มียอดหัวใบ เทียบไม่ได้
+        if abs(amount - got["sum"]) > max(0.05, got["n"] * 0.01):
+            stale.add(h["deposit_id"])
+    return stale
+
+
+def scrape_deposit_items(session, deposit_ids, db, workers=None, force_ids=None):
+    """ดึงรายการสินค้าของใบ DD ที่ "ยังไม่มีใน deposit_items" + ใบใน force_ids ที่รู้ว่าเปลี่ยน
 
     ทำไมต้องมี: หน้า index ให้แค่หัวใบ ไม่มีรายการสินค้า — ก่อนหน้านี้ deposit_items
     ถูกเติมด้วย atms-extractor (cli.py deposit) ที่รันมือเท่านั้น ทำให้ใบใหม่ ๆ ไม่มีรายการ
@@ -295,8 +382,8 @@ def scrape_deposit_items(session, deposit_ids, db, workers=None):
     ทำไมเอาเฉพาะใบที่ยังไม่มี: หน้า detail ต้องยิงทีละใบ (1 request/ใบ) ถ้าดึงใหม่ทั้งหน้าต่าง
     ทุกรอบจะกิน 2-4 พัน request ต่อรอบ × 5 รอบ/วัน — รอบแรกจึงเป็นการเติมย้อนหลังให้เอง
     แล้วรอบถัด ๆ ไปเหลือเฉพาะใบใหม่ของวันนั้น (หลักสิบ)
-    ข้อแลกเปลี่ยน: ใบที่ถูกแก้รายการทีหลังใน ATMS จะไม่ถูกดึงซ้ำ — ล้าง deposit_items ของใบนั้น
-    แล้วให้รอบถัดไปดึงใหม่ ถ้าเจอเคสแบบนั้น
+    ใบที่ถูกแก้ทีหลังเคยหลุดตรงนี้ — ตอนนี้ force_ids (จาก changed_deposit_ids_from_log +
+    stale_deposit_ids) เป็นตัวพามันกลับเข้ามาดึงซ้ำ
     """
     if workers is None:
         workers = int(os.getenv("ATMS_ITEM_WORKERS", "8"))
@@ -312,7 +399,12 @@ def scrape_deposit_items(session, deposit_ids, db, workers=None):
     have = set()
     for i in range(0, len(ids), 1000):
         have.update(col.distinct("deposit_id", {"deposit_id": {"$in": ids[i:i + 1000]}}))
-    missing = [i for i in ids if i not in have]
+    forced  = {int(i) for i in (force_ids or set())} & set(ids)
+    missing = [i for i in ids if i not in have or i in forced]
+    if forced:
+        log(f"deposit_items: ดึงซ้ำ {len(forced & have):,} ใบที่รู้ว่าเปลี่ยน/ยอดไม่ตรง")
+    # ใบที่รู้ว่าเปลี่ยนต้องได้คิวก่อน — ไม่งั้นรอบที่ยังเติมย้อนหลังอยู่จะดันมันตกเพดานไปเรื่อย ๆ
+    missing.sort(key=lambda i: 0 if i in forced else 1)
     todo, remaining = missing[:cap], max(0, len(missing) - cap)
     if remaining:
         log(f"deposit_items: ค้างอีก {remaining:,} ใบ (เพดาน {cap:,}/รอบ) — จะดึงต่อในรอบถัดไป")
@@ -606,7 +698,11 @@ def main():
         dep_ids = []
         counts["deposit_header"]    = scrape_deposit(s, from_date, db, dep_ids); log("DD", counts["deposit_header"])
         # รายการสินค้าของใบ DD — เฉพาะใบที่ยังไม่มีใน deposit_items (ดูเหตุผลใน scrape_deposit_items)
-        counts["deposit_items"]     = scrape_deposit_items(s, dep_ids, db); log("DD items", counts["deposit_items"])
+        # ใบที่ต้องดึงรายการซ้ำ: log บอกว่าถูกแก้ + ยอดรวมไม่ตรงหัวใบ (สองชั้นปิดจุดบอดของกันและกัน)
+        force = changed_deposit_ids_from_log(s, int(os.getenv("ATMS_LOG_DAYS", "3")))
+        force |= stale_deposit_ids(db, dep_ids)
+        log("DD ที่ต้องดึงรายการซ้ำ", len(force))
+        counts["deposit_items"]     = scrape_deposit_items(s, dep_ids, db, force_ids=force); log("DD items", counts["deposit_items"])
         counts["items"]             = scrape_items(s, from_date, db); log("items", counts["items"])
         # ตรวจความครบถ้วนเฉพาะรอบเต็ม (06:00) — รอบ light วิ่ง 4 ครั้ง/วัน ไม่ต้องตรวจซ้ำทุกครั้ง
         # ปิดได้ด้วย ATMS_AUDIT=0 เวลาต้องการรันเฉพาะการดึงข้อมูล
