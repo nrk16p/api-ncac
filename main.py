@@ -178,6 +178,10 @@ async def startup_event():
     # BKK→UTC (−7): 06→23(prev) · 10→03 · 14→07 · 18→11 · 22→15
     scheduler.add_job(_run, CronTrigger(hour=23, minute=0), args=["atms_procurement"], id="sched_atms_procurement")            # 06:00 BKK full
     scheduler.add_job(_run, CronTrigger(hour="3,7,11,15", minute=0), args=["atms_procurement_light"], id="sched_atms_procurement_light")  # 10/14/18/22 BKK light
+    # master ซัพพลายเออร์ (เครดิตเทอมของ mena-wms /ap-tracking) — 06:40 BKK → 23:40 UTC
+    # ต่อท้าย atms_procurement (23:00 UTC) เพื่อให้ ddCount นับจาก deposit_header ที่เพิ่งรีเฟรชแล้ว
+    # และไม่ยิง ATMS พร้อมกัน · งานเบา ~11 คำขอ ใช้เวลาไม่ถึงนาที
+    scheduler.add_job(_run, CronTrigger(hour=23, minute=40), args=["atms_supplier"], id="sched_atms_supplier")  # 06:40 BKK
     # engineon chain (BKK→UTC −7): GPS crunch 04:00 BKK → 21:00 UTC (prev day);
     # drivercost_ticket 06:10 BKK → 23:10 UTC (หลัง ATMS regen batch files ~05:00 BKK,
     # เหลื่อมจาก atms_procurement 23:00); trip summary 06:30 BKK → 23:30 UTC
