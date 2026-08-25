@@ -34,8 +34,8 @@ class AccidentCaseDocData(BaseModel):
     account_attachment: Optional[str] = None
     account_attachment_no: Optional[str] = None
     account_attachment_remark: Optional[str] = None
-    investigate_doc: Optional[str] = None
-    investigate_doc_remark: Optional[str] = None
+    investigate_report: Optional[str] = None
+    investigate_report_remark: Optional[str] = None
 
     # Extended attachments
     account_attachment_sold: Optional[str] = None
