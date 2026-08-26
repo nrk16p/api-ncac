@@ -22,3 +22,4 @@ pymysql
 numpy
 apscheduler
 beautifulsoup4
+boto3

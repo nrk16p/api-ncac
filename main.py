@@ -81,6 +81,7 @@ from routes.drivingdistance import router as drivingdistance_router
 from routes.atms_maintenance import router as atms_maintenance_router
 from routes.atms_tms import router as atms_tms_router
 from routes.atms.openjob import router as atms_openjob_router
+from routes.news_safety_talk import router as news_safety_talk_router
 
 
 # ------------------------------
@@ -112,6 +113,7 @@ app.include_router(fuel_routes.router)
 app.include_router(mixer_compensation.router)
 app.include_router(master_root_cause.router)
 app.include_router(inspection_router)
+app.include_router(news_safety_talk_router)
 
 #booking leave
 app.include_router(leave_booking_router)
