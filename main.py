@@ -82,6 +82,8 @@ from routes.atms_maintenance import router as atms_maintenance_router
 from routes.atms_tms import router as atms_tms_router
 from routes.atms.openjob import router as atms_openjob_router
 from routes.news_safety_talk import router as news_safety_talk_router
+from routes.news_case_report import router as news_case_report_router
+from routes.news_accident_case import router as news_accident_case_router
 
 
 # ------------------------------
@@ -114,6 +116,8 @@ app.include_router(mixer_compensation.router)
 app.include_router(master_root_cause.router)
 app.include_router(inspection_router)
 app.include_router(news_safety_talk_router)
+app.include_router(news_case_report_router)
+app.include_router(news_accident_case_router)
 
 #booking leave
 app.include_router(leave_booking_router)

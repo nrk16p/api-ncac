@@ -38,9 +38,8 @@ def list_safety_talk_news(
 
     items = []
     for safety_talk, task in rows:
-        date_str = task.action_date.strftime("%d/%m/%Y") if task.action_date else "-"
         place = task.plant_name or task.client_name or "-"
-        title = f"Safety Talk ประจำวันที่ {date_str} แพล้นท์ {place}"
+        title = f"Safety Talk แพล้นท์ {place}"
 
         topics = safety_talk.topics or []
         description = ", ".join(topics) if topics else ""
@@ -51,6 +50,9 @@ def list_safety_talk_news(
                 title=title,
                 description=description,
                 image_urls=image_urls_by_task.get(task.inspection_task_id, []),
+                client_name=task.client_name,
+                trainer_id=[task.trainer_id, *task.partner_trainer_ids] if task.partner_trainer_ids else [task.trainer_id],
+                inspection_date=task.action_date,
                 created_at=task.created_at,
                 updated_at=task.updated_at,
             )
