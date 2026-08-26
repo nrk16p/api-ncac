@@ -9,8 +9,8 @@ from botocore.exceptions import BotoCoreError, ClientError
 
 logger = logging.getLogger(__name__)
 
-DO_SPACES_BUCKET = os.getenv("DO_SPACES_BUCKET", "mn-bucket")
-DO_SPACES_BASE_PATH = os.getenv("DO_SPACES_BASE_PATH", "trainer-app")
+DO_SPACES_BUCKET = "mn-bucket"
+DO_SPACES_BASE_PATH = "trainer-app"
 PRESIGNED_URL_EXPIRES_IN = 3600
 
 
@@ -18,8 +18,8 @@ PRESIGNED_URL_EXPIRES_IN = 3600
 def _get_s3_client():
     return boto3.client(
         "s3",
-        region_name=os.getenv("DO_SPACES_REGION"),
-        endpoint_url=os.getenv("DO_SPACES_ENDPOINT"),
+        region_name="sgp1",
+        endpoint_url="https://sgp1.digitaloceanspaces.com",
         aws_access_key_id=os.getenv("DO_SPACES_KEY"),
         aws_secret_access_key=os.getenv("DO_SPACES_SECRET"),
     )
