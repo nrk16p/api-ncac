@@ -195,6 +195,8 @@ def get_accident_cases(
     priority: Optional[List[str]] = Query(None),
     driver_id: Optional[List[str]] = Query(None),
     casestatus: Optional[List[str]] = Query(None),
+    breakdown_status: Optional[List[str]] = Query(None),
+    reporter_id: Optional[List[int]] = Query(None),
     vehicle_plate: Optional[str] = Query(None),
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
@@ -245,6 +247,12 @@ def get_accident_cases(
 
     if casestatus:
         query = query.filter(models.AccidentCase.casestatus.in_(casestatus))
+
+    if breakdown_status:
+        query = query.filter(models.AccidentCase.breakdown_status.in_(breakdown_status))
+
+    if reporter_id:
+        query = query.filter(models.AccidentCase.reporter_id.in_(reporter_id))
 
     if vehicle_plate:
         VehicleHeadAlias = aliased(models.Vehicle)

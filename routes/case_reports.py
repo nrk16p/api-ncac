@@ -274,6 +274,9 @@ def get_case_reports(
     priority: Optional[List[str]] = Query(None),
     client_id: Optional[List[int]] = Query(None),          # ✅ NEW
     department_id: Optional[List[int]] = Query(None),      # ✅ NEW
+    breakdown_status: Optional[List[str]] = Query(None),
+    reporter_id: Optional[List[int]] = Query(None),
+    incident_cause_id: Optional[List[int]] = Query(None),
     vehicle_plate: Optional[str] = Query(None),
     start_date: Optional[str] = Query(None),
     end_date: Optional[str] = Query(None),
@@ -302,6 +305,15 @@ def get_case_reports(
 
     if priority:
         query = query.filter(CaseReport.priority.in_(priority))
+
+    if breakdown_status:
+        query = query.filter(CaseReport.breakdown_status.in_(breakdown_status))
+
+    if reporter_id:
+        query = query.filter(CaseReport.reporter_id.in_(reporter_id))
+
+    if incident_cause_id:
+        query = query.filter(CaseReport.incident_cause_id.in_(incident_cause_id))
 
     # ✅ NEW FILTERS
     if client_id:
