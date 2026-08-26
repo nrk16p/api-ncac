@@ -1,7 +1,8 @@
 import os
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
-from typing import List
+from typing import Dict, List
 
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
@@ -53,3 +54,21 @@ def get_image_presigned_urls(inspection_task_id: str) -> List[str]:
     except (BotoCoreError, ClientError) as exc:
         logger.warning("DigitalOcean Spaces lookup failed for %s: %s", inspection_task_id, exc)
         return []
+
+
+def get_image_presigned_urls_bulk(inspection_task_ids: List[str]) -> Dict[str, List[str]]:
+    """Presigned URLs for multiple inspection tasks, fetched concurrently.
+
+    boto3 is synchronous, so a small thread pool is used to run the
+    per-task S3 lookups (list_objects_v2 + generate_presigned_url) in
+    parallel instead of paying for N sequential network round-trips.
+    A failed lookup for a given task still yields an empty list for that
+    task (see get_image_presigned_urls), it never raises or aborts the
+    other lookups.
+    """
+    if not inspection_task_ids:
+        return {}
+
+    with ThreadPoolExecutor(max_workers=min(10, len(inspection_task_ids))) as executor:
+        results = executor.map(get_image_presigned_urls, inspection_task_ids)
+        return dict(zip(inspection_task_ids, results))

@@ -6,7 +6,7 @@ from typing import List
 from database import get_db
 from models import inspection as models
 from schemas.news_schema import SafetyTalkNewsItem
-from services.s3_service import get_image_presigned_urls
+from services.s3_service import get_image_presigned_urls_bulk
 
 router = APIRouter(prefix="/news", tags=["News"])
 
@@ -33,6 +33,9 @@ def list_safety_talk_news(
         .all()
     )
 
+    inspection_task_ids = [task.inspection_task_id for _, task in rows]
+    image_urls_by_task = get_image_presigned_urls_bulk(inspection_task_ids)
+
     items = []
     for safety_talk, task in rows:
         date_str = task.action_date.strftime("%d/%m/%Y") if task.action_date else "-"
@@ -47,7 +50,7 @@ def list_safety_talk_news(
                 inspection_task_id=task.inspection_task_id,
                 title=title,
                 description=description,
-                image_urls=get_image_presigned_urls(task.inspection_task_id),
+                image_urls=image_urls_by_task.get(task.inspection_task_id, []),
                 created_at=task.created_at,
                 updated_at=task.updated_at,
             )
