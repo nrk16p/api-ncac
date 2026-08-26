@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload, aliased
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
@@ -195,6 +195,7 @@ def get_accident_cases(
     priority: Optional[List[str]] = Query(None),
     driver_id: Optional[List[str]] = Query(None),
     casestatus: Optional[List[str]] = Query(None),
+    vehicle_plate: Optional[str] = Query(None),
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     page: int = Query(1, ge=1),
@@ -220,7 +221,11 @@ def get_accident_cases(
     )
 
     if document_no_ac:
-        query = query.filter(models.AccidentCase.document_no_ac.in_(document_no_ac))
+        # Partial match (not exact) so a user can search without typing the full
+        # document number.
+        query = query.filter(
+            or_(*[models.AccidentCase.document_no_ac.ilike(f"%{d}%") for d in document_no_ac])
+        )
 
     if site_id:
         query = query.filter(models.AccidentCase.site_id.in_(site_id))
@@ -240,6 +245,20 @@ def get_accident_cases(
 
     if casestatus:
         query = query.filter(models.AccidentCase.casestatus.in_(casestatus))
+
+    if vehicle_plate:
+        VehicleHeadAlias = aliased(models.Vehicle)
+        VehicleTailAlias = aliased(models.Vehicle)
+        query = query.outerjoin(VehicleHeadAlias, models.AccidentCase.vehicle_id_head == VehicleHeadAlias.vehicle_id)
+        query = query.outerjoin(VehicleTailAlias, models.AccidentCase.vehicle_id_tail == VehicleTailAlias.vehicle_id)
+        like_pattern = f"%{vehicle_plate}%"
+        query = query.filter(
+            or_(
+                models.AccidentCase.vehicle_truckno.ilike(like_pattern),
+                VehicleHeadAlias.vehicle_number_plate.ilike(like_pattern),
+                VehicleTailAlias.vehicle_number_plate.ilike(like_pattern),
+            )
+        )
 
     if start_date and end_date:
         start, end = parse_dt(start_date), parse_dt(end_date)

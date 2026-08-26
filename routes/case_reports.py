@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func
+from sqlalchemy import func, or_, cast, String
 from sqlalchemy.orm import Session, aliased
 from datetime import datetime, timedelta
 from typing import List, Optional
@@ -14,6 +14,7 @@ from models import (
     Department,
     Client,
     MasterDriver,
+    Vehicle,
 )   # 👈 ADDED IMPORT
 
 router = APIRouter(prefix="/case_reports", tags=["Case Reports"])
@@ -273,6 +274,7 @@ def get_case_reports(
     priority: Optional[List[str]] = Query(None),
     client_id: Optional[List[int]] = Query(None),          # ✅ NEW
     department_id: Optional[List[int]] = Query(None),      # ✅ NEW
+    vehicle_plate: Optional[str] = Query(None),
     start_date: Optional[str] = Query(None),
     end_date: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
@@ -283,7 +285,11 @@ def get_case_reports(
     query = db.query(CaseReport)
 
     if document_no:
-        query = query.filter(CaseReport.document_no.in_(document_no))
+        # Partial match (not exact) so a user can search without typing the full
+        # document number.
+        query = query.filter(
+            or_(*[CaseReport.document_no.ilike(f"%{d}%") for d in document_no])
+        )
 
     if site_id:
         query = query.filter(CaseReport.site_id.in_(site_id))
@@ -303,6 +309,23 @@ def get_case_reports(
 
     if department_id:
         query = query.filter(CaseReport.department_id.in_(department_id))
+
+    if vehicle_plate:
+        VehicleHeadAlias = aliased(Vehicle)
+        VehicleTailAlias = aliased(Vehicle)
+        # case_reports.vehicle_id_head/tail are stored as varchar in this table
+        # (unlike accident_cases' integer columns), so cast the vehicles.vehicle_id
+        # side to text to avoid a Postgres "varchar = integer" operator error.
+        query = query.outerjoin(VehicleHeadAlias, CaseReport.vehicle_id_head == cast(VehicleHeadAlias.vehicle_id, String))
+        query = query.outerjoin(VehicleTailAlias, CaseReport.vehicle_id_tail == cast(VehicleTailAlias.vehicle_id, String))
+        like_pattern = f"%{vehicle_plate}%"
+        query = query.filter(
+            or_(
+                CaseReport.vehicle_truckno.ilike(like_pattern),
+                VehicleHeadAlias.vehicle_number_plate.ilike(like_pattern),
+                VehicleTailAlias.vehicle_number_plate.ilike(like_pattern),
+            )
+        )
 
     if start_date and end_date:
         start = parse_dt(start_date)
