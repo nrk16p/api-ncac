@@ -321,4 +321,15 @@ class AccidentCaseResponse(BaseModel):
     docs: Optional[List[dict[str, Any]]] = None
 
     class Config:
-        from_attributes = True  # ✅ Pydantic v2 
+        from_attributes = True  # ✅ Pydantic v2
+
+
+# ============================================================
+# PAGINATED LIST RESPONSE (GET /accident-cases)
+# ============================================================
+class PaginatedAccidentCaseResponse(BaseModel):
+    items: List[AccidentCaseResponse]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int

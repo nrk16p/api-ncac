@@ -1,11 +1,20 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
+from sqlalchemy import func
+from sqlalchemy.orm import Session, aliased
 from datetime import datetime, timedelta
 from typing import List, Optional
 from pydantic import BaseModel
 
 from database import get_db
-from models import CaseReport, CaseProduct, CaseReportDoc   # 👈 ADDED IMPORT
+from models import (
+    CaseReport,
+    CaseProduct,
+    CaseReportDoc,
+    Site,
+    Department,
+    Client,
+    MasterDriver,
+)   # 👈 ADDED IMPORT
 
 router = APIRouter(prefix="/case_reports", tags=["Case Reports"])
 
@@ -266,6 +275,10 @@ def get_case_reports(
     department_id: Optional[List[int]] = Query(None),      # ✅ NEW
     start_date: Optional[str] = Query(None),
     end_date: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=5000),
+    sort_by: str = Query("record_date"),
+    sort_order: str = Query("desc", pattern="^(asc|desc)$"),
 ):
     query = db.query(CaseReport)
 
@@ -301,8 +314,65 @@ def get_case_reports(
                 CaseReport.record_date < end_next
             )
 
-    reports = query.order_by(CaseReport.case_id.desc()).all()
-    return [r.to_dict() for r in reports]
+    # -----------------------------------------------------
+    # TOTAL COUNT (before ordering/pagination)
+    # -----------------------------------------------------
+    total = query.count()
+
+    # -----------------------------------------------------
+    # SORTING (allow-list only — never interpolate raw strings)
+    # -----------------------------------------------------
+    SORTABLE_COLUMNS = {
+        "record_date": CaseReport.record_date,
+        "incident_date": CaseReport.incident_date,
+        "document_no": CaseReport.document_no,
+        "casestatus": CaseReport.casestatus,
+        "priority": CaseReport.priority,
+        "estimated_cost": CaseReport.estimated_cost,
+        "actual_price": CaseReport.actual_price,
+    }
+
+    JOINED_SORT_FIELDS = {"site_name", "department_name", "client_name", "driver_name"}
+
+    if sort_by in JOINED_SORT_FIELDS:
+        if sort_by == "site_name":
+            SiteAlias = aliased(Site)
+            query = query.outerjoin(SiteAlias, CaseReport.site_id == SiteAlias.site_id)
+            sort_col = SiteAlias.site_name_th
+        elif sort_by == "department_name":
+            DeptAlias = aliased(Department)
+            query = query.outerjoin(DeptAlias, CaseReport.department_id == DeptAlias.department_id)
+            sort_col = DeptAlias.department_name_th
+        elif sort_by == "client_name":
+            ClientAlias = aliased(Client)
+            query = query.outerjoin(ClientAlias, CaseReport.client_id == ClientAlias.client_id)
+            sort_col = ClientAlias.client_name
+        elif sort_by == "driver_name":
+            DriverAlias = aliased(MasterDriver)
+            query = query.outerjoin(DriverAlias, CaseReport.driver_id == DriverAlias.driver_id)
+            sort_col = func.concat(DriverAlias.first_name, ' ', DriverAlias.last_name)
+    else:
+        # Falls back silently to the default (record_date) if sort_by is unknown
+        sort_col = SORTABLE_COLUMNS.get(sort_by, CaseReport.record_date)
+
+    order_expr = sort_col.desc() if sort_order == "desc" else sort_col.asc()
+
+    reports = (
+        query.order_by(order_expr, CaseReport.case_id.asc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+
+    total_pages = (total + page_size - 1) // page_size if total > 0 else 0
+
+    return {
+        "items": [r.to_dict() for r in reports],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+    }
 
 @router.put("/{document_no}")
 def update_case_report(document_no: str, payload: CaseReportSchema, db: Session = Depends(get_db)):

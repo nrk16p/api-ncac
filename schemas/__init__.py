@@ -33,6 +33,7 @@ from .accident_schema import (
     AccidentCaseDocSchema,
     AccidentCaseDocData,
     AccidentCaseDamageItem,
+    PaginatedAccidentCaseResponse,
 )
 
 # ============================================================

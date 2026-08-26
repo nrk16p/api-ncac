@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import func
+from sqlalchemy.orm import Session, joinedload, aliased
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 from database import get_db
@@ -184,7 +185,7 @@ def parse_dt(val):
 # -----------------------------------------------------
 # LIST CASES (FILTERABLE)
 # -----------------------------------------------------
-@router.get("", response_model=List[schemas.AccidentCaseResponse])
+@router.get("", response_model=schemas.PaginatedAccidentCaseResponse)
 def get_accident_cases(
     db: Session = Depends(get_db),
     document_no_ac: Optional[List[str]] = Query(None),
@@ -196,6 +197,10 @@ def get_accident_cases(
     casestatus: Optional[List[str]] = Query(None),
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=5000),
+    sort_by: str = Query("record_datetime"),
+    sort_order: str = Query("desc", pattern="^(asc|desc)$"),
 ):
     query = db.query(models.AccidentCase).options(
         joinedload(models.AccidentCase.site),
@@ -244,8 +249,67 @@ def get_accident_cases(
                 models.AccidentCase.record_datetime < end + timedelta(days=1),
             )
 
-    cases = query.order_by(models.AccidentCase.record_datetime.desc()).all()
-    return [case.to_dict() for case in cases]
+    # -----------------------------------------------------
+    # TOTAL COUNT (before ordering/pagination)
+    # -----------------------------------------------------
+    total = query.count()
+
+    # -----------------------------------------------------
+    # SORTING (allow-list only — never interpolate raw strings)
+    # -----------------------------------------------------
+    SORTABLE_COLUMNS = {
+        "record_datetime": models.AccidentCase.record_datetime,
+        "incident_datetime": models.AccidentCase.incident_datetime,
+        "document_no_ac": models.AccidentCase.document_no_ac,
+        "casestatus": models.AccidentCase.casestatus,
+        "priority": models.AccidentCase.priority,
+        "estimated_cost": func.coalesce(models.AccidentCase.estimated_goods_damage_value, 0)
+        + func.coalesce(models.AccidentCase.estimated_vehicle_damage_value, 0),
+        "actual_price": func.coalesce(models.AccidentCase.actual_goods_damage_value, 0)
+        + func.coalesce(models.AccidentCase.actual_vehicle_damage_value, 0),
+    }
+
+    JOINED_SORT_FIELDS = {"site_name", "department_name", "client_name", "driver_name"}
+
+    if sort_by in JOINED_SORT_FIELDS:
+        if sort_by == "site_name":
+            SiteAlias = aliased(models.Site)
+            query = query.outerjoin(SiteAlias, models.AccidentCase.site_id == SiteAlias.site_id)
+            sort_col = SiteAlias.site_name_th
+        elif sort_by == "department_name":
+            DeptAlias = aliased(models.Department)
+            query = query.outerjoin(DeptAlias, models.AccidentCase.department_id == DeptAlias.department_id)
+            sort_col = DeptAlias.department_name_th
+        elif sort_by == "client_name":
+            ClientAlias = aliased(models.Client)
+            query = query.outerjoin(ClientAlias, models.AccidentCase.client_id == ClientAlias.client_id)
+            sort_col = ClientAlias.client_name
+        elif sort_by == "driver_name":
+            DriverAlias = aliased(models.MasterDriver)
+            query = query.outerjoin(DriverAlias, models.AccidentCase.driver_id == DriverAlias.driver_id)
+            sort_col = func.concat(DriverAlias.first_name, ' ', DriverAlias.last_name)
+    else:
+        # Falls back silently to the default (record_datetime) if sort_by is unknown
+        sort_col = SORTABLE_COLUMNS.get(sort_by, models.AccidentCase.record_datetime)
+
+    order_expr = sort_col.desc() if sort_order == "desc" else sort_col.asc()
+
+    cases = (
+        query.order_by(order_expr, models.AccidentCase.accident_case_id.asc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+
+    total_pages = (total + page_size - 1) // page_size if total > 0 else 0
+
+    return {
+        "items": [case.to_dict() for case in cases],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+    }
 
 
 # -----------------------------------------------------
