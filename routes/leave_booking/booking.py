@@ -12,6 +12,7 @@ from models.leave_booking.monthly_quota import MonthlyLeaveQuota
 from models.leave_booking.blackout import LeaveBlackout
 from models.master.plant import PlantMaster
 from models.master_model import MasterDriver
+from .plant import remap_plant_code
 
 router = APIRouter(prefix="/booking")
 
@@ -174,6 +175,7 @@ def create_booking(payload: dict, db: Session = Depends(get_db)):
     # =========================
     fleet            = str(payload.get("fleet")             or "").strip()
     plant            = str(payload.get("plant")             or "").strip()
+    plant            = remap_plant_code(plant)
     driver_id        = str(payload.get("driver_id")         or "").strip()
     created_by_admin = str(payload.get("created_by_admin")  or "").strip()
     d = parse_date(payload.get("leave_date"))
@@ -346,6 +348,7 @@ def create_booking_admin(payload: dict, db: Session = Depends(get_db)):
     # =========================
     fleet = str(payload.get("fleet") or "").strip()
     plant = str(payload.get("plant") or "").strip()
+    plant = remap_plant_code(plant)
     driver_id = str(payload.get("driver_id") or "").strip()
     leave_type = str(payload.get("leave_type") or "").strip().lower()
     d = parse_date(payload.get("leave_date"))
@@ -543,7 +546,7 @@ def get_admin_booking(
     # Normalize filters
     # =========================
     fleet = [f.strip() for f in fleet.split(",") if f.strip()] if fleet else None
-    plant = plant.strip() if plant else None
+    plant = remap_plant_code(plant.strip()) if plant else None
 
     query = db.query(DriverLeaveBooking)
 
@@ -598,7 +601,7 @@ def get_admin_booking(
     # Batch lookup driver_name / plant_name
     # =========================
     driver_ids = list({b.driver_id for b in data})
-    plant_fleet_pairs = list({(b.plant, b.fleet) for b in data})
+    plant_fleet_pairs = list({(remap_plant_code(b.plant), b.fleet) for b in data})
     plant_codes = list({p for p, _ in plant_fleet_pairs})
 
     drivers = db.query(MasterDriver).filter(
@@ -619,22 +622,22 @@ def get_admin_booking(
         for p in plants
     }
 
-    result = [
-        {
+    result = []
+    for b in data:
+        b_plant = remap_plant_code(b.plant)
+        result.append({
             "booking_id": b.booking_id,
             "driver_id": b.driver_id,
             "driver_name": driver_map.get(str(b.driver_id)),
             "fleet": b.fleet,
-            "plant": b.plant,
-            "plant_name": plant_map.get((b.plant, b.fleet)),
+            "plant": b_plant,
+            "plant_name": plant_map.get((b_plant, b.fleet)),
             "leave_date": b.leave_date,
             "leave_type": b.leave_type,
             "status": b.status,
             "remark": b.remark,
             "created_at": b.created_at,
-        }
-        for b in data
-    ]
+        })
 
     # =========================
     # Summary
@@ -711,11 +714,13 @@ def update_booking_status(
     # If current status is already pending or approve,
     # it is already counted in used quota, so skip this check.
     # =========================
+    booking_plant = remap_plant_code(booking.plant)
+
     if new_status == "approve" and booking.status not in ["pending", "approve"]:
         validate_booking_quota(
             db=db,
             fleet=booking.fleet,
-            plant=booking.plant,
+            plant=booking_plant,
             leave_date=booking.leave_date,
             exclude_booking_id=booking.booking_id
         )
@@ -739,7 +744,7 @@ def update_booking_status(
         "data": {
             "booking_id": booking.booking_id,
             "fleet": booking.fleet,
-            "plant": booking.plant,
+            "plant": booking_plant,
             "driver_id": booking.driver_id,
             "leave_date": booking.leave_date,
             "status": booking.status,

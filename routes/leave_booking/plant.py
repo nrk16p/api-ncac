@@ -7,6 +7,25 @@ from models.master.plant import PlantMaster
 router = APIRouter(prefix="/plants")
 
 # ======================================================
+# 🔁 Plant code remap — temporary substitution requested by Bew.
+# Applies to booking/calendar/quota business logic elsewhere in
+# this module (input filters + values read back from DB). Not
+# applied to this file's own plant-master CRUD endpoints below,
+# since those manage PlantMaster records by their real code.
+# ======================================================
+PLANT_CODE_REMAP = {
+    "SU60": "SU59",
+    "SU66": "SU57",
+}
+
+
+def remap_plant_code(plant_code: str | None) -> str | None:
+    if not plant_code:
+        return plant_code
+    return PLANT_CODE_REMAP.get(plant_code, plant_code)
+
+
+# ======================================================
 # 🚀 CREATE
 # ======================================================
 @router.post("/")

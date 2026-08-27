@@ -10,6 +10,7 @@ from models.leave_booking.monthly_quota import MonthlyLeaveQuota
 from models.leave_booking.booking import DriverLeaveBooking
 from models.master_model import MasterDriver
 from models.master.plant import PlantMaster
+from .plant import remap_plant_code
 
 router = APIRouter(prefix="/calendar")
 
@@ -32,7 +33,7 @@ def get_calendar(
     # Normalize input
     # =========================
     fleet = fleet.strip() if fleet else None
-    plant = plant.strip() if plant else None
+    plant = remap_plant_code(plant.strip()) if plant else None
     driver_id = str(driver_id).strip() if driver_id else None
 
     # =========================
@@ -123,7 +124,7 @@ def get_calendar(
     # Batch lookup driver_name / plant_name
     # =========================
     driver_ids = list({b.driver_id for b in bookings})
-    plant_codes = list({r.plant for r in quota_rows})
+    plant_codes = list({remap_plant_code(r.plant) for r in quota_rows})
 
     drivers = db.query(MasterDriver).filter(
         MasterDriver.driver_id.in_(driver_ids)
@@ -148,7 +149,7 @@ def get_calendar(
     my_calendar_map = {}
 
     for b in bookings:
-        key = (b.leave_date, b.fleet, b.plant)
+        key = (b.leave_date, b.fleet, remap_plant_code(b.plant))
 
         booking_item = {
             "booking_id": b.booking_id,
@@ -170,7 +171,8 @@ def get_calendar(
     result = []
 
     for r in quota_rows:
-        key = (r.date, r.fleet, r.plant)
+        r_plant = remap_plant_code(r.plant)
+        key = (r.date, r.fleet, r_plant)
 
         bookings_on_day = calendar_map[key]
         used = len(bookings_on_day)
@@ -184,8 +186,8 @@ def get_calendar(
         item = {
             "date": r.date,
             "fleet": r.fleet,
-            "plant": r.plant,
-            "plant_name": plant_name_map.get((r.plant, r.fleet)),
+            "plant": r_plant,
+            "plant_name": plant_name_map.get((r_plant, r.fleet)),
             "quota": r.quota,
             "used": used,
             "remaining": remaining,

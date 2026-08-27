@@ -10,6 +10,8 @@ from models.leave_booking.monthly_quota import MonthlyLeaveQuota
 from models.leave_booking.daily_quota import LeaveDailyQuota
 from models.master.plant import PlantMaster
 
+from .plant import remap_plant_code
+
 router = APIRouter(prefix="/monthly-quota")
 
 
@@ -142,6 +144,9 @@ def create_monthly_quota(payload: dict, db: Session = Depends(get_db)):
             detail="No plants found for this fleet"
         )
 
+    # ยุบ plant ที่ remap ไปยังตัวเดียวกัน (เช่น SU60->SU59) ให้เหลือ 1 quota/วัน
+    plant_codes = sorted({remap_plant_code(p.plant_code) for p in plants})
+
     # ================================
     # 📅 Date range
     # ================================
@@ -158,7 +163,7 @@ def create_monthly_quota(payload: dict, db: Session = Depends(get_db)):
     ).all()
 
     existing_set = {
-        (e.plant, e.date) for e in existing
+        (remap_plant_code(e.plant), e.date) for e in existing
     }
 
     # ================================
@@ -167,18 +172,18 @@ def create_monthly_quota(payload: dict, db: Session = Depends(get_db)):
     created_count = 0
     skipped_count = 0
 
-    for plant in plants:
+    for plant_code in plant_codes:
         for d in range(1, days + 1):
             target_date = date(year, month, d)
 
-            if (plant.plant_code, target_date) in existing_set:
+            if (plant_code, target_date) in existing_set:
                 skipped_count += 1
                 continue
 
             db.add(
                 LeaveDailyQuota(
                     fleet=fleet,
-                    plant=plant.plant_code,
+                    plant=plant_code,
                     date=target_date,
 
                     # ✅ UPDATED LOGIC
@@ -215,8 +220,8 @@ def create_monthly_quota(payload: dict, db: Session = Depends(get_db)):
 
             "daily_quota_created": created_count,
             "daily_quota_skipped": skipped_count,
-            "total_expected": len(plants) * days,
-            "total_plants": len(plants),
+            "total_expected": len(plant_codes) * days,
+            "total_plants": len(plant_codes),
             "daily_status": "created" if created_count > 0 else "already_exists"
         }
     }
