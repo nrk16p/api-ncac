@@ -84,6 +84,7 @@ from routes.atms.openjob import router as atms_openjob_router
 from routes.news_safety_talk import router as news_safety_talk_router
 from routes.news_case_report import router as news_case_report_router
 from routes.news_accident_case import router as news_accident_case_router
+from routes.newyear_survey import router as newyear_survey_router
 
 
 # ------------------------------
@@ -118,6 +119,9 @@ app.include_router(inspection_router)
 app.include_router(news_safety_talk_router)
 app.include_router(news_case_report_router)
 app.include_router(news_accident_case_router)
+
+# แบบสำรวจปีใหม่ (MongoDB: hr_service.newyear-survey)
+app.include_router(newyear_survey_router)
 
 #booking leave
 app.include_router(leave_booking_router)
