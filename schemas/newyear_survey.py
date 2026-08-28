@@ -60,6 +60,8 @@ class NewYearSurveySaveResult(BaseModel):
     survey_id: str
     drivercode: str
     driver_name: Optional[str] = None
+    client_name: Optional[str] = None
+    plant_name: Optional[str] = None
     answered_count: int
     submitted_at: Optional[datetime] = None
 
@@ -77,6 +79,11 @@ class NewYearSurveyDoc(BaseModel):
     plant: Optional[str] = None
     customer: Optional[str] = None
     line_user_id: Optional[str] = None
+
+    # ดึงจาก PostgreSQL masterdrivers ด้วย drivercode -> driver_id
+    client_name: Optional[str] = None
+    plant_code: Optional[str] = None
+    plant_name: Optional[str] = None
 
     attending: Optional[bool] = None
     path: List[str] = Field(default_factory=list)

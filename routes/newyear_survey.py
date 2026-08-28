@@ -13,12 +13,16 @@ key = ข้อความคำถาม และ value = คำตอบ เ
 """
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
-from fastapi import APIRouter, HTTPException, Path, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from pymongo import UpdateOne
 from pymongo.collection import Collection
 from pymongo.errors import PyMongoError
+from sqlalchemy.orm import Session
 
+from database import get_db
+from models import MasterDriver
 from schemas.newyear_survey import (
     AnswerItem,
     NewYearSurveyCreate,
@@ -142,11 +146,104 @@ def _has_answer(value: Any) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Map drivercode → masterdrivers (PostgreSQL) เพื่อเติม client_name / plant_name
+# ---------------------------------------------------------------------------
+
+MASTER_FIELDS = ("client_name", "plant_code", "plant_name")
+
+
+def _fetch_driver_master(db: Session, drivercodes: Iterable[str]) -> Dict[str, Dict[str, Any]]:
+    """
+    คืน map: drivercode (string) → {client_name, plant_code, plant_name}
+
+    `masterdrivers.driver_id` เป็น Integer ส่วน drivercode ที่ฟอร์มส่งมาเป็น string
+    จึงแปลงเป็น int เพื่อ query แล้ว map กลับเป็น string เดิม (กันเคสมีเลข 0 นำหน้า)
+    """
+    by_id: Dict[int, str] = {}
+    for code in drivercodes:
+        code = (code or "").strip()
+        if code.isdigit():
+            by_id.setdefault(int(code), code)
+
+    if not by_id:
+        return {}
+
+    try:
+        rows = (
+            db.query(
+                MasterDriver.driver_id,
+                MasterDriver.client_name,
+                MasterDriver.plant_code,
+                MasterDriver.plant_name,
+            )
+            .filter(MasterDriver.driver_id.in_(list(by_id.keys())))
+            .all()
+        )
+    except Exception:
+        # master ล่มไม่ควรทำให้ส่ง/อ่านแบบสำรวจไม่ได้ — แค่ไม่เติมข้อมูลรอบนี้
+        return {}
+
+    return {
+        by_id[row.driver_id]: {
+            "client_name": row.client_name,
+            "plant_code": row.plant_code,
+            "plant_name": row.plant_name,
+        }
+        for row in rows
+        if row.driver_id in by_id
+    }
+
+
+def _sync_driver_master(db: Session, docs: List[Dict[str, Any]], survey_id: Optional[str] = None) -> None:
+    """
+    เติม/รีเฟรช client_name, plant_code, plant_name ให้เอกสารที่อ่านมา
+    แล้วเขียนกลับ Mongo เฉพาะตัวที่ค่าเปลี่ยน (แก้เอกสารเก่าที่บันทึกก่อนมีฟีลด์นี้)
+    """
+    if not docs:
+        return
+
+    master = _fetch_driver_master(db, (d.get("drivercode", "") for d in docs))
+    if not master:
+        return
+
+    operations: List[UpdateOne] = []
+
+    for doc in docs:
+        info = master.get((doc.get("drivercode") or "").strip())
+        if not info:
+            continue
+
+        changed = {f: info[f] for f in MASTER_FIELDS if doc.get(f) != info[f]}
+        if not changed:
+            continue
+
+        doc.update(changed)
+        operations.append(
+            UpdateOne(
+                {
+                    "survey_id": doc.get("survey_id", survey_id),
+                    "drivercode": doc["drivercode"],
+                },
+                {"$set": {**changed, "updated_at": datetime.now(timezone.utc)}},
+            )
+        )
+
+    if not operations:
+        return
+
+    try:
+        _collection().bulk_write(operations, ordered=False)
+    except PyMongoError:
+        # เขียนกลับไม่ได้ก็ยังตอบข้อมูลที่เติมแล้วให้ผู้เรียกได้ตามปกติ
+        pass
+
+
+# ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 
 @router.post("/", response_model=NewYearSurveySaveResult, status_code=201)
-def submit_newyear_survey(payload: NewYearSurveyCreate):
+def submit_newyear_survey(payload: NewYearSurveyCreate, db: Session = Depends(get_db)):
     """บันทึกคำตอบแบบสำรวจปีใหม่ — ส่งซ้ำได้ ระบบจะทับคำตอบเดิมของรหัสพนักงานนั้น"""
     drivercode = (payload.respondent.employee_code or "").strip()
     if not drivercode:
@@ -162,6 +259,9 @@ def submit_newyear_survey(payload: NewYearSurveyCreate):
     answered_count = sum(1 for v in answers_map.values() if _has_answer(v))
     now = datetime.now(timezone.utc)
     submitted_at = payload.meta.submitted_at or now
+
+    # เติมข้อมูลจาก masterdrivers (drivercode = driver_id) ไว้ในเอกสารเลย
+    master = _fetch_driver_master(db, [drivercode]).get(drivercode, {})
 
     document: Dict[str, Any] = {
         "survey_id": payload.survey.id,
@@ -190,6 +290,10 @@ def submit_newyear_survey(payload: NewYearSurveyCreate):
         "updated_at": now,
     }
 
+    # หา master ไม่เจอ (หรือ PostgreSQL ล่ม) ก็ไม่เขียนทับค่าเดิมที่เคยเติมไว้
+    if master:
+        document.update({f: master.get(f) for f in MASTER_FIELDS})
+
     try:
         result = _collection().update_one(
             {"survey_id": payload.survey.id, "drivercode": drivercode},
@@ -204,6 +308,8 @@ def submit_newyear_survey(payload: NewYearSurveyCreate):
         survey_id=payload.survey.id,
         drivercode=drivercode,
         driver_name=payload.respondent.employee_name,
+        client_name=master.get("client_name"),
+        plant_name=master.get("plant_name"),
         answered_count=answered_count,
         submitted_at=submitted_at,
     )
@@ -213,6 +319,7 @@ def submit_newyear_survey(payload: NewYearSurveyCreate):
 def get_newyear_survey_by_driver(
     drivercode: str = Path(..., description="รหัสพนักงาน (drivercode)"),
     survey_id: str = Query("newyear-2570-mixer", description="รหัสชุดแบบสำรวจ"),
+    db: Session = Depends(get_db),
 ):
     """ดึงคำตอบของ พจส. คนหนึ่ง — ใช้เช็กว่าตอบไปแล้วหรือยัง (404 = ยังไม่ตอบ)"""
     try:
@@ -229,6 +336,7 @@ def get_newyear_survey_by_driver(
             detail=f"ยังไม่พบคำตอบของรหัสพนักงาน '{drivercode}'",
         )
 
+    _sync_driver_master(db, [doc], survey_id=survey_id)
     return doc
 
 
@@ -238,6 +346,7 @@ def list_newyear_surveys(
     attending: Optional[bool] = Query(None, description="กรองเฉพาะคนที่มา / ไม่มาร่วมงาน"),
     limit: int = Query(100, ge=1, le=1000),
     skip: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
 ):
     """รายการคำตอบทั้งหมด (ใหม่ก่อน) สำหรับ HR เอาไปสรุปผล"""
     query: Dict[str, Any] = {"survey_id": survey_id}
@@ -252,9 +361,12 @@ def list_newyear_surveys(
             .skip(skip)
             .limit(limit)
         )
-        return list(cursor)
+        docs = list(cursor)
     except PyMongoError as exc:
         raise HTTPException(status_code=503, detail=f"อ่าน MongoDB ไม่สำเร็จ: {exc}") from exc
+
+    _sync_driver_master(db, docs, survey_id=survey_id)
+    return docs
 
 
 @router.get("/count")
