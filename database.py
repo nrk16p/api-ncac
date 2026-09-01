@@ -1,4 +1,5 @@
 import os
+from fastapi import HTTPException
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker, declarative_base
 from dotenv import load_dotenv
@@ -64,6 +65,43 @@ def set_postgres_timeout(dbapi_connection, connection_record):
     cursor.close()
 
 # -------------------------------------------------------
+# DATALAKE ENGINE (analytics tables)
+#
+# drivingdistance lives in the `datalake` database on the same
+# DigitalOcean cluster, written by the GPS ETLs (terminus / dtc /
+# thaitracking). Reading it in place keeps one copy of the data instead
+# of mirroring it into ncacdb.
+#
+# Pool is deliberately small — the cluster's connection budget is shared
+# with ncacdb and the pipeline subprocesses.
+#   DATALAKE_URL            (required for /drivingdistance)
+#   DATALAKE_POOL_SIZE      (default 2)
+#   DATALAKE_MAX_OVERFLOW   (default 3)
+# -------------------------------------------------------
+DATALAKE_URL = os.getenv("DATALAKE_URL")
+
+datalake_engine = None
+DatalakeSessionLocal = None
+
+if DATALAKE_URL:
+    datalake_engine = create_engine(
+        DATALAKE_URL,
+        pool_size=int(os.getenv("DATALAKE_POOL_SIZE", "2")),
+        max_overflow=int(os.getenv("DATALAKE_MAX_OVERFLOW", "3")),
+        pool_timeout=10,
+        pool_recycle=1800,
+        pool_pre_ping=True,
+        echo=False,
+        future=True,
+    )
+    event.listen(datalake_engine, "connect", set_postgres_timeout)
+    DatalakeSessionLocal = sessionmaker(
+        autocommit=False,
+        autoflush=False,
+        bind=datalake_engine,
+    )
+
+# -------------------------------------------------------
 # SESSION FACTORY
 # -------------------------------------------------------
 SessionLocal = sessionmaker(
@@ -77,6 +115,11 @@ SessionLocal = sessionmaker(
 # -------------------------------------------------------
 Base = declarative_base()
 
+# Separate metadata for tables that live in `datalake`, so that
+# Base.metadata.create_all(bind=engine) in main.py does not create empty
+# shadow copies of them inside ncacdb.
+DatalakeBase = declarative_base()
+
 # -------------------------------------------------------
 # FASTAPI DEPENDENCY
 # -------------------------------------------------------
@@ -86,6 +129,20 @@ def get_db():
     Ensures session is closed after request is processed.
     """
     db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+def get_datalake_db():
+    """Session for the `datalake` database (drivingdistance)."""
+    if DatalakeSessionLocal is None:
+        raise HTTPException(
+            status_code=503,
+            detail="DATALAKE_URL is not configured on this server",
+        )
+    db = DatalakeSessionLocal()
     try:
         yield db
     finally:

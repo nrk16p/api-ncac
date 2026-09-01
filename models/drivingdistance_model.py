@@ -1,8 +1,8 @@
 from sqlalchemy import Column, Integer, String, Date, TIMESTAMP, func, Numeric
-from database import Base
+from database import DatalakeBase
 
 
-class DrivingDistance(Base):
+class DrivingDistance(DatalakeBase):
     __tablename__ = "drivingdistance"
 
     id = Column(Integer, primary_key=True, index=True)

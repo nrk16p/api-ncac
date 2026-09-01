@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
 
-from database import get_db
+from database import get_datalake_db
 from models.drivingdistance_model import DrivingDistance
 from schemas.drivingdistance_schema import DrivingDistanceCreate, DrivingDistanceOut
 
@@ -57,7 +57,7 @@ def _localize(records):
 
 
 @router.post("/bulk", response_model=List[DrivingDistanceOut])
-def bulk_insert(payload: List[DrivingDistanceCreate], db: Session = Depends(get_db)):
+def bulk_insert(payload: List[DrivingDistanceCreate], db: Session = Depends(get_datalake_db)):
     if not payload:
         raise HTTPException(status_code=400, detail="No records provided.")
 
@@ -83,7 +83,7 @@ def bulk_insert(payload: List[DrivingDistanceCreate], db: Session = Depends(get_
 
 
 @router.post("/filter", response_model=List[DrivingDistanceOut])
-def filter_records(payload: DrivingDistanceFilter, db: Session = Depends(get_db)):
+def filter_records(payload: DrivingDistanceFilter, db: Session = Depends(get_datalake_db)):
     records = (
         _apply_filters(db.query(DrivingDistance), payload)
         .order_by(DrivingDistance.date.asc())
@@ -101,7 +101,7 @@ def get_records(
     start_at: Optional[date] = Query(None),
     end_at: Optional[date] = Query(None),
     limit: int = Query(500),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_datalake_db),
 ):
     f = DrivingDistanceFilter(plate_number=plate_number, start_at=start_at, end_at=end_at, limit=limit)
     records = (
@@ -116,7 +116,7 @@ def get_records(
 
 
 @router.post("/sumdistance")
-def sum_distance(payload: DrivingDistanceFilter, db: Session = Depends(get_db)):
+def sum_distance(payload: DrivingDistanceFilter, db: Session = Depends(get_datalake_db)):
     query = db.query(
         DrivingDistance.plate_number,
         func.sum(DrivingDistance.distance).label("total_distance"),
@@ -140,7 +140,7 @@ def sum_distance(payload: DrivingDistanceFilter, db: Session = Depends(get_db)):
 
 
 @router.get("/platenumber")
-def get_plate_numbers(db: Session = Depends(get_db)):
+def get_plate_numbers(db: Session = Depends(get_datalake_db)):
     plates = (
         db.query(DrivingDistance.plate_number)
         .distinct()
