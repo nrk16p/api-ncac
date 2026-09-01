@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -57,15 +57,28 @@ def create_task(
     # -----------------------------
     # GET DRIVERS (before try — validate first)
     # -----------------------------
-    drivers = db.query(MasterDriver).filter(
-        MasterDriver.client_name == payload.client_name,
-        MasterDriver.plant_code == payload.plant_code,
-        MasterDriver.plant_name == payload.plant_name,
-        MasterDriver.month_year == datetime.today().strftime("%m-%Y")
-    ).all()
+    def query_drivers(month_year: str):
+        return db.query(MasterDriver).filter(
+            MasterDriver.client_name == payload.client_name,
+            MasterDriver.plant_code == payload.plant_code,
+            MasterDriver.plant_name == payload.plant_name,
+            MasterDriver.month_year == month_year
+        ).all()
+
+    today = datetime.today()
+    current_month = today.strftime("%m-%Y")
+    # บางครั้งข้อมูลเดือนปัจจุบันยังไม่อัปเดต — fallback ไปเดือนที่แล้ว
+    previous_month = (today.replace(day=1) - timedelta(days=1)).strftime("%m-%Y")
+
+    drivers = query_drivers(current_month)
+    if not drivers:
+        drivers = query_drivers(previous_month)
 
     if not drivers:
-        raise HTTPException(404, "No drivers found")
+        raise HTTPException(
+            404,
+            f"No drivers found for {current_month} or {previous_month}"
+        )
 
     try:
         db.add(task)
