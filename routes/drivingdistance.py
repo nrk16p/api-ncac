@@ -1,8 +1,9 @@
 import logging
+import os
 from datetime import date, timedelta, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
@@ -11,7 +12,18 @@ from database import get_db
 from models.drivingdistance_model import DrivingDistance
 from schemas.drivingdistance_schema import DrivingDistanceCreate, DrivingDistanceOut
 
-router = APIRouter(prefix="/drivingdistance", tags=["Driving Distance"])
+
+def _verify_key(x_api_key: str = Header(..., alias="x-api-key")):
+    key = os.getenv("PIPELINE_API_KEY")
+    if not key or x_api_key != key:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+router = APIRouter(
+    prefix="/drivingdistance",
+    tags=["Driving Distance"],
+    dependencies=[Depends(_verify_key)],
+)
 
 logger = logging.getLogger("drivingdistance")
 BKK_TZ = timezone(timedelta(hours=7))
