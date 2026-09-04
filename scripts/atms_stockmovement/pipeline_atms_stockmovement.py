@@ -82,6 +82,16 @@ DRY_RUN = os.getenv("SM_DRY_RUN") == "1"
 # ถ้าตั้งไว้ ทุกแถวที่กำลังจะถูก "ลบ" หรือ "ทับ" จะถูกสำรองเป็น JSON ก่อนเขียน
 # (ใช้ตอน cutover จากเครื่อง Mac — บน Render ไม่ต้องตั้ง ดิสก์เป็น ephemeral อยู่แล้ว)
 BACKUP_DIR = os.getenv("SM_BACKUP_DIR")
+# หน้าต่าง "ร้อน" = เดือนที่ยังมีการแก้ไขจริงใน ATMS (คีย์ย้อนหลังได้ ~2 เดือน + เผื่อ)
+# เดือนที่เก่ากว่านี้ยัง "เพิ่ม" และ "ลบ" ได้ แต่จะไม่ทับเนื้อหาแถวที่มีอยู่แล้ว
+#
+# เหตุผล: รายงาน ATMS join master data ปัจจุบันลงบนแถวประวัติทุกครั้งที่ดึง — วัดจริง
+# 04/09/2026 เดือน 2026-01 มี 561 แถวที่ "ต่าง" โดยเป็น min/max stock 524 แถว
+# (ไม่มีใครอ่านจาก v5), ชื่อสินค้าที่ถูกเติม "(ยกเลิก)" 47, ซัพพลายเออร์ 28, เลขรถ 4
+# ตัวที่อันตรายคือ `ซัพพลายเออร์`: lib/vendor-core.ts ของ mena-wms สร้างรายชื่ออู่จาก
+# ฟิลด์นี้ และ master_data.vendor_approval เก็บการอนุมัติโดยใช้ชื่ออู่เป็นคีย์ — เขียน
+# ชื่อวันนี้ทับแถวเก่าจะทำให้อู่ที่เคยอนุมัติกลายเป็นชื่อใหม่ที่ยังไม่อนุมัติ
+SM_HOT_MONTHS = int(os.getenv("SM_HOT_MONTHS", "5"))
 INVENTORIES = [i.strip() for i in os.getenv("SM_INVENTORIES", ",".join(LEGACY_4)).split(",") if i.strip()]
 
 REQUEST_SLEEP = 3.0          # ATMS degrades under sustained load; be gentle
@@ -332,7 +342,7 @@ def comparable(doc):
     return {k: v for k, v in doc.items() if k not in IGNORE_ON_COMPARE}
 
 
-def write_slice(coll, ym, inv, part, result, allow_delete=True):
+def write_slice(coll, ym, inv, part, result, allow_delete=True, allow_update=True):
     """Prune-and-replace one (year_month, inventory_id) slice, minimally.
 
     Rows are matched on row_key, so an untouched row is left exactly as it is —
@@ -356,14 +366,16 @@ def write_slice(coll, ym, inv, part, result, allow_delete=True):
     # เดือนที่ ATMS อ่านบางวันไม่ได้ จะถูกซอยครึ่งจนข้ามวันนั้นไป → ข้อมูลมาไม่ครบทั้งเดือน
     # ถ้าลบตามที่ "ไม่เจอ" จะกินแถวของวันที่อ่านไม่ได้ทิ้ง — เติมได้ แต่ห้ามลบ
     removed = [k for k in existing if k not in fresh] if allow_delete else []
-    changed = [k for k in fresh
-               if k in existing and comparable(fresh[k]) != comparable(existing[k])]
+    changed = ([k for k in fresh
+                if k in existing and comparable(fresh[k]) != comparable(existing[k])]
+               if allow_update else [])
 
     result["slices"].append({
         "year_month": ym, "inventory_id": inv,
         "before": len(existing), "fetched": len(fresh),
         "added": len(added), "removed": len(removed), "changed": len(changed),
         **({} if allow_delete else {"delete_skipped": True}),
+        **({} if allow_update else {"update_skipped": True}),
     })
     result["added"] += len(added)
     result["removed"] += len(removed)
@@ -393,7 +405,9 @@ def main():
 
     started = datetime.now(timezone.utc)
     months = window_months()
+    hot_from = months[max(0, len(months) - SM_HOT_MONTHS)]
     log(f"window {months[0]} → {months[-1]} ({len(months)} months) · "
+        f"sync เต็มตั้งแต่ {hot_from} · ก่อนหน้านั้นเพิ่ม/ลบอย่างเดียว · "
         f"warehouses {','.join(INVENTORIES)} · dry_run={DRY_RUN} · label={RUN_LABEL}")
 
     # certifi ติดมากับ requests อยู่แล้ว — ระบุ CA ตรง ๆ ให้รันได้ทั้งบน Render และ macOS
@@ -448,6 +462,7 @@ def main():
 
         # fetch_month บันทึกทุกครั้งที่ต้องข้ามช่วงวันที่อ่านไม่ได้ — ถ้ามี ถือว่าเดือนนี้ไม่ครบ
         complete = len(result["notes"]) == notes_before
+        hot = i > len(months) - SM_HOT_MONTHS      # SM_HOT_MONTHS เดือนท้ายสุด = ร้อน
 
         mine = df[df["inventory_id"].isin(INVENTORIES)]
         for inv in INVENTORIES:
@@ -455,7 +470,8 @@ def main():
             if part.empty:
                 continue
             records = to_native(part.replace({np.nan: None}).to_dict("records"))
-            write_slice(coll, ym, inv, records, result, allow_delete=complete)
+            write_slice(coll, ym, inv, records, result,
+                        allow_delete=complete, allow_update=hot)
         if not complete:
             log(f"   ⚠️ {ym} ดึงมาไม่ครบ — เติม/แก้ได้ แต่ข้ามการลบทั้งเดือน")
 
