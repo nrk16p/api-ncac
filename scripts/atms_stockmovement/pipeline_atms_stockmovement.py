@@ -11,8 +11,10 @@ pulls, ATMS-500 fallbacks and a refuse-to-shrink guard — with the target set
 flipped: this writes ONLY the legacy four warehouses (the notebook's set) and
 never touches the other 27, which the backfill script owns.
 
-Window: trailing SM_MONTHS months (default 5). ATMS accepts back-dated entries
+Window: trailing SM_MONTHS months (default 12). ATMS accepts back-dated entries
 for ~2 months and deletes rows too, so "just the current month" would miss both.
+เดือนที่เก่ากว่า ~5 เดือนแทบไม่เคยขยับ (probe: 2026-04 ย้อนถึง 2023-01 เหมือนกันทุก byte)
+การกวาด 12 เดือนจึงเป็นตาข่ายกันข้อมูลเพี้ยนสะสม ไม่ใช่ช่องทางรับของใหม่
 
 Auth: ATMS_USERNAME / ATMS_PASSWORD (PHPSESSID env for local testing).
 Run log: atms.stockmovement_runs (pipeline="atms_stockmovement").
@@ -75,7 +77,7 @@ COLL_NAME = "stockmovement_v5"
 RUN_COLL = "stockmovement_runs"
 
 RUN_LABEL = os.getenv("SM_RUN_LABEL", "atms_stockmovement")
-MONTHS_BACK = int(os.getenv("SM_MONTHS", "5"))
+MONTHS_BACK = int(os.getenv("SM_MONTHS", "12"))
 DRY_RUN = os.getenv("SM_DRY_RUN") == "1"
 # ถ้าตั้งไว้ ทุกแถวที่กำลังจะถูก "ลบ" หรือ "ทับ" จะถูกสำรองเป็น JSON ก่อนเขียน
 # (ใช้ตอน cutover จากเครื่อง Mac — บน Render ไม่ต้องตั้ง ดิสก์เป็น ephemeral อยู่แล้ว)
@@ -330,7 +332,7 @@ def comparable(doc):
     return {k: v for k, v in doc.items() if k not in IGNORE_ON_COMPARE}
 
 
-def write_slice(coll, ym, inv, part, result):
+def write_slice(coll, ym, inv, part, result, allow_delete=True):
     """Prune-and-replace one (year_month, inventory_id) slice, minimally.
 
     Rows are matched on row_key, so an untouched row is left exactly as it is —
@@ -351,7 +353,9 @@ def write_slice(coll, ym, inv, part, result):
         return
 
     added = [k for k in fresh if k not in existing]
-    removed = [k for k in existing if k not in fresh]
+    # เดือนที่ ATMS อ่านบางวันไม่ได้ จะถูกซอยครึ่งจนข้ามวันนั้นไป → ข้อมูลมาไม่ครบทั้งเดือน
+    # ถ้าลบตามที่ "ไม่เจอ" จะกินแถวของวันที่อ่านไม่ได้ทิ้ง — เติมได้ แต่ห้ามลบ
+    removed = [k for k in existing if k not in fresh] if allow_delete else []
     changed = [k for k in fresh
                if k in existing and comparable(fresh[k]) != comparable(existing[k])]
 
@@ -359,6 +363,7 @@ def write_slice(coll, ym, inv, part, result):
         "year_month": ym, "inventory_id": inv,
         "before": len(existing), "fetched": len(fresh),
         "added": len(added), "removed": len(removed), "changed": len(changed),
+        **({} if allow_delete else {"delete_skipped": True}),
     })
     result["added"] += len(added)
     result["removed"] += len(removed)
@@ -411,6 +416,7 @@ def main():
     s = get_session()
 
     for i, ym in enumerate(months, 1):
+        notes_before = len(result["notes"])
         try:
             raw = fetch_month(s, ym, result["notes"])
         except Exception as e:
@@ -440,13 +446,18 @@ def main():
         df["source_row_no"] = np.arange(2, len(df) + 2)
         df = create_keys(df)
 
+        # fetch_month บันทึกทุกครั้งที่ต้องข้ามช่วงวันที่อ่านไม่ได้ — ถ้ามี ถือว่าเดือนนี้ไม่ครบ
+        complete = len(result["notes"]) == notes_before
+
         mine = df[df["inventory_id"].isin(INVENTORIES)]
         for inv in INVENTORIES:
             part = mine[mine["inventory_id"] == inv]
             if part.empty:
                 continue
             records = to_native(part.replace({np.nan: None}).to_dict("records"))
-            write_slice(coll, ym, inv, records, result)
+            write_slice(coll, ym, inv, records, result, allow_delete=complete)
+        if not complete:
+            log(f"   ⚠️ {ym} ดึงมาไม่ครบ — เติม/แก้ได้ แต่ข้ามการลบทั้งเดือน")
 
         got = {inv: int((mine["inventory_id"] == inv).sum()) for inv in INVENTORIES}
         log(f"[{i}/{len(months)}] {ym} — {len(df):,} rows in file · "
