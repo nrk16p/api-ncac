@@ -201,6 +201,15 @@ async def startup_event():
     # maintenance (MR sync → maint_* + repair-analysis) 02:00 BKK → 19:00 UTC —
     # ATMS โหลดต่ำ และก่อน ld/scco (09:00/09:20 BKK จริงตาม UTC)
     scheduler.add_job(_run, CronTrigger(hour=19, minute=0), args=["maintenance"], id="sched_maintenance")  # 02:00 BKK
+    # stockmovement → atms.stockmovement_v5 (mena-wms /deadstock /safety-stock /vendors,
+    # dw_stockmovement ของ KPI-Motors, mena-intelligence /cost/*) — ย้ายมาจาก notebook
+    # บนเครื่อง Mac ที่รันวันละครั้งและข้ามทั้งวันเมื่อเครื่องหลับ/เน็ตสะดุด
+    # เวลาที่นี่เป็น UTC จริงเช่นเดียวกับ atms_procurement ด้านบน:
+    #   full  ย้อน 5 เดือน  05:00 BKK → 22:00 UTC (ATMS ว่าง · ก่อน atms_procurement 23:00)
+    #   light เดือนปัจจุบัน 08/12/16/20 BKK → 01/05/09/13 UTC — เยื้องจาก procurement light
+    #   ที่จอง 03/07/11/15 UTC ไว้แล้ว เพราะยิงรายงาน ATMS พร้อมกันแล้ว ATMS จะ 500
+    scheduler.add_job(_run, CronTrigger(hour=22, minute=0), args=["atms_stockmovement"], id="sched_atms_stockmovement")
+    scheduler.add_job(_run, CronTrigger(hour="1,5,9,13", minute=0), args=["atms_stockmovement_light"], id="sched_atms_stockmovement_light")
     scheduler.start()
     import logging
     logging.getLogger(__name__).info("Pipeline scheduler started — LD 02:00, SCCO 02:20, deliver_result 03:30, driver_cost 05:45 (BKK); CPAC runs locally; engineon 04:00 / drivercost_ticket 06:10 / trip_summary 06:30 (BKK)")

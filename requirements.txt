@@ -23,3 +23,6 @@ numpy
 apscheduler
 beautifulsoup4
 boto3
+# ใช้ตรง ๆ ใน scripts/atms_stockmovement (เดิมติดมาแบบ transitive กับ pandas/requests)
+python-dateutil
+certifi
