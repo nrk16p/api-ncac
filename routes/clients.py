@@ -2,8 +2,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import List, Optional
+from datetime import datetime, timedelta
 from database import get_db
-from models import Client
+from models import Client, MasterDriver
 
 router = APIRouter(prefix="/clients", tags=["Clients"])
 
@@ -19,6 +20,9 @@ class ClientUpdate(BaseModel):
     client_name: Optional[str] = None
     contact_info: Optional[str] = None
     site_id: Optional[int] = None
+
+class ClientNameResponse(BaseModel):
+    client_name: str
 
 class ClientResponse(BaseModel):
     client_id: int
@@ -50,6 +54,32 @@ def create_client(payload: ClientCreate, db: Session = Depends(get_db)):
 @router.get("/", response_model=List[ClientResponse])
 def get_clients(db: Session = Depends(get_db)):
     return db.query(Client).all()
+
+# -------------------------
+# 🔹 Read — unique client_name จาก masterdrivers (3 เดือนย้อนหลัง)
+# -------------------------
+@router.get("/clients-unique", response_model=List[ClientNameResponse])
+def get_driver_clients_unique(db: Session = Depends(get_db)):
+    # month_year เก็บเป็น "MM-YYYY" — สร้างลิสต์เดือนปัจจุบัน + 2 เดือนก่อนหน้า
+    today = datetime.today().replace(day=1)
+    months = []
+    for _ in range(3):
+        months.append(today.strftime("%m-%Y"))
+        today = (today - timedelta(days=1)).replace(day=1)
+
+    rows = (
+        db.query(MasterDriver.client_name)
+        .filter(
+            MasterDriver.month_year.in_(months),
+            MasterDriver.client_name.isnot(None),
+            MasterDriver.client_name != ""
+        )
+        .distinct()
+        .order_by(MasterDriver.client_name)
+        .all()
+    )
+
+    return [{"client_name": r[0]} for r in rows]
 
 # -------------------------
 # 🔹 Update
