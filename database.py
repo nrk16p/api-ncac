@@ -20,19 +20,27 @@ if not DATABASE_URL:
 # -------------------------------------------------------
 # POSTGRESQL ENGINE WITH CONNECTION POOL
 #
-# Pool sizing formula:
-#   pool_size + max_overflow <= (db_max_connections / num_workers) - 2
+# งบ connection ของคลัสเตอร์ DigitalOcean นี้คือ max_connections = 25 ทั้งก้อน
+# และมีคนแบ่งกันใช้เยอะกว่าที่คิด (วัดจริง 04/09/2026): ระบบของ DO เอง ~8
+# (pghoard / pg_cron / management-agent / failover) + service อื่นบน Render ที่
+# ถือ connection ค้างบน defaultdb อีก ~8 + client อย่าง DBeaver ที่เปิดค้างทั้งวัน
+# เหลือถึงเราจริง ๆ ไม่ถึง 10
 #
-# Render Starter (0.5 CPU, 1 worker):
-#   thread pool ~5 → pool_size=5, max_overflow=5 (10 total)
-#   Render PostgreSQL max connections = 25 → stays well under limit
+# ที่สำคัญกว่านั้น: ตอน deploy ทุกครั้ง Render รัน instance ใหม่ **คู่ขนาน** กับ
+# ตัวเก่า ค่า pool จึงต้องคูณสอง ของเดิม 5+5 กับ 2+3 = 15 ต่อ instance → 30 ตอน
+# deploy ซึ่งเกินทั้งคลัสเตอร์ ทำให้ deploy ล้มซ้ำ ๆ (เห็นเป็น "No open ports
+# detected" เพราะ create_all() ใน main.py ตายก่อนเปิดพอร์ต)
 #
-# To tune per environment set env vars:
-#   DB_POOL_SIZE     (default 5)
-#   DB_MAX_OVERFLOW  (default 5)
+# ค่าปัจจุบัน 2+3 = 5 ต่อ instance → 10 ตอน deploy ซึ่งอยู่ในงบ
+# uvicorn ตัวนี้รัน worker เดียวบน 0.5 CPU งานพร้อมกัน 5 ก้อนจึงเหลือเฟือ
+# (pool_timeout=10 ทำให้ request ที่มาเกินรอไม่เกิน 10 วิ แทนที่จะค้างยาว)
+#
+# ปรับต่อได้ด้วย env var โดยไม่ต้องแก้โค้ด:
+#   DB_POOL_SIZE     (default 2)
+#   DB_MAX_OVERFLOW  (default 3)
 # -------------------------------------------------------
-_pool_size     = int(os.getenv("DB_POOL_SIZE", "5"))
-_max_overflow  = int(os.getenv("DB_MAX_OVERFLOW", "5"))
+_pool_size     = int(os.getenv("DB_POOL_SIZE", "2"))
+_max_overflow  = int(os.getenv("DB_MAX_OVERFLOW", "3"))
 
 engine = create_engine(
     DATABASE_URL,
@@ -73,10 +81,11 @@ def set_postgres_timeout(dbapi_connection, connection_record):
 # of mirroring it into ncacdb.
 #
 # Pool is deliberately small — the cluster's connection budget is shared
-# with ncacdb and the pipeline subprocesses.
+# with ncacdb and the pipeline subprocesses (ดูคำอธิบายงบ 25 connection ด้านบน;
+# ลดจาก 2+3 เหลือ 1+1 ด้วยเหตุผลเดียวกัน — /drivingdistance ถูกเรียกไม่บ่อย)
 #   DATALAKE_URL            (required for /drivingdistance)
-#   DATALAKE_POOL_SIZE      (default 2)
-#   DATALAKE_MAX_OVERFLOW   (default 3)
+#   DATALAKE_POOL_SIZE      (default 1)
+#   DATALAKE_MAX_OVERFLOW   (default 1)
 # -------------------------------------------------------
 DATALAKE_URL = os.getenv("DATALAKE_URL")
 
@@ -86,8 +95,8 @@ DatalakeSessionLocal = None
 if DATALAKE_URL:
     datalake_engine = create_engine(
         DATALAKE_URL,
-        pool_size=int(os.getenv("DATALAKE_POOL_SIZE", "2")),
-        max_overflow=int(os.getenv("DATALAKE_MAX_OVERFLOW", "3")),
+        pool_size=int(os.getenv("DATALAKE_POOL_SIZE", "1")),
+        max_overflow=int(os.getenv("DATALAKE_MAX_OVERFLOW", "1")),
         pool_timeout=10,
         pool_recycle=1800,
         pool_pre_ping=True,
