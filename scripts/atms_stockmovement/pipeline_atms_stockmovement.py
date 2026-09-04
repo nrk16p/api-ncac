@@ -46,6 +46,10 @@ import time
 import warnings
 from datetime import date, datetime, timezone
 
+# certifi (ผ่าน requests) และ dateutil (ผ่าน pandas) ติดมาแบบ transitive อยู่แล้ว
+# ── ห้ามเติมสองตัวนี้ลง requirements.txt: ไฟล์นั้นไม่ pin เวอร์ชันสักบรรทัด การแตะมัน
+# ทำให้ Render resolve ใหม่ทั้งชุด ได้ pandas/numpy รุ่นล่าสุดที่กิน RAM เกิน 512MB
+# ของ Starter แล้วโดน OOM kill ตั้งแต่ import (อาการที่เห็น = "No open ports detected")
 import certifi
 import numpy as np
 from bson import json_util
