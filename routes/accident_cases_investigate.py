@@ -31,8 +31,6 @@ router = APIRouter(
     tags=["Accident Case Investigate"],
 )
 
-COMPLETED_STATUS = "Completed Investigate"
-
 PARENT_FIELDS = {
     "accident_types",
     "severity_level",
@@ -152,20 +150,6 @@ def _apply_children(record, payload, partial: bool):
             record.measures = kept
 
 
-def _sync_case_status(db: Session, record) -> None:
-    """สอบสวนครบ → ดัน casestatus ของเคสเป็น Completed Investigate"""
-    if not record.is_complete:
-        return
-    case = (
-        db.query(models.AccidentCase)
-        .filter_by(document_no_ac=record.document_no_ac)
-        .first()
-    )
-    if case and case.casestatus != COMPLETED_STATUS:
-        case.casestatus = COMPLETED_STATUS
-        db.commit()
-
-
 # ======================================================
 # CREATE OR UPDATE (UPSERT)
 # ======================================================
@@ -196,7 +180,8 @@ def create_or_update_investigation(
         ) from exc
 
     db.refresh(record)
-    _sync_case_status(db, record)
+    # ไม่ปิดเคสให้เองแม้ is_complete = True — การปิดเคสเป็นการกดยืนยันของผู้ใช้
+    # บนฟอร์ม (ปุ่ม "ปิดเคส") ซึ่งจะยิง PUT /accident-case/{doc} มาเปลี่ยนสถานะเอง
     return record
 
 
@@ -290,7 +275,8 @@ def update_investigation(
         ) from exc
 
     db.refresh(record)
-    _sync_case_status(db, record)
+    # ไม่ปิดเคสให้เองแม้ is_complete = True — การปิดเคสเป็นการกดยืนยันของผู้ใช้
+    # บนฟอร์ม (ปุ่ม "ปิดเคส") ซึ่งจะยิง PUT /accident-case/{doc} มาเปลี่ยนสถานะเอง
     return record
 
 
