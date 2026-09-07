@@ -26,6 +26,8 @@ PIPELINE_SCRIPTS = {
     "engineon_trip_summary": SCRIPTS_DIR / "engineon" / "pipeline_engineon_trip_summary.py",
     "vehiclemaster": SCRIPTS_DIR / "engineon" / "pipeline_vehiclemaster.py",
     "maintenance": SCRIPTS_DIR / "maintenance" / "pipeline_maintenance.py",
+    "atms_stockmovement": SCRIPTS_DIR / "atms_stockmovement" / "pipeline_atms_stockmovement.py",
+    "atms_stockmovement_light": SCRIPTS_DIR / "atms_stockmovement" / "pipeline_atms_stockmovement_light.py",
 }
 
 PIPELINE_NAMES = {"ld": "asia", "scco": "scco", "cpac": "cpac",
@@ -38,7 +40,9 @@ PIPELINE_NAMES = {"ld": "asia", "scco": "scco", "cpac": "cpac",
                   "drivercost_ticket": "drivercost_ticket",
                   "engineon_trip_summary": "engineon_trip_summary",
                   "vehiclemaster": "vehiclemaster",
-                  "maintenance": "maintenance"}
+                  "maintenance": "maintenance",
+                  "atms_stockmovement": "atms_stockmovement",
+                  "atms_stockmovement_light": "atms_stockmovement_light"}
 
 # Where each pipeline logs its runs: (db, collection)
 RUN_LOG_LOCATION = {
@@ -56,6 +60,8 @@ RUN_LOG_LOCATION = {
     "engineon_trip_summary": ("analytics", "etl_jobs"),
     "vehiclemaster": ("analytics", "etl_jobs"),
     "maintenance": ("analytics", "etl_jobs"),
+    "atms_stockmovement": ("atms", "stockmovement_runs"),
+    "atms_stockmovement_light": ("atms", "stockmovement_runs"),
 }
 
 # In-memory run state (single-process; reset on restart)

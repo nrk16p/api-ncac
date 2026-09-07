@@ -8,7 +8,27 @@ from database import engine, Base
 import models
 
 # Create tables (dev convenience)
-Base.metadata.create_all(bind=engine)
+#
+# ห้ามปล่อยให้ exception หลุดออกจากบรรทัดนี้: มันรันตอน import module ก่อน FastAPI
+# จะถูกสร้างด้วยซ้ำ ถ้า DB ต่อไม่ได้ process จะตายด้วย status 1 → Render restart วน →
+# ไม่มีพอร์ตให้สแกน → deploy ล้มด้วยข้อความ "No open ports detected" ที่ชี้ไปผิดทาง
+# (เจอจริง 04/09/2026: คลัสเตอร์ DigitalOcean max_connections=25 เต็ม เพราะ DBeaver
+# ค้าง idle 4 ชม. + service อื่นถือ connection บน defaultdb อยู่ 8 ตัว — ตอน deploy
+# Render รัน instance ใหม่คู่กับตัวเก่า ทั้งคู่ขอ pool พร้อมกันจึงไม่มีทางพอ)
+#
+# ข้อแลกเปลี่ยนที่ต้องรู้: โปรเจกต์นี้ไม่ได้ตั้ง alembic ไว้ (มีใน requirements แต่ไม่มี
+# ไฟล์ migration) บรรทัดนี้จึงเป็นกลไกสร้างตารางตัวจริง — ถ้ามันถูกข้าม ตารางใหม่จะยัง
+# ไม่ถูกสร้างในรอบนั้น แต่ create_all เป็น idempotent และรันทุกครั้งที่บูต การบูตครั้ง
+# ถัดไปที่ต่อ DB ได้จึงสร้างให้เองอยู่ดี · แลกกับการที่แอปยังบูตและเปิดพอร์ตไว้ได้
+# (endpoint ที่ต้องใช้ DB พังเป็นราย request ตามปกติ และกู้เองเมื่อ connection ว่าง)
+# ซึ่งดีกว่าปล่อยให้ทั้งบริการ deploy ไม่ขึ้นเลย
+try:
+    Base.metadata.create_all(bind=engine)
+except Exception as _e:  # noqa: BLE001 — จงใจกว้าง: อะไรก็ตามที่นี่ต้องไม่ล้มการบูต
+    import logging as _logging
+    _logging.getLogger(__name__).error(
+        "create_all() ล้มเหลว — แอปจะบูตต่อโดยไม่สร้าง/อัปเดตตาราง: %s", _e
+    )
 
 # ------------------------------
 # App
@@ -201,6 +221,17 @@ async def startup_event():
     # maintenance (MR sync → maint_* + repair-analysis) 02:00 BKK → 19:00 UTC —
     # ATMS โหลดต่ำ และก่อน ld/scco (09:00/09:20 BKK จริงตาม UTC)
     scheduler.add_job(_run, CronTrigger(hour=19, minute=0), args=["maintenance"], id="sched_maintenance")  # 02:00 BKK
+    # stockmovement → atms.stockmovement_v5 (mena-wms /deadstock /safety-stock /vendors,
+    # dw_stockmovement ของ KPI-Motors, mena-intelligence /cost/*) — ย้ายมาจาก notebook
+    # บนเครื่อง Mac ที่รันวันละครั้งและข้ามทั้งวันเมื่อเครื่องหลับ/เน็ตสะดุด
+    # เวลาที่นี่เป็น UTC จริงเช่นเดียวกับ atms_procurement ด้านบน:
+    #   full  ย้อน 5 เดือน  05:00 BKK → 22:00 UTC (ATMS ว่าง · ก่อน atms_procurement 23:00)
+    #   light เดือนปัจจุบัน 08:30/12:30/16:30/20:30 BKK → 01:30/05:30/09:30/13:30 UTC
+    #   เยื้องจาก procurement light ที่จอง 03/07/11/15 UTC ไว้แล้ว เพราะยิงรายงาน ATMS
+    #   พร้อมกันแล้ว ATMS จะ 500 · นาที 30 ยังกันชนกับ driver_cost 05:45 UTC ได้ด้วย
+    #   (รอบ light ใช้เวลาจริง ~20 วินาที)
+    scheduler.add_job(_run, CronTrigger(hour=22, minute=0), args=["atms_stockmovement"], id="sched_atms_stockmovement")
+    scheduler.add_job(_run, CronTrigger(hour="1,5,9,13", minute=30), args=["atms_stockmovement_light"], id="sched_atms_stockmovement_light")
     scheduler.start()
     import logging
     logging.getLogger(__name__).info("Pipeline scheduler started — LD 02:00, SCCO 02:20, deliver_result 03:30, driver_cost 05:45 (BKK); CPAC runs locally; engineon 04:00 / drivercost_ticket 06:10 / trip_summary 06:30 (BKK)")
