@@ -65,6 +65,62 @@ def get_applicable_rule(
     )
 
 
+def _rule_has_eligible_approver(
+    db: Session,
+    rule: FormApprovalRule,
+    requester: User,
+) -> bool:
+    users = db.query(User).filter(User.employee_status == "Active").all()
+
+    for user in users:
+        approver_level = get_employee_position_level(db, user.employee_id)
+        if not approver_level:
+            continue
+
+        if can_user_approve(
+            db=db,
+            rule=rule,
+            approver=user,
+            approver_level=approver_level,
+            requester=requester,
+        ):
+            return True
+
+    return False
+
+
+def get_applicable_rule_with_fallback(
+    db: Session,
+    form_master_id: int,
+    creator_level: int,
+    level_no: int,
+    requester: User,
+) -> FormApprovalRule | None:
+    rule = get_applicable_rule(db, form_master_id, creator_level, level_no)
+
+    if rule and _rule_has_eligible_approver(db, rule, requester):
+        return rule
+
+    candidates = (
+        db.query(FormApprovalRule)
+        .filter(
+            FormApprovalRule.form_master_id == form_master_id,
+            FormApprovalRule.level_no == level_no,
+            FormApprovalRule.is_active == True,
+        )
+        .order_by(FormApprovalRule.id.asc())
+        .all()
+    )
+
+    for candidate in candidates:
+        if rule and candidate.id == rule.id:
+            continue
+        if _rule_has_eligible_approver(db, candidate, requester):
+            return candidate
+
+    return None
+
+
 def approver_can_handle_department(
     db: Session,
     employee_id: str,
@@ -157,11 +213,12 @@ def get_pending_approvals(
         if not pos_req:
             continue
 
-        rule = get_applicable_rule(
+        rule = get_applicable_rule_with_fallback(
             db=db,
             form_master_id=sub.form_master_id,
             creator_level=pos_req.position_level_id,
             level_no=sub.current_approval_level,
+            requester=requester,
         )
         if not rule:
             continue
@@ -306,11 +363,12 @@ def approve_submission(
     if not pos_req:
         raise HTTPException(400, "Requester position not found")
 
-    rule = get_applicable_rule(
+    rule = get_applicable_rule_with_fallback(
         db=db,
         form_master_id=submission.form_master_id,
         creator_level=pos_req.position_level_id,
         level_no=submission.current_approval_level,
+        requester=requester,
     )
     if not rule:
         raise HTTPException(400, "Approval rule not found")
@@ -412,11 +470,12 @@ def reject_submission(
     if not pos_req:
         raise HTTPException(400, "Requester position not found")
 
-    rule = get_applicable_rule(
+    rule = get_applicable_rule_with_fallback(
         db=db,
         form_master_id=submission.form_master_id,
         creator_level=pos_req.position_level_id,
         level_no=submission.current_approval_level,
+        requester=requester,
     )
     if not rule:
         raise HTTPException(400, "Approval rule not found")

@@ -13,7 +13,7 @@ from models.master_model import (
 )
 from models import User, Position
 from schemas.form_schema import FormSubmissionCreate, FormResponse, FormValueResponse ,FormSubmissionUpdate
-from routes.forms.form_approval_routes import can_user_approve
+from routes.forms.form_approval_routes import can_user_approve, get_applicable_rule_with_fallback
 from zoneinfo import ZoneInfo
 router = APIRouter(prefix="/forms", tags=["Forms - Submission"])
 
@@ -123,24 +123,22 @@ def get_current_approver_emails(db: Session, submission: FormSubmission) -> list
     creator_level = get_employee_position_level(db, creator.employee_id)
 
     # 🔹 Rule for current level
-    rule = (
-        db.query(FormApprovalRule)
-        .filter(
-            FormApprovalRule.form_master_id == submission.form_master_id,
-            FormApprovalRule.level_no == submission.current_approval_level,
-            FormApprovalRule.is_active == True,
-            FormApprovalRule.creator_min <= creator_level,
-            FormApprovalRule.creator_max >= creator_level,
-        )
-        .first()
+    rule = get_applicable_rule_with_fallback(
+        db,
+        submission.form_master_id,
+        creator_level,
+        submission.current_approval_level,
+        creator,
     )
 
     if not rule:
         return []
 
     # 🔹 Load ALL users instead of same department
-    users = db.query(User).all()
-
+    users = db.query(User).filter(
+                User.employee_status == "Active"
+            ).all()
+    
     result = []
 
     for user in users:
