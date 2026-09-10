@@ -68,6 +68,13 @@ HOUR_BUCKETS = [
 # (ชุดเดียวกับที่ calculate_priority ใน routes/accident_cases.py ใช้)
 SAFE_DRUG_VALUES = ["", "none", "negative", "ไม่ใส่ชนิดสารเสพติด", "-", "no"]
 OPEN_STATUSES = {"pending", "in progress", "open", "completed investigate"}
+AGING_BUCKETS = [
+    ("0-7 วัน", 0, 7),
+    ("8-15 วัน", 8, 15),
+    ("16-30 วัน", 16, 30),
+    ("31-60 วัน", 31, 60),
+    ("60+ วัน", 61, 10**6),
+]
 
 
 # ============================================================
@@ -513,8 +520,7 @@ def _status_and_aging(rows: List[Dict[str, Any]], today: date) -> Dict[str, Any]
     for r in rows:
         funnel[r["casestatus"]] += 1
 
-    buckets = [("0-7 วัน", 0, 7), ("8-15 วัน", 8, 15), ("16-30 วัน", 16, 30), ("31-60 วัน", 31, 60), ("60+ วัน", 61, 10**6)]
-    aging = {label: 0 for label, _lo, _hi in buckets}
+    aging = {label: 0 for label, _lo, _hi in AGING_BUCKETS}
     ages: List[int] = []
     overdue = 0
 
@@ -528,7 +534,7 @@ def _status_and_aging(rows: List[Dict[str, Any]], today: date) -> Dict[str, Any]
         ages.append(age)
         if age > 30:
             overdue += 1
-        for label, lo, hi in buckets:
+        for label, lo, hi in AGING_BUCKETS:
             if lo <= age <= hi:
                 aging[label] += 1
                 break
@@ -539,7 +545,7 @@ def _status_and_aging(rows: List[Dict[str, Any]], today: date) -> Dict[str, Any]
             [{"status": k, "count": v, "pct": _pct(v, total)} for k, v in funnel.items()],
             key=lambda x: -x["count"],
         ),
-        "aging": [{"bucket": label, "count": aging[label]} for label, _lo, _hi in buckets],
+        "aging": [{"bucket": label, "count": aging[label]} for label, _lo, _hi in AGING_BUCKETS],
         "open_cases": len(ages),
         "overdue_cases": overdue,
         "avg_open_age_days": round(sum(ages) / len(ages), 1) if ages else 0.0,
@@ -1036,6 +1042,123 @@ def overview(
 
     payload["insights"] = _build_insights(payload, rows, prev_rows)
     return payload
+
+
+CASE_LIST_MAX = 500
+
+
+def _case_row(r: Dict[str, Any]) -> Dict[str, Any]:
+    when = r["record_at"]
+    return {
+        "doc_no": r["doc_no"],
+        "source": r["source"],
+        "date": when.date().isoformat() if when else None,
+        "site_name": r["site_name"],
+        "client_name": r["client_name"],
+        "driver_name": r["driver_name"],
+        "truck_no": r["truck_no"],
+        "priority": r["priority"],
+        "casestatus": r["casestatus"],
+        "cause": r["cause"] or "ไม่ระบุ",
+        "actual_cost": r["actual_cost"],
+        "estimated_cost": r["estimated_cost"],
+    }
+
+
+@router.get("/cases")
+def cases(
+    db: Session = Depends(get_db),
+    start_date: Optional[str] = Query(None),
+    end_date: Optional[str] = Query(None),
+    case_type: str = Query("all", pattern="^(all|nc|ac)$"),
+    site_id: Optional[List[int]] = Query(None),
+    client_id: Optional[List[int]] = Query(None),
+    priority: Optional[List[str]] = Query(None),
+    casestatus: Optional[List[str]] = Query(None),
+    site_name: Optional[str] = Query(None, description="กรองตามชื่อศูนย์ — ต้องตรงกับ 'name' ในแถวมิติของ /overview"),
+    driver_name: Optional[str] = Query(None),
+    vehicle: Optional[str] = Query(None, description="ทะเบียนรถ (truck_no)"),
+    client_name: Optional[str] = Query(None),
+    cause: Optional[str] = Query(None),
+    weekday: Optional[int] = Query(None, ge=0, le=6, description="0=จันทร์ ... 6=อาทิตย์"),
+    hour: Optional[int] = Query(None, ge=0, le=23, description="ชั่วโมงเดียว จาก timing.by_hour"),
+    hour_bucket: Optional[str] = Query(None, description="ค่าจาก timing.heatmap เช่น '08-11'"),
+    aging_bucket: Optional[str] = Query(None, description="ค่าจาก status.aging เช่น '31-60 วัน'"),
+    sort: str = Query("date_desc", pattern="^(date_desc|cost_desc)$"),
+    limit: int = Query(100, ge=1, le=CASE_LIST_MAX),
+):
+    """
+    รายการเคสดิบสำหรับ drill-down จาก Dashboard
+
+    ใช้ตัวกรองชุดเดียวกับ /overview (ช่วงวันที่ + case_type + site/priority/status
+    ที่กำลังเลือกอยู่บนจอ) บวกตัวกรอง "มิติที่กดดู" อีกหนึ่งชั้น เพื่อให้รายการเคส
+    ที่ได้ตรงกับตัวเลขที่ผู้ใช้เห็นบนการ์ด/แถว/แท่งกราฟที่กดไปเป๊ะ ๆ
+    """
+    today = date.today()
+    start = _parse_date(start_date, date(today.year, 1, 1))
+    end = _parse_date(end_date, today)
+    if end < start:
+        raise HTTPException(status_code=400, detail="end_date ต้องไม่น้อยกว่า start_date")
+
+    try:
+        rows = _fetch_rows(db, start, end + timedelta(days=1), case_type, site_id, client_id, priority, casestatus)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("incident cases query failed")
+        raise HTTPException(status_code=500, detail=f"ดึงรายการเคสไม่สำเร็จ: {exc}")
+
+    rows = [r for r in rows if r["record_at"] and start <= r["record_at"].date() <= end]
+
+    if site_name:
+        rows = [r for r in rows if r["site_name"] == site_name]
+    if driver_name:
+        rows = [r for r in rows if r["driver_name"] == driver_name]
+    if vehicle:
+        rows = [r for r in rows if r["truck_no"] == vehicle]
+    if client_name:
+        rows = [r for r in rows if r["client_name"] == client_name]
+    if cause:
+        rows = [r for r in rows if (r["cause"] or "ไม่ระบุ") == cause]
+
+    if weekday is not None or hour is not None or hour_bucket:
+        hour_range = next((b for b in HOUR_BUCKETS if b[0] == hour_bucket), None) if hour_bucket else None
+
+        def _in_timing(r: Dict[str, Any]) -> bool:
+            when = r["incident_at"]
+            if not when:
+                return False
+            if weekday is not None and when.weekday() != weekday:
+                return False
+            if hour is not None and when.hour != hour:
+                return False
+            if hour_range and not (hour_range[1] <= when.hour <= hour_range[2]):
+                return False
+            return True
+
+        rows = [r for r in rows if _in_timing(r)]
+
+    if aging_bucket:
+        # ค้าง (aging) มีความหมายเฉพาะเคสที่ "ยังเปิดอยู่" เท่านั้น — กติกาเดียวกับ
+        # _status_and_aging ทุกประการ ไม่งั้นตัวเลขในไดอะล็อกจะไม่ตรงกับการ์ดที่กด
+        age_range = next((b for b in AGING_BUCKETS if b[0] == aging_bucket), None)
+
+        def _in_aging(r: Dict[str, Any]) -> bool:
+            if r["casestatus"].strip().lower() not in OPEN_STATUSES:
+                return False
+            when = r["record_at"]
+            if not when or not age_range:
+                return False
+            age = (today - when.date()).days
+            return age_range[1] <= age <= age_range[2]
+
+        rows = [r for r in rows if _in_aging(r)]
+
+    rows.sort(
+        key=lambda r: r["actual_cost"] if sort == "cost_desc" else (r["record_at"] or datetime.min),
+        reverse=True,
+    )
+
+    total = len(rows)
+    return {"total": total, "truncated": total > limit, "rows": [_case_row(r) for r in rows[:limit]]}
 
 
 @router.get("/filters")
