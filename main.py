@@ -105,6 +105,7 @@ from routes.news_safety_talk import router as news_safety_talk_router
 from routes.news_case_report import router as news_case_report_router
 from routes.news_accident_case import router as news_accident_case_router
 from routes.newyear_survey import router as newyear_survey_router
+from routes.incident_analytics import router as incident_analytics_router
 
 
 # ------------------------------
@@ -151,6 +152,9 @@ app.include_router(pipeline_router)
 
 # Analytics
 app.include_router(drivingdistance_router)
+
+# Analytics — NC/AC incident dashboard (read-model)
+app.include_router(incident_analytics_router)
 
 # ATMS แจ้งซ่อม / ขอเปลี่ยนยาง
 app.include_router(atms_maintenance_router)
