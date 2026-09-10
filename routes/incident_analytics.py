@@ -55,6 +55,11 @@ logger = logging.getLogger("incident_analytics")
 BKK = "Asia/Bangkok"
 
 PRIORITY_ORDER = ["Crisis", "Major", "Minor"]
+# ระบบเริ่มบันทึกข้อมูลจริงตั้งแต่ต้นปี 2569 (1 ม.ค. 2026) — ข้อมูลก่อนหน้านี้ถ้ามี
+# ไม่ใช่การใช้งานจริง เทียบ "ช่วงก่อนหน้า" ข้ามเส้นนี้จะได้ % เปลี่ยนแปลงหลอกตา
+# (เทียบของจริงกับข้อมูลที่ไม่มีความหมาย) จึงต้องกันไว้ไม่ให้ period เปรียบเทียบ
+# ย้อนไปก่อนวันนี้ได้ — ปรับวันที่นี้ถ้า go-live จริงไม่ใช่วันนี้
+SYSTEM_GO_LIVE = date(2026, 1, 1)
 WEEKDAY_LABELS = ["จันทร์", "อังคาร", "พุธ", "พฤหัสบดี", "ศุกร์", "เสาร์", "อาทิตย์"]
 HOUR_BUCKETS = [
     ("00-03", 0, 3),
@@ -938,21 +943,32 @@ def overview(
     prev_end = start - timedelta(days=1)
     prev_start = prev_end - timedelta(days=span_days - 1)
 
+    # ช่วงเปรียบเทียบใช้ได้ก็ต่อเมื่ออยู่ทั้งช่วงหลัง SYSTEM_GO_LIVE เท่านั้น —
+    # เทียบกับช่วงก่อนระบบเริ่มใช้งานจริงจะได้ % เปลี่ยนแปลงที่ไม่มีความหมาย
+    comparison_available = prev_start >= SYSTEM_GO_LIVE
+
     if granularity == "auto":
         granularity = "day" if span_days <= 62 else "month"
 
     try:
-        # ดึงทั้งช่วงปัจจุบันและช่วงเปรียบเทียบใน query เดียว แล้วค่อยแยกใน Python
-        # (ประหยัด round trip และ connection ซึ่งเป็นทรัพยากรที่ตึงที่สุดของ service นี้)
-        all_rows = _fetch_rows(
-            db, prev_start, end + timedelta(days=1), case_type, site_id, client_id, priority, casestatus
-        )
+        if comparison_available:
+            # ดึงทั้งช่วงปัจจุบันและช่วงเปรียบเทียบใน query เดียว แล้วค่อยแยกใน Python
+            # (ประหยัด round trip และ connection ซึ่งเป็นทรัพยากรที่ตึงที่สุดของ service นี้)
+            all_rows = _fetch_rows(
+                db, prev_start, end + timedelta(days=1), case_type, site_id, client_id, priority, casestatus
+            )
+        else:
+            all_rows = _fetch_rows(db, start, end + timedelta(days=1), case_type, site_id, client_id, priority, casestatus)
     except Exception as exc:  # noqa: BLE001
         logger.exception("incident analytics query failed")
         raise HTTPException(status_code=500, detail=f"ดึงข้อมูลวิเคราะห์ไม่สำเร็จ: {exc}")
 
     rows = [r for r in all_rows if r["record_at"] and start <= r["record_at"].date() <= end]
-    prev_rows = [r for r in all_rows if r["record_at"] and prev_start <= r["record_at"].date() <= prev_end]
+    prev_rows = (
+        [r for r in all_rows if r["record_at"] and prev_start <= r["record_at"].date() <= prev_end]
+        if comparison_available
+        else []
+    )
 
     nc_docs = [r["doc_no"] for r in rows if r["source"] == "NC"]
     ac_docs = [r["doc_no"] for r in rows if r["source"] == "AC"]
@@ -977,8 +993,10 @@ def overview(
             "start_date": start.isoformat(),
             "end_date": end.isoformat(),
             "days": span_days,
-            "compare_start_date": prev_start.isoformat(),
-            "compare_end_date": prev_end.isoformat(),
+            "compare_start_date": prev_start.isoformat() if comparison_available else None,
+            "compare_end_date": prev_end.isoformat() if comparison_available else None,
+            "comparison_available": comparison_available,
+            "system_go_live_date": SYSTEM_GO_LIVE.isoformat(),
             "case_type": case_type,
             "granularity": granularity,
             "row_count": total,
