@@ -69,6 +69,63 @@ _running: dict[str, bool] = {k: False for k in PIPELINE_SCRIPTS}
 _last_started: dict[str, str | None] = {k: None for k in PIPELINE_SCRIPTS}
 
 
+# ── webhook หลัง pipeline สำเร็จ ─────────────────────────────────────────────
+# pipeline ที่ป้อนข้อมูลให้ระบบปลายทางซึ่งต้อง "คำนวณใหม่ทันทีที่ข้อมูลลง" — ยิงต่อท้ายตรงนี้ดีกว่า
+# ให้ปลายทางตั้ง cron เดาเวลาเอา เพราะ pipeline ใช้เวลาไม่คงที่ (ATMS ช้า/เร็วได้) นาฬิกาจึงเดาไม่ตรง
+#
+# atms_stockmovement* → เขียน atms.stockmovement_v5 ซึ่งเป็นต้นทางของ snapshot หน้า /safety-stock
+# ใน mena-wms · mena-wms อยู่บน Vercel Hobby ที่ตั้ง cron ได้แค่ 2 ตัว (เต็มแล้ว) และยิงได้วันละครั้ง
+# เรียกจากที่นี่แทนจึงได้ 5 รอบ/วัน (05:00 full + 08:30/12:30/16:30/20:30 light) ตรงจังหวะข้อมูลลงจริง
+# ปลายทางที่เรียกคือ /api/cron/safety-stock-build ซึ่งอ่าน Mongo ล้วน ไม่ยิง ATMS ซ้ำ
+#
+# ค่าเป็น (URL_ENV, TOKEN_ENV) — ไม่ตั้ง env = ไม่ยิง เครื่อง dev หรือ instance อื่นจึงไม่ไปกวนปลายทาง
+POST_RUN_WEBHOOKS = {
+    "atms_stockmovement":       ("SAFETY_STOCK_BUILD_URL", "SAFETY_STOCK_BUILD_TOKEN"),
+    "atms_stockmovement_light": ("SAFETY_STOCK_BUILD_URL", "SAFETY_STOCK_BUILD_TOKEN"),
+}
+
+# build ฝั่ง mena-wms เดินทีละคลังบน stockmovement_v5 (~476k แถว) ภายใต้ maxDuration 300s ของมันเอง
+# ตั้ง timeout ยาวกว่านั้นนิดเดียว เพื่อให้ฝั่งโน้นเป็นคนตัดสินใจหมดเวลาเอง ไม่ใช่เราตัดสายทิ้งกลางคัน
+_WEBHOOK_TIMEOUT_S = 310
+
+
+def _call_webhook(url: str, token: str | None) -> tuple[int, str]:
+    import requests
+
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    r = requests.get(url, headers=headers, timeout=_WEBHOOK_TIMEOUT_S)
+    return r.status_code, r.text[:500]
+
+
+async def _fire_post_run_webhook(pipeline_type: str) -> None:
+    """ยิง webhook ปลายทางหลัง pipeline สำเร็จ
+
+    พังยังไงก็ต้องไม่ทำให้ pipeline กลายเป็น fail — งานหลัก (เขียนข้อมูลลง Mongo) สำเร็จไปแล้ว
+    ปลายทางคำนวณไม่ทันเป็นเรื่องรองที่รอรอบหน้าได้ ห้าม raise ออกไปถึง _run เด็ดขาด
+    """
+    import logging
+
+    hook = POST_RUN_WEBHOOKS.get(pipeline_type)
+    if not hook:
+        return
+    url_env, token_env = hook
+    url = os.getenv(url_env)
+    if not url:
+        return
+
+    log = logging.getLogger(__name__)
+    try:
+        # requests เป็น blocking I/O — ต้องออกไปอยู่ thread แยก ไม่งั้น event loop ของ FastAPI
+        # ค้างได้นานถึง 310 วินาที (ทั้ง API จะไม่ตอบ request ไหนเลยตลอดช่วงนั้น)
+        status, body = await asyncio.to_thread(_call_webhook, url, os.getenv(token_env))
+        if 200 <= status < 300:
+            log.info("Post-run webhook %s -> %s OK (%s)", pipeline_type, url, status)
+        else:
+            log.error("Post-run webhook %s -> %s failed: %s %s", pipeline_type, url, status, body)
+    except Exception as e:  # noqa: BLE001 - ห้ามให้ webhook ทำ pipeline ล้ม
+        log.error("Post-run webhook %s -> %s error: %s", pipeline_type, url, e)
+
+
 def _verify_key(x_api_key: str = Header(..., alias="x-api-key")):
     key = os.getenv("PIPELINE_API_KEY")
     if not key or x_api_key != key:
@@ -99,6 +156,9 @@ async def _run(pipeline_type: str, params: dict | None = None):
                 pipeline_type, proc.returncode,
                 stderr.decode(errors="replace")[-2000:],
             )
+        else:
+            # สำเร็จเท่านั้นจึงปลุกปลายทาง — รันล้มแล้วยิงต่อจะทำให้ปลายทางคำนวณจากข้อมูลที่ยังไม่ครบ
+            await _fire_post_run_webhook(pipeline_type)
     finally:
         _running[pipeline_type] = False
 
