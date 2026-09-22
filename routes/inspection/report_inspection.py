@@ -4,6 +4,7 @@ from typing import List
 
 from database import get_db
 from models import inspection as models
+from models import MasterDriver, DriverRole
 
 router = APIRouter(prefix="/report", tags=["Inspection Report"])
 
@@ -46,14 +47,29 @@ def get_driver_summary(
         models.InspectionTask.inspection_task_id.in_(task_ids)
     ).all()
 
+    drivers_by_task = {
+        task.inspection_task_id: db.query(models.InspectionTaskDriver).filter(
+            models.InspectionTaskDriver.inspection_task_id == task.inspection_task_id
+        ).all()
+        for task in tasks
+    }
+
+    # --- ตำแหน่งคนขับ (role) — โหลดล่วงหน้าครั้งเดียว กันยิง query ซ้ำต่อคนขับทุกคน ---
+    all_driver_ids = {d.driver_id for drivers in drivers_by_task.values() for d in drivers}
+    role_id_by_driver = dict(
+        db.query(MasterDriver.driver_id, MasterDriver.driver_role_id)
+        .filter(MasterDriver.driver_id.in_(all_driver_ids))
+        .all()
+    ) if all_driver_ids else {}
+    role_name_by_id = dict(db.query(DriverRole.driver_role_id, DriverRole.role_name).all())
+
     result = []
 
     for task in tasks:
-        drivers = db.query(models.InspectionTaskDriver).filter(
-            models.InspectionTaskDriver.inspection_task_id == task.inspection_task_id
-        ).all()
+        drivers = drivers_by_task[task.inspection_task_id]
 
         for d in drivers:
+            role_id = role_id_by_driver.get(d.driver_id)
             row: dict = {
                 "inspection_task_id": task.inspection_task_id,
                 "plan_date": str(task.plan_date)[:10] if task.plan_date else None,
@@ -68,6 +84,8 @@ def get_driver_summary(
                 "number_plate": d.number_plate,
                 "truck_number": d.truck_number,
                 "truck_type": d.truck_type,
+                "driver_role_id": role_id,
+                "driver_role_name": role_name_by_id.get(role_id),
             }
 
             # --- Drug / Alcohol ---
