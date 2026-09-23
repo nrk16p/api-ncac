@@ -132,7 +132,7 @@ def split_sku(v):
 
 
 # ── PR / PO list ────────────────────────────────────────────────────────────
-def _scrape_list(session, base, params_base, key_field, db, coll, approval=False):
+def _scrape_list(session, base, params_base, key_field, db, coll, approval=False, seen=None):
     col = db[coll]
     ensure_index(col, key_field)
     now = datetime.utcnow()
@@ -175,6 +175,8 @@ def _scrape_list(session, base, params_base, key_field, db, coll, approval=False
                 rows.append(row)
         if not rows:
             break
+        if seen is not None:
+            seen.update(r[key_field] for r in rows)
         ops = [UpdateOne({key_field: r[key_field]}, {"$set": {**r, "scraped_at": now}}, upsert=True) for r in rows]
         res = col.bulk_write(ops, ordered=False)
         ins += res.upserted_count
@@ -187,12 +189,77 @@ def _scrape_list(session, base, params_base, key_field, db, coll, approval=False
     return {"inserted": ins, "updated": upd}
 
 
-def scrape_pr(session, from_date, db):
+def scrape_pr(session, from_date, db, seen=None):
     params = {"code": "", "user": "", "remark": "", "inventory_id": "", "department_id": "",
               "is_approved": "", "has_po": "", "from_t_date": from_date, "to_t_date": "",
               "submit": "ค้นหา", "order_by": "pr.code desc"}
     return _scrape_list(session, f"{BASE}/inv/purchase.request/index", params, PR_KEY,
-                        db, "purchase_requests", approval=True)
+                        db, "purchase_requests", approval=True, seen=seen)
+
+
+# ── ลบ PR ที่ถูกลบใน ATMS ──────────────────────────────────────────────────────
+# ทำไมต้องมี: _scrape_list เป็น upsert อย่างเดียว ใบที่ผู้ใช้ลบใน ATMS จึงค้างใน Mongo ตลอดไป
+# แล้วถูกนับเป็น "กำลังสั่งซื้อ" ใน /safety-stock (เคสจริง KKPR26070020 ลบ 22 ก.ย. 69 แต่ยังโผล่)
+# วิธี: ใบในหน้าต่างเดียวกับที่เพิ่งดึง (วันที่ >= from_date) ที่รอบนี้ไม่เจอ = ถูกลบ → ลบหัวใบ + รายการสินค้า
+# เก็บสำเนาไว้ใน purchase_requests_pruned ก่อนลบ (กู้คืนได้)
+PRUNE_MIN_COVERAGE = float(os.getenv("ATMS_PR_PRUNE_MIN_COVERAGE", "0.9"))  # ดึงได้ < 90% ของที่มี = ดึงไม่ครบ ห้ามลบ
+PRUNE_MAX = int(os.getenv("ATMS_PR_PRUNE_MAX", "50"))                        # หายเกินนี้ในรอบเดียว = ผิดปกติ ห้ามลบ
+
+
+def _parse_dmy(v):
+    try:
+        return datetime.strptime(str(v).strip()[:10], "%d/%m/%Y")
+    except (TypeError, ValueError):
+        return None
+
+
+def find_missing_prs(db, from_date, seen, run_started):
+    """PR ในหน้าต่าง from_date ที่รอบนี้ไม่เจอใน ATMS → (codes, stats, skip_reason) · อ่านอย่างเดียว"""
+    since = _parse_dmy(from_date)
+    if since is None or not seen:
+        return [], {}, "no-window"
+    # กรองเดือนด้วย regex ก่อน (วันที่เป็น string DD/MM/YYYY) แล้วค่อยเทียบวันจริงใน Python
+    months, y, m = [], since.year, since.month
+    now = datetime.utcnow() + timedelta(hours=7)
+    while (y, m) <= (now.year, now.month):
+        months.append(f"{m:02d}/{y}")
+        m += 1
+        if m > 12:
+            m, y = 1, y + 1
+    rx = "/(" + "|".join(re.escape(x) for x in months) + ")$"
+    in_window, missing = 0, []
+    for d in db["purchase_requests"].find({"วันที่": {"$regex": rx}}, {PR_KEY: 1, "วันที่": 1, "scraped_at": 1}):
+        dt = _parse_dmy(d.get("วันที่"))
+        if dt is None or dt < since:
+            continue
+        in_window += 1
+        # scraped_at < run_started กันใบที่เพิ่งถูกเขียนระหว่างรอบ (เช่นรอบอื่นรันซ้อน)
+        if d.get(PR_KEY) not in seen and (d.get("scraped_at") or datetime.min) < run_started:
+            missing.append(d[PR_KEY])
+    stats = {"in_window": in_window, "seen": len(seen), "missing": len(missing)}
+    if in_window and len(seen) < PRUNE_MIN_COVERAGE * in_window:
+        return missing, stats, "low-coverage"
+    if len(missing) > PRUNE_MAX:
+        return missing, stats, "too-many"
+    return missing, stats, None
+
+
+def prune_missing_prs(db, from_date, seen, run_started):
+    missing, stats, skip = find_missing_prs(db, from_date, seen, run_started)
+    if skip:
+        log("PR prune ข้าม:", skip, stats)
+        return {**stats, "skipped": skip, "sample": missing[:20]}
+    if not missing:
+        return {**stats, "deleted": 0}
+    col = db["purchase_requests"]
+    now_utc = datetime.utcnow()
+    arch = [{**d, "pruned_at": now_utc} for d in col.find({PR_KEY: {"$in": missing}}, {"_id": 0})]
+    if arch:
+        db["purchase_requests_pruned"].insert_many(arch, ordered=False)
+    items = db["purchase_request_items"].delete_many({"pr_code": {"$in": missing}}).deleted_count
+    hdr = col.delete_many({PR_KEY: {"$in": missing}}).deleted_count
+    log("PR prune ลบ", hdr, "ใบ", items, "รายการ:", missing)
+    return {**stats, "deleted": hdr, "deleted_items": items, "codes": missing}
 
 
 def scrape_po(session, from_date, db):
@@ -693,7 +760,11 @@ def main():
     counts, err = {}, None
     try:
         s = get_session()
-        counts["purchase_requests"] = scrape_pr(s, from_date, db);   log("PR", counts["purchase_requests"])
+        pr_seen = set()
+        counts["purchase_requests"] = scrape_pr(s, from_date, db, pr_seen); log("PR", counts["purchase_requests"])
+        # ปิดได้ด้วย ATMS_PR_PRUNE=0
+        if os.getenv("ATMS_PR_PRUNE", "1") != "0":
+            counts["pr_pruned"] = prune_missing_prs(db, from_date, pr_seen, started)
         counts["purchase_orders"]   = scrape_po(s, from_date, db);   log("PO", counts["purchase_orders"])
         dep_ids = []
         counts["deposit_header"]    = scrape_deposit(s, from_date, db, dep_ids); log("DD", counts["deposit_header"])
