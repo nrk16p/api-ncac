@@ -593,7 +593,7 @@ def _collect_codes(session, index_url, id_pat, from_date, order_by):
     return pairs
 
 
-def _scrape_items(session, kind, from_date, db, workers=None):
+def _scrape_items(session, kind, from_date, db, workers=None, pick=None):
     if workers is None:
         workers = int(os.getenv("ATMS_ITEM_WORKERS", "8"))   # เบาลงบน Render Starter (512MB)
     cfg = {
@@ -609,6 +609,8 @@ def _scrape_items(session, kind, from_date, db, workers=None):
     col = db[cfg["coll"]]
     ensure_index(col, cfg["key"])
     pairs = _collect_codes(session, cfg["index"], cfg["pat"], from_date, cfg["order"])
+    if pick:  # เลือกเฉพาะบางใบ (เช่น atms_pr_quick ดึงเฉพาะใบที่ยังไม่มีรายการ)
+        pairs = pick(pairs)
     now = datetime.utcnow()
     total_items = [0]
 

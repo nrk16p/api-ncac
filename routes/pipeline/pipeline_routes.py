@@ -19,6 +19,7 @@ PIPELINE_SCRIPTS = {
     "driver_cost": SCRIPTS_DIR / "driver_cost" / "pipeline_driver_cost.py",
     "atms_procurement": SCRIPTS_DIR / "atms_procurement" / "pipeline_atms_procurement.py",
     "atms_procurement_light": SCRIPTS_DIR / "atms_procurement" / "pipeline_atms_procurement_light.py",
+    "atms_pr_quick": SCRIPTS_DIR / "atms_procurement" / "pipeline_atms_pr_quick.py",
     "atms_audit": SCRIPTS_DIR / "atms_procurement" / "pipeline_atms_audit.py",
     "atms_supplier": SCRIPTS_DIR / "atms_procurement" / "pipeline_atms_supplier.py",
     "engineon": SCRIPTS_DIR / "engineon" / "pipeline_engineon.py",
@@ -34,6 +35,7 @@ PIPELINE_NAMES = {"ld": "asia", "scco": "scco", "cpac": "cpac",
                   "deliver_result": "deliver_result", "driver_cost": "driver_cost",
                   "atms_procurement": "atms_procurement",
                   "atms_procurement_light": "atms_procurement_light",
+                  "atms_pr_quick": "atms_pr_quick",
                   "atms_audit": "atms_audit",
                   "atms_supplier": "atms_supplier",
                   "engineon": "engineon",
@@ -53,6 +55,7 @@ RUN_LOG_LOCATION = {
     "driver_cost": ("mena-bi", "pipeline_runs"),
     "atms_procurement": ("atms", "procurement_runs"),
     "atms_procurement_light": ("atms", "procurement_runs"),
+    "atms_pr_quick": ("atms", "procurement_runs"),
     "atms_audit": ("atms", "deposit_audit"),
     "atms_supplier": ("atms", "procurement_runs"),
     "engineon": ("analytics", "etl_jobs"),
@@ -78,10 +81,13 @@ _last_started: dict[str, str | None] = {k: None for k in PIPELINE_SCRIPTS}
 # เรียกจากที่นี่แทนจึงได้ 5 รอบ/วัน (05:00 full + 08:30/12:30/16:30/20:30 light) ตรงจังหวะข้อมูลลงจริง
 # ปลายทางที่เรียกคือ /api/cron/safety-stock-build ซึ่งอ่าน Mongo ล้วน ไม่ยิง ATMS ซ้ำ
 #
-# ค่าเป็น (URL_ENV, TOKEN_ENV) — ไม่ตั้ง env = ไม่ยิง เครื่อง dev หรือ instance อื่นจึงไม่ไปกวนปลายทาง
+# ค่าเป็น (URL_ENV, TOKEN_ENV[, SOURCE]) — ไม่ตั้ง env = ไม่ยิง เครื่อง dev หรือ instance อื่นจึงไม่ไปกวนปลายทาง
+# SOURCE (ถ้ามี) เขียนทับ ?source= ใน URL — atms_pr_quick ต้องเป็น pr-hourly ไม่งั้นแถบ "รอบอัปเดตวันนี้"
+# ของ mena-wms จะเอารอบรายชั่วโมงไปแย่งช่องในตาราง (เช่น 10:15 แย่งช่อง 10:00)
 POST_RUN_WEBHOOKS = {
     "atms_stockmovement":       ("SAFETY_STOCK_BUILD_URL", "SAFETY_STOCK_BUILD_TOKEN"),
     "atms_stockmovement_light": ("SAFETY_STOCK_BUILD_URL", "SAFETY_STOCK_BUILD_TOKEN"),
+    "atms_pr_quick":            ("SAFETY_STOCK_BUILD_URL", "SAFETY_STOCK_BUILD_TOKEN", "pr-hourly"),
 }
 
 # build ฝั่ง mena-wms เดินทีละคลังบน stockmovement_v5 (~476k แถว) ภายใต้ maxDuration 300s ของมันเอง
@@ -108,10 +114,16 @@ async def _fire_post_run_webhook(pipeline_type: str) -> None:
     hook = POST_RUN_WEBHOOKS.get(pipeline_type)
     if not hook:
         return
-    url_env, token_env = hook
+    url_env, token_env = hook[0], hook[1]
     url = os.getenv(url_env)
     if not url:
         return
+    if len(hook) > 2:
+        from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+        parts = urlsplit(url)
+        q = dict(parse_qsl(parts.query))
+        q["source"] = hook[2]
+        url = urlunsplit(parts._replace(query=urlencode(q)))
 
     log = logging.getLogger(__name__)
     try:

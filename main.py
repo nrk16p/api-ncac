@@ -212,6 +212,10 @@ async def startup_event():
     # BKK→UTC (−7): 06→23(prev) · 10→03 · 14→07 · 18→11 · 22→15
     scheduler.add_job(_run, CronTrigger(hour=23, minute=0), args=["atms_procurement"], id="sched_atms_procurement")            # 06:00 BKK full
     scheduler.add_job(_run, CronTrigger(hour="3,7,11,15", minute=0), args=["atms_procurement_light"], id="sched_atms_procurement_light")  # 10/14/18/22 BKK light
+    # atms_pr_quick → รายการ PR + ลบใบที่ถูกลบ + รายการสินค้าเฉพาะใบใหม่ แล้วปลุก /safety-stock (source=pr-hourly)
+    # ทุกชั่วโมง 07:15–20:15 BKK → 00–13 UTC นาที 15 (เลี่ยง :00 ของ procurement light ที่ใช้ ~11 นาที
+    # และ :30 ของ stockmovement light) · งานเบา ~10–20 requests ต่อรอบ ไม่ถึงนาที
+    scheduler.add_job(_run, CronTrigger(hour="0-13", minute=15), args=["atms_pr_quick"], id="sched_atms_pr_quick")
     # master ซัพพลายเออร์ (เครดิตเทอมของ mena-wms /ap-tracking) — 06:40 BKK → 23:40 UTC
     # ต่อท้าย atms_procurement (23:00 UTC) เพื่อให้ ddCount นับจาก deposit_header ที่เพิ่งรีเฟรชแล้ว
     # และไม่ยิง ATMS พร้อมกัน · งานเบา ~11 คำขอ ใช้เวลาไม่ถึงนาที
