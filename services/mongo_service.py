@@ -21,7 +21,7 @@ load_dotenv()
 
 
 def _mongo_uri() -> str:
-    uri = os.getenv("MONGODB_URI") or os.getenv("MONGO_URI")
+    uri = os.getenv("MONGO_URI")
     if not uri:
         raise RuntimeError("❌ MONGODB_URI / MONGO_URI not found in environment variables")
     return uri
