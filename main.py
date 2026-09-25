@@ -105,6 +105,7 @@ from routes.news_safety_talk import router as news_safety_talk_router
 from routes.news_case_report import router as news_case_report_router
 from routes.news_accident_case import router as news_accident_case_router
 from routes.newyear_survey import router as newyear_survey_router
+from routes.campaign_forms import router as campaign_forms_router, public_router as campaign_forms_public_router
 from routes.incident_analytics import router as incident_analytics_router
 
 
@@ -143,6 +144,10 @@ app.include_router(news_accident_case_router)
 
 # แบบสำรวจปีใหม่ (MongoDB: hr_service.newyear-survey)
 app.include_router(newyear_survey_router)
+
+# แบบฟอร์มแคมเปญ (MongoDB: campaign_forms) — ผู้ดูแลใน mena-next-lb + Mena-go
+app.include_router(campaign_forms_router)
+app.include_router(campaign_forms_public_router)
 
 #booking leave
 app.include_router(leave_booking_router)
