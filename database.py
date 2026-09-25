@@ -17,6 +17,17 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise ValueError("❌ DATABASE_URL not found in environment variables")
 
+
+def _use_psycopg2(url):
+    """URL แบบใหม่ postgresql+psycopg:// ต้องใช้ psycopg v3 ซึ่งไม่ได้ติดตั้ง —
+    แปลงให้ใช้ psycopg2 (psycopg2-binary ใน requirements.txt) แทน"""
+    if url and url.startswith("postgresql+psycopg://"):
+        return "postgresql+psycopg2://" + url[len("postgresql+psycopg://"):]
+    return url
+
+
+DATABASE_URL = _use_psycopg2(DATABASE_URL)
+
 # -------------------------------------------------------
 # POSTGRESQL ENGINE WITH CONNECTION POOL
 #
@@ -87,7 +98,7 @@ def set_postgres_timeout(dbapi_connection, connection_record):
 #   DATALAKE_POOL_SIZE      (default 1)
 #   DATALAKE_MAX_OVERFLOW   (default 1)
 # -------------------------------------------------------
-DATALAKE_URL = os.getenv("DATALAKE_URL")
+DATALAKE_URL = _use_psycopg2(os.getenv("DATALAKE_URL"))
 
 datalake_engine = None
 DatalakeSessionLocal = None

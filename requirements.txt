@@ -4,7 +4,6 @@ sqlalchemy
 alembic
 python-dotenv
 psycopg2-binary
-psycopg[binary]
 PyJWT
 passlib
 argon2-cffi
