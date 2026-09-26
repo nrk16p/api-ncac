@@ -19,10 +19,14 @@ if not DATABASE_URL:
 
 
 def _use_psycopg2(url):
-    """URL แบบใหม่ postgresql+psycopg:// ต้องใช้ psycopg v3 ซึ่งไม่ได้ติดตั้ง —
-    แปลงให้ใช้ psycopg2 (psycopg2-binary ใน requirements.txt) แทน"""
-    if url and url.startswith("postgresql+psycopg://"):
-        return "postgresql+psycopg2://" + url[len("postgresql+psycopg://"):]
+    """ระบุ driver psycopg2 ให้ชัด — SQLAlchemy 2.1 เปลี่ยน default ของ postgresql://
+    จาก psycopg2 เป็น psycopg (v3) ซึ่งไม่ได้ติดตั้ง (requirements.txt มีแค่
+    psycopg2-binary) ทำให้ deploy ล้มด้วย No module named 'psycopg'"""
+    if not url:
+        return url
+    for prefix in ("postgresql+psycopg://", "postgresql://", "postgres://"):
+        if url.startswith(prefix):
+            return "postgresql+psycopg2://" + url[len(prefix):]
     return url
 
 
