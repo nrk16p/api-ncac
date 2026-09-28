@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
@@ -39,6 +39,7 @@ class PayIn(_Body):
     amount_paid: Decimal = Field(max_digits=12, decimal_places=2)
     transfer_date: date
     clear_due_date: Optional[date] = None
+    is_edit: bool = False
 
 
 class ClearIn(_Body):
@@ -53,8 +54,10 @@ class ClearIn(_Body):
 class SendBackIn(_Body):
     action_by: str
     review_remark: str
+    expected_clear_submitted_at: Optional[datetime] = None
 
 
 class ConfirmIn(_Body):
     action_by: str
     settle_date: Optional[date] = None
+    expected_clear_submitted_at: Optional[datetime] = None

@@ -62,7 +62,11 @@ def create_account(body: AccountCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=409, detail="รหัสบัญชีนี้มีอยู่แล้ว")
     acc = FinAccount(acc_code=body.acc_code, acc_name=body.acc_name, acc_name_en=body.acc_name_en, is_active=True)
     db.add(acc)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="รหัสบัญชีนี้มีอยู่แล้ว")
     return _account_dict(acc)
 
 
@@ -165,7 +169,8 @@ def pay_advance(form_id: str, body: PayIn, db: Session = Depends(get_db)):
     account = db.get(FinAccount, body.acc_code)
     try:
         due = logic.check_pay(status, acc_active=bool(account and account.is_active), amount_paid=body.amount_paid,
-                              transfer_date=body.transfer_date, clear_due_date=body.clear_due_date)
+                              transfer_date=body.transfer_date, clear_due_date=body.clear_due_date,
+                              is_edit=body.is_edit)
     except logic.AdvanceRuleError as exc:
         raise _rule_error(exc)
 
@@ -218,6 +223,7 @@ def send_back_advance(form_id: str, body: SendBackIn, db: Session = Depends(get_
     require_finance(db, body.action_by)
     _, adv, status = _load_for_update(db, form_id)
     try:
+        logic.check_fresh(body.expected_clear_submitted_at, adv.clear_submitted_at if adv is not None else None)
         logic.check_send_back(status, review_remark=body.review_remark)
     except logic.AdvanceRuleError as exc:
         raise _rule_error(exc)
@@ -233,6 +239,7 @@ def confirm_advance(form_id: str, body: ConfirmIn, db: Session = Depends(get_db)
     require_finance(db, body.action_by)
     _, adv, status = _load_for_update(db, form_id)
     try:
+        logic.check_fresh(body.expected_clear_submitted_at, adv.clear_submitted_at if adv is not None else None)
         extra_paid_on = logic.check_confirm(status, settle_amount=adv.settle_amount if adv is not None else None,
                                             settle_date=body.settle_date)
     except logic.AdvanceRuleError as exc:

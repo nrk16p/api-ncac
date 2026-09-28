@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 import pytest
@@ -71,7 +71,18 @@ class TestCheckPay:
         assert self._pay(clear_due_date=date(2026, 7, 20)) == date(2026, 7, 20)
 
     def test_edit_allowed_while_awaiting_clearing(self):
-        assert self._pay(L.AWAITING_CLEARING) == date(2026, 7, 16)
+        assert self._pay(L.AWAITING_CLEARING, is_edit=True) == date(2026, 7, 16)
+
+    def test_create_ok_when_awaiting_payment_not_edit(self):
+        assert self._pay(L.AWAITING_PAYMENT, is_edit=False) == date(2026, 7, 16)
+
+    def test_rejects_stale_edit_when_still_awaiting_payment(self):
+        with pytest.raises(L.InvalidTransition):
+            self._pay(L.AWAITING_PAYMENT, is_edit=True)
+
+    def test_rejects_create_when_already_awaiting_clearing(self):
+        with pytest.raises(L.InvalidTransition):
+            self._pay(L.AWAITING_CLEARING, is_edit=False)
 
     @pytest.mark.parametrize("status", [L.PENDING_APPROVAL, L.REJECTED, L.SENT_BACK, L.AWAITING_REVIEW, L.CLOSED])
     def test_rejects_other_statuses(self, status):
@@ -135,6 +146,22 @@ class TestCheckClear:
     def test_rejects_negative_actual(self):
         with pytest.raises(L.AdvanceRuleError):
             self._clear(amount_actual=Decimal("-5"))
+
+
+class TestCheckFresh:
+    def test_equal_aware_datetimes_pass(self):
+        dt = datetime(2026, 7, 15, 3, 0, tzinfo=timezone.utc)
+        assert L.check_fresh(dt, dt) is None
+
+    def test_different_raises(self):
+        expected = datetime(2026, 7, 15, 3, 0, tzinfo=timezone.utc)
+        actual = datetime(2026, 7, 15, 4, 0, tzinfo=timezone.utc)
+        with pytest.raises(L.InvalidTransition):
+            L.check_fresh(expected, actual)
+
+    def test_expected_none_passes(self):
+        actual = datetime(2026, 7, 15, 3, 0, tzinfo=timezone.utc)
+        assert L.check_fresh(None, actual) is None
 
 
 class TestReview:

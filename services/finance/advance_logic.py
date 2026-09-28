@@ -96,8 +96,12 @@ def _require_status(current, allowed, action):
         )
 
 
-def check_pay(status, *, acc_active, amount_paid, transfer_date, clear_due_date):
+def check_pay(status, *, acc_active, amount_paid, transfer_date, clear_due_date, is_edit: bool = False):
     _require_status(status, (AWAITING_PAYMENT, AWAITING_CLEARING), "บันทึกการจ่ายเงิน")
+    if status == AWAITING_PAYMENT and is_edit:
+        raise InvalidTransition("ยังไม่มีข้อมูลการจ่ายให้แก้ไข กรุณารีเฟรชหน้าจอ")
+    if status == AWAITING_CLEARING and not is_edit:
+        raise InvalidTransition("รายการนี้ถูกบันทึกการจ่ายไปแล้ว กรุณารีเฟรชหน้าจอ")
     _require(acc_active, "กรุณาเลือกรหัสบัญชีที่ใช้งานอยู่")
     _require(amount_paid is not None and Decimal(amount_paid) >= 0, "ยอดเงินต้องไม่ติดลบ")
     _require(transfer_date is not None, "กรุณาระบุวันที่โอนเงิน")
@@ -122,6 +126,12 @@ def check_clear(status, *, is_owner, amount_paid, clear_date, amount_actual, set
 def check_send_back(status, *, review_remark):
     _require_status(status, (AWAITING_REVIEW,), "ส่งกลับแก้ไข")
     _require(bool(review_remark and review_remark.strip()), "กรุณาระบุเหตุผลที่ส่งกลับ")
+
+
+def check_fresh(expected, actual):
+    """Optimistic check: the clearing Finance reviewed must be the one stored now."""
+    if expected is not None and actual is not None and expected != actual:
+        raise InvalidTransition("ข้อมูลเคลียร์ถูกแก้ไขหลังจากเปิดหน้านี้ กรุณารีเฟรชหน้าจอ")
 
 
 def check_confirm(status, *, settle_amount, settle_date):
