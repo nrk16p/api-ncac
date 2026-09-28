@@ -6,6 +6,7 @@ from typing import List, Optional
 from models.user_model import User ,Position
 from services.email_service import send_email, render_form_submit_th, render_form_done_th
 from services.line_service import send_line_message
+from services.notify_guard import notifications_enabled
 from database import get_db
 from models.master_model import (
     FormMaster, FormQuestion, FormSubmission,
@@ -16,6 +17,18 @@ from schemas.form_schema import FormSubmissionCreate, FormResponse, FormValueRes
 from routes.forms.form_approval_routes import can_user_approve, get_applicable_rule_with_fallback
 from zoneinfo import ZoneInfo
 router = APIRouter(prefix="/forms", tags=["Forms - Submission"])
+
+def _submit_response(submission, form):
+    return {
+        "message": "Form submitted",
+        "submission_id": submission.id,
+        "form_id": submission.form_id,
+        "form_master_id": form.id,
+        "form_version": form.version,
+        "status": submission.status,
+        "status_approve": submission.status_approve,
+        "current_approval_level": submission.current_approval_level,
+    }
 
 # ----------------------------
 # LOG: Status Change
@@ -257,6 +270,9 @@ def submit_form(
         db.commit()
         db.refresh(submission)
 
+        if not notifications_enabled(form):
+            return _submit_response(submission, form)
+
         # =====================================================
         # ✉️ SEND EMAIL AFTER SUCCESS
         # =====================================================
@@ -352,16 +368,7 @@ def submit_form(
         )
         background_tasks.add_task(send_line_message, line_message)
 
-        return {
-            "message": "Form submitted",
-            "submission_id": submission.id,
-            "form_id": submission.form_id,
-            "form_master_id": form.id,
-            "form_version": form.version,
-            "status": submission.status,
-            "status_approve": submission.status_approve,
-            "current_approval_level": submission.current_approval_level
-        }
+        return _submit_response(submission, form)
 
     except Exception as e:
         db.rollback()
@@ -418,7 +425,7 @@ def update_status(
         # =====================================================
         # ✉️ Send Email ONLY when Done
         # =====================================================
-        if new_status == "Done":
+        if new_status == "Done" and notifications_enabled(submission.form):
 
             creator = db.query(User).filter(
                 User.employee_id == submission.created_by

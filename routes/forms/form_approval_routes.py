@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from database import get_db
 from fastapi import BackgroundTasks
 from services.email_service import render_form_rejected_th ,  send_email , render_form_approved_th
+from services.notify_guard import notifications_enabled
 
 from models.master_model import (
     FormSubmission,
@@ -404,7 +405,7 @@ def approve_submission(
         submission.status_approve = "Approved"
 
     db.commit()
-    if submission.status_approve == "Approved":
+    if submission.status_approve == "Approved" and notifications_enabled(submission.form):
 
         creator = db.query(User).filter(
             User.employee_id == submission.created_by
@@ -503,7 +504,7 @@ def reject_submission(
         User.employee_id == submission.created_by
     ).first()
 
-    if creator and creator.email:
+    if creator and creator.email and notifications_enabled(submission.form):
 
         body = render_form_rejected_th({
             "form_id": submission.form_id,
