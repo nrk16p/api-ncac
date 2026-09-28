@@ -5,11 +5,12 @@ fin_advances row. See menait-service docs/superpowers/specs/2026-09-28-finance-a
 """
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Iterable, Mapping
 
 CLEAR_DUE_DAYS = 7
+USE_DATE_MESSAGE = "วันที่ใช้เงินต้องเป็นวันนี้หรือหลังจากนี้"
 
 PENDING_APPROVAL = "PENDING_APPROVAL"
 REJECTED = "REJECTED"
@@ -188,3 +189,38 @@ def diff_fields(before: Mapping, after: Mapping):
         if old != new:
             changes[field] = [_jsonable(old), _jsonable(new)]
     return changes
+
+
+def check_use_date(use_date, today):
+    """use_date: date | datetime | None. None → no check (required-ness is enforced elsewhere)."""
+    if use_date is None:
+        return
+    day = use_date.date() if isinstance(use_date, datetime) else use_date
+    if day < today:
+        raise AdvanceRuleError(USE_DATE_MESSAGE)
+
+
+def find_use_date(questions, values):
+    """questions: dicts {id, name, type, sort_order}; values: dicts {question_id, value_date}.
+    Picks the adv_use_date question by name, falling back to the first datetime/date question
+    by sort_order, and returns its value as a date (accepts date, datetime or 'YYYY-MM-DD…' str), else None."""
+    ordered = sorted(questions, key=lambda q: q.get("sort_order") or 0)
+    question = next((q for q in ordered if q.get("name") == "adv_use_date"), None)
+    if question is None:
+        question = next((q for q in ordered if q.get("type") in ("datetime", "date")), None)
+    if question is None:
+        return None
+    row = next((v for v in values if v.get("question_id") == question.get("id")), None)
+    if row is None:
+        return None
+    raw = row.get("value_date")
+    if isinstance(raw, datetime):
+        return raw.date()
+    if isinstance(raw, date):
+        return raw
+    if isinstance(raw, str):
+        try:
+            return datetime.fromisoformat(raw).date()
+        except ValueError:
+            return None
+    return None

@@ -6,7 +6,8 @@ from typing import List, Optional
 from models.user_model import User ,Position
 from services.email_service import send_email, render_form_submit_th, render_form_done_th
 from services.line_service import send_line_message
-from services.notify_guard import notifications_enabled
+from services.notify_guard import ADVANCE_FORM_TYPE, notifications_enabled
+from services.finance import advance_logic
 from database import get_db
 from models.master_model import (
     FormMaster, FormQuestion, FormSubmission,
@@ -196,6 +197,17 @@ def submit_form(
 
     if not form:
         raise HTTPException(status_code=404, detail="Active form not found")
+
+    if form.form_type == ADVANCE_FORM_TYPE:
+        use_date = advance_logic.find_use_date(
+            [{"id": q.id, "name": q.question_name, "type": q.question_type, "sort_order": q.sort_order}
+             for q in form.questions],
+            [{"question_id": v.question_id, "value_date": v.value_date} for v in payload.values],
+        )
+        try:
+            advance_logic.check_use_date(use_date, datetime.now(ZoneInfo("Asia/Bangkok")).date())
+        except advance_logic.AdvanceRuleError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
 
     try:
 

@@ -1,4 +1,4 @@
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -237,3 +237,59 @@ class TestDiffFields:
 
     def test_new_row_lists_everything(self):
         assert L.diff_fields({}, {"amount_paid": Decimal("5")}) == {"amount_paid": [None, "5"]}
+
+
+class TestCheckUseDate:
+    def test_today_passes(self):
+        assert L.check_use_date(TODAY, TODAY) is None
+
+    def test_tomorrow_passes(self):
+        assert L.check_use_date(TODAY + timedelta(days=1), TODAY) is None
+
+    def test_yesterday_raises(self):
+        with pytest.raises(L.AdvanceRuleError) as exc_info:
+            L.check_use_date(TODAY - timedelta(days=1), TODAY)
+        assert str(exc_info.value) == L.USE_DATE_MESSAGE
+
+    def test_datetime_at_midnight_today_passes(self):
+        assert L.check_use_date(datetime(2026, 9, 28, 0, 0), TODAY) is None
+
+    def test_none_passes(self):
+        assert L.check_use_date(None, TODAY) is None
+
+
+class TestFindUseDate:
+    QUESTIONS = [
+        {"id": 1, "name": "adv_purpose", "type": "longtext", "sort_order": 1},
+        {"id": 2, "name": "adv_amount", "type": "number", "sort_order": 2},
+        {"id": 3, "name": "adv_use_date", "type": "datetime", "sort_order": 3},
+    ]
+
+    def test_picks_by_name(self):
+        values = [{"question_id": 3, "value_date": date(2026, 9, 30)}]
+        assert L.find_use_date(self.QUESTIONS, values) == date(2026, 9, 30)
+
+    def test_falls_back_by_type_when_renamed(self):
+        renamed = [dict(q, name=f"q{q['id']}") for q in self.QUESTIONS]
+        values = [{"question_id": 3, "value_date": date(2026, 9, 30)}]
+        assert L.find_use_date(renamed, values) == date(2026, 9, 30)
+
+    def test_parses_date_string(self):
+        values = [{"question_id": 3, "value_date": "2026-09-30"}]
+        assert L.find_use_date(self.QUESTIONS, values) == date(2026, 9, 30)
+
+    def test_parses_datetime_string(self):
+        values = [{"question_id": 3, "value_date": "2026-09-30T00:00:00"}]
+        assert L.find_use_date(self.QUESTIONS, values) == date(2026, 9, 30)
+
+    def test_datetime_value(self):
+        values = [{"question_id": 3, "value_date": datetime(2026, 9, 30, 13, 45)}]
+        assert L.find_use_date(self.QUESTIONS, values) == date(2026, 9, 30)
+
+    def test_none_when_no_matching_question(self):
+        no_date_questions = [q for q in self.QUESTIONS if q["type"] != "datetime"]
+        values = [{"question_id": 3, "value_date": date(2026, 9, 30)}]
+        assert L.find_use_date(no_date_questions, values) is None
+
+    def test_none_when_no_value(self):
+        assert L.find_use_date(self.QUESTIONS, []) is None
