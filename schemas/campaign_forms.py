@@ -149,8 +149,7 @@ class PublicFormOut(BaseModel):
 
 class AnswerSubmit(BaseModel):
     respondent: str = Field(..., max_length=200)
-    drivercode: Optional[str] = Field(None, max_length=50)
-    line_user_id: Optional[str] = Field(None, max_length=100)
+    drivercode: Optional[str] = Field(None, max_length=50, description="ใช้ระบุคนเดิม — ส่งซ้ำจะแก้คำตอบเดิม")
     campaign_id: Optional[str] = Field(None, max_length=100, description="แคมเปญที่เปิดฟอร์มนี้")
     answers: Dict[str, Any] = Field(default_factory=dict, description="key = question id")
 
@@ -162,7 +161,7 @@ class AnswerSubmit(BaseModel):
             raise ValueError("ต้องมีชื่อผู้ตอบ")
         return v
 
-    @field_validator("drivercode", "line_user_id", "campaign_id")
+    @field_validator("drivercode", "campaign_id")
     @classmethod
     def _blank_to_none(cls, v: Optional[str]) -> Optional[str]:
         return _clean_text(v) or None
@@ -173,7 +172,6 @@ class AnswerOut(BaseModel):
     form_id: str
     respondent: str
     drivercode: Optional[str] = None
-    line_user_id: Optional[str] = None
     campaign_id: Optional[str] = None
     submitted_at: datetime
     answers: Dict[str, Any]
@@ -183,3 +181,4 @@ class AnswerSubmitResult(BaseModel):
     id: str
     form_id: str
     submitted_at: datetime
+    updated: bool = Field(False, description="true = แก้คำตอบเดิมของคนนี้ ไม่ได้เพิ่มรายการใหม่")

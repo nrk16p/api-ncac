@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from bson import ObjectId
-from fastapi import APIRouter, HTTPException, Path, Query
+from fastapi import APIRouter, HTTPException, Path, Query, Response
 from pymongo import DESCENDING
 from pymongo.collection import Collection
 from pymongo.errors import DuplicateKeyError, PyMongoError
@@ -68,6 +68,17 @@ def ensure_indexes() -> None:
     db[FORMS].create_index([("form_id", 1)], unique=True, name="uniq_form_id")
     db[ANSWERS].create_index([("form_id", 1), ("submitted_at", DESCENDING)], name="form_submitted_desc")
     db[LOGS].create_index([("form_id", 1), ("timestamp", DESCENDING)], name="form_timestamp_desc")
+    # คนขับ 1 คนมีคำตอบได้รายการเดียวต่อฟอร์ม — กันกดส่งซ้ำพร้อมกันแล้วได้ 2 รายการ
+    # ถ้ามีข้อมูลซ้ำค้างอยู่ index นี้จะสร้างไม่ได้ (log warning) แต่ index อื่นยังใช้งานได้ตามปกติ
+    try:
+        db[ANSWERS].create_index(
+            [("form_id", 1), ("drivercode", 1)],
+            unique=True,
+            partialFilterExpression={"drivercode": {"$type": "string"}},
+            name="uniq_form_drivercode",
+        )
+    except DuplicateKeyError:
+        logger.warning("campaign_forms: forms_answer has duplicate drivercode per form — uniq index skipped")
 
 
 def _col(name: str) -> Collection:
@@ -502,27 +513,57 @@ def get_public_form(form_id: str = Path(..., description="ไอดีที่�
     }
 
 
+def _respondent_filter(form_id: str, payload: AnswerSubmit) -> Optional[Dict[str, Any]]:
+    """คนเดิม = drivercode เดิม — ไม่มี drivercode ระบุตัวไม่ได้ ต้องเก็บเป็นรายการใหม่"""
+    if payload.drivercode:
+        return {"form_id": form_id, "drivercode": payload.drivercode}
+    return None
+
+
 @public_router.post("/{form_id}/answers", response_model=AnswerSubmitResult, status_code=201)
-def submit_answers(payload: AnswerSubmit, form_id: str = Path(...)):
-    """ส่งคำตอบ — ตรวจตามประเภทคำถามและข้อบังคับตอบ backend ใส่ submitted_at เอง"""
+@public_router.put("/{form_id}/answers", response_model=AnswerSubmitResult, status_code=201)
+def submit_answers(payload: AnswerSubmit, response: Response, form_id: str = Path(...)):
+    """
+    ส่งคำตอบ — ตรวจตามประเภทคำถามและข้อบังคับตอบ backend ใส่ submitted_at เอง
+    คนที่เคยส่งฟอร์มนี้แล้วจะแก้รายการเดิมแทนการเพิ่มใหม่ (ตอบ 200 + updated=true) ส่วนครั้งแรกตอบ 201
+    """
     form_id = _normalize_form_id(form_id)
     doc = _get_form(form_id, public=True)
     answers = _validate_answers(doc["questions"], payload.answers)
 
     submitted_at = _now()
-    answer_doc = {
-        "_id": ObjectId(),
-        "form_id": form_id,
+    fields = {
         "respondent": payload.respondent,
         "drivercode": payload.drivercode,
-        "line_user_id": payload.line_user_id,
         "campaign_id": payload.campaign_id,
         "submitted_at": submitted_at,
         "answers": answers,
     }
+    col = _col(ANSWERS)
+    new_id = ObjectId()
+    query = _respondent_filter(form_id, payload)
+
     try:
-        _col(ANSWERS).insert_one(answer_doc)
+        if query is None:
+            col.insert_one({"_id": new_id, "form_id": form_id, "first_submitted_at": submitted_at, **fields})
+            before = None
+        else:
+            update = {"$set": fields, "$setOnInsert": {"_id": new_id, "first_submitted_at": submitted_at}}
+            try:
+                before = col.find_one_and_update(
+                    query, update, sort=[("submitted_at", DESCENDING)], upsert=True, projection={"_id": 1}
+                )
+            except DuplicateKeyError:
+                # กดส่งซ้ำพร้อมกัน — อีก request เพิ่งสร้างรายการไป รอบนี้จึงเป็นการแก้รายการนั้น
+                before = col.find_one_and_update(query, {"$set": fields}, projection={"_id": 1})
     except PyMongoError as exc:
         raise _mongo_error(exc) from exc
 
-    return {"id": str(answer_doc["_id"]), "form_id": form_id, "submitted_at": submitted_at}
+    updated = before is not None
+    response.status_code = 200 if updated else 201
+    return {
+        "id": str(before["_id"] if updated else new_id),
+        "form_id": form_id,
+        "submitted_at": submitted_at,
+        "updated": updated,
+    }
