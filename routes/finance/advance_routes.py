@@ -8,12 +8,14 @@ from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from database import get_db
-from models.finance_model import FinAccount
+from models.finance_model import FinAccount, FinAdvance, FinAdvanceLog
 from models.user_model import User
-from schemas.finance_schema import AccountCreate, AccountUpdate
+from schemas.finance_schema import AccountCreate, AccountUpdate, ClearIn, ConfirmIn, PayIn, SendBackIn
 from services.finance import advance_logic as logic
 from services.finance import advance_repo as repo
 
@@ -105,3 +107,142 @@ def get_advance(form_id: str, db: Session = Depends(get_db)):
     if detail is None:
         raise HTTPException(status_code=404, detail="ไม่พบรายการเบิกเงิน")
     return detail
+
+
+# ---------------------------- advances (write) ----------------------------
+
+PAY_FIELDS = ("acc_code", "voucher_no", "voucher_date", "payment_doc_no", "purpose",
+              "amount_paid", "transfer_date", "clear_due_date")
+CLEAR_FIELDS = ("clear_date", "amount_actual", "clear_doc_no", "settle_amount", "settle_date", "remark")
+
+_ALREADY_SAVED = "รายการนี้ถูกบันทึกไปแล้ว กรุณารีเฟรชหน้าจอ"
+
+
+def _snapshot(adv, fields):
+    return {field: getattr(adv, field) for field in fields} if adv is not None else {}
+
+
+def _pay_values(body, due):
+    return {
+        "acc_code": body.acc_code,
+        "voucher_no": body.voucher_no,
+        "voucher_date": body.voucher_date,
+        "payment_doc_no": body.payment_doc_no,
+        "purpose": body.purpose,
+        "amount_paid": body.amount_paid,
+        "transfer_date": body.transfer_date,
+        "clear_due_date": due,
+    }
+
+
+def _load_for_update(db: Session, form_id: str):
+    sub = repo.get_advance_submission(db, form_id)
+    if sub is None:
+        raise HTTPException(status_code=404, detail="ไม่พบรายการเบิกเงิน")
+    adv = db.query(FinAdvance).filter(FinAdvance.submission_id == sub.id).with_for_update().first()
+    status, _ = logic.derive_status(
+        sub.status_approve,
+        adv.fin_status if adv is not None else None,
+        adv.clear_due_date if adv is not None else None,
+        repo.today_bkk(),
+    )
+    return sub, adv, status
+
+
+def _commit_and_return(db: Session, form_id: str):
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=_ALREADY_SAVED)
+    return repo.get_advance_detail(db, form_id)
+
+
+@router.put("/advances/{form_id}/pay")
+def pay_advance(form_id: str, body: PayIn, db: Session = Depends(get_db)):
+    require_finance(db, body.action_by)
+    sub, adv, status = _load_for_update(db, form_id)
+    account = db.get(FinAccount, body.acc_code)
+    try:
+        due = logic.check_pay(status, acc_active=bool(account and account.is_active), amount_paid=body.amount_paid,
+                              transfer_date=body.transfer_date, clear_due_date=body.clear_due_date)
+    except logic.AdvanceRuleError as exc:
+        raise _rule_error(exc)
+
+    values = _pay_values(body, due)
+    before = _snapshot(adv, PAY_FIELDS)
+    action = "PAY_EDIT" if adv is not None else "PAY"
+    if adv is None:
+        adv = FinAdvance(submission_id=sub.id, form_id=sub.form_id, fin_status=logic.FIN_PAID,
+                         paid_by=body.action_by, paid_at=func.now())
+        db.add(adv)
+    for field, value in values.items():
+        setattr(adv, field, value)
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=_ALREADY_SAVED)
+    db.add(FinAdvanceLog(advance_id=adv.id, action=action, changes=logic.diff_fields(before, values),
+                         action_by=body.action_by))
+    return _commit_and_return(db, form_id)
+
+
+@router.put("/advances/{form_id}/clear")
+def clear_advance(form_id: str, body: ClearIn, db: Session = Depends(get_db)):
+    sub, adv, status = _load_for_update(db, form_id)
+    if adv is None:
+        raise HTTPException(status_code=409, detail="การเงินยังไม่ได้จ่ายเงิน จึงยังเคลียร์ไม่ได้")
+    try:
+        settle, settle_date = logic.check_clear(
+            status, is_owner=(body.action_by == sub.created_by), amount_paid=adv.amount_paid,
+            clear_date=body.clear_date, amount_actual=body.amount_actual, settle_date=body.settle_date)
+    except logic.AdvanceRuleError as exc:
+        raise _rule_error(exc)
+
+    values = {"clear_date": body.clear_date, "amount_actual": body.amount_actual, "clear_doc_no": body.clear_doc_no,
+              "settle_amount": settle, "settle_date": settle_date, "remark": body.remark}
+    before = _snapshot(adv, CLEAR_FIELDS)
+    action = "CLEAR_EDIT" if status == logic.AWAITING_REVIEW else "CLEAR_SUBMIT"
+    for field, value in values.items():
+        setattr(adv, field, value)
+    adv.fin_status = logic.FIN_CLEARING_SUBMITTED
+    adv.clear_submitted_at = func.now()
+    db.add(FinAdvanceLog(advance_id=adv.id, action=action, changes=logic.diff_fields(before, values),
+                         remark=body.remark, action_by=body.action_by))
+    return _commit_and_return(db, form_id)
+
+
+@router.put("/advances/{form_id}/send-back")
+def send_back_advance(form_id: str, body: SendBackIn, db: Session = Depends(get_db)):
+    require_finance(db, body.action_by)
+    _, adv, status = _load_for_update(db, form_id)
+    try:
+        logic.check_send_back(status, review_remark=body.review_remark)
+    except logic.AdvanceRuleError as exc:
+        raise _rule_error(exc)
+    adv.fin_status = logic.FIN_SENT_BACK
+    adv.review_remark = body.review_remark
+    db.add(FinAdvanceLog(advance_id=adv.id, action="SEND_BACK", remark=body.review_remark,
+                         action_by=body.action_by))
+    return _commit_and_return(db, form_id)
+
+
+@router.put("/advances/{form_id}/confirm")
+def confirm_advance(form_id: str, body: ConfirmIn, db: Session = Depends(get_db)):
+    require_finance(db, body.action_by)
+    _, adv, status = _load_for_update(db, form_id)
+    try:
+        extra_paid_on = logic.check_confirm(status, settle_amount=adv.settle_amount if adv is not None else None,
+                                            settle_date=body.settle_date)
+    except logic.AdvanceRuleError as exc:
+        raise _rule_error(exc)
+    changes = {}
+    if extra_paid_on is not None:
+        changes = logic.diff_fields({"settle_date": adv.settle_date}, {"settle_date": extra_paid_on})
+        adv.settle_date = extra_paid_on
+    adv.fin_status = logic.FIN_CLOSED
+    adv.closed_by = body.action_by
+    adv.closed_at = func.now()
+    db.add(FinAdvanceLog(advance_id=adv.id, action="CONFIRM", changes=changes or None, action_by=body.action_by))
+    return _commit_and_return(db, form_id)
