@@ -17,6 +17,11 @@ def today_bkk() -> date:
     return datetime.now(BKK).date()
 
 
+def bkk_day_start_utc(day: date) -> datetime:
+    """00:00 Bangkok on `day`, as a naive UTC datetime (ncacdb stores naive UTC)."""
+    return datetime.combine(day, time.min, tzinfo=BKK).astimezone(timezone.utc).replace(tzinfo=None)
+
+
 def _iso(value):
     if value is None:
         return None
@@ -159,9 +164,9 @@ def list_advances(db, *, status=None, overdue=None, employee_id=None, acc_code=N
     if acc_code:
         query = query.filter(FinAdvance.acc_code == acc_code)
     if date_from:
-        query = query.filter(FormSubmission.created_at >= datetime.combine(date_from, time.min))
+        query = query.filter(FormSubmission.created_at >= bkk_day_start_utc(date_from))
     if date_to:
-        query = query.filter(FormSubmission.created_at < datetime.combine(date_to + timedelta(days=1), time.min))
+        query = query.filter(FormSubmission.created_at < bkk_day_start_utc(date_to + timedelta(days=1)))
     rows = query.order_by(FormSubmission.id.desc()).all()
 
     requests = request_values_by_submission(db, [sub.id for sub, _ in rows])

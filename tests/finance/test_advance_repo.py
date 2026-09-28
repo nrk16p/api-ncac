@@ -48,3 +48,7 @@ def test_unknown_requester_falls_back_to_employee_id():
     assert item["requester"] == {"employee_id": "670001", "name": None, "department": None,
                                  "site": None, "site_code": None}
     assert item["request"] == {"purpose": None, "amount": None, "use_date": None}
+
+
+def test_bkk_day_start_is_previous_utc_evening():
+    assert repo.bkk_day_start_utc(date(2026, 7, 9)) == datetime(2026, 7, 8, 17, 0)
