@@ -21,3 +21,6 @@ from .drivingdistance_model import DrivingDistance
 # complaint_master ต้องอยู่ใน metadata ตอน main.py เรียก Base.metadata.create_all()
 # (บรรทัดนั้นรันก่อน import routes ตารางที่รู้จักผ่าน routes อย่างเดียวจึงไม่ถูกสร้าง)
 from .complaint_master import ComplaintMaster
+
+# Finance — เบิกเงิน Advance (ต้องอยู่ใน metadata ก่อน main.py เรียก create_all)
+from .finance_model import FinAccount, FinAdvance, FinAdvanceLog
