@@ -5,6 +5,7 @@ fin_advances row. See menait-service docs/superpowers/specs/2026-09-28-finance-a
 """
 from __future__ import annotations
 
+import re
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Iterable, Mapping
@@ -115,7 +116,7 @@ def check_clear(status, *, is_owner, amount_paid, clear_date, amount_actual, set
     if not is_owner:
         raise NotAllowed("เฉพาะผู้เบิกเงินเท่านั้นที่บันทึกการเคลียร์ได้")
     _require_status(status, (AWAITING_CLEARING, SENT_BACK, AWAITING_REVIEW), "เคลียร์เงิน")
-    _require(clear_date is not None, "กรุณาระบุวันที่เคลียร์")
+    _require(clear_date is not None, "กรุณาระบุวันที่ส่งเอกสารเคลียร์")
     _require(amount_actual is not None and Decimal(amount_actual) >= 0, "ยอดใช้จริงต้องไม่ติดลบ")
     settle = compute_settle_amount(amount_paid, amount_actual)
     if settle > 0:
@@ -153,13 +154,18 @@ def is_finance_user(department_id, employee_id, dept_ids: Iterable[int], employe
     return employee_id is not None and employee_id in set(employee_ids)
 
 
-# key → (question_name, accepted question types when the name is missing)
+# key → (question_name, accepted question types when the name is missing; () = by name only)
 _REQUEST_FIELDS = {
     "purpose": ("adv_purpose", ("longtext", "text")),
     "amount": ("adv_amount", ("number",)),
     "use_date": ("adv_use_date", ("datetime", "date")),
+    "cost_center": ("adv_cost_center", ()),
+    "bank": ("adv_bank", ()),
+    "account_no": ("adv_account_no", ()),
+    "account_name": ("adv_account_name", ()),
 }
-_ROW_VALUE_KEY = {"purpose": "text", "amount": "number", "use_date": "date"}
+_ROW_VALUE_KEY = {"purpose": "text", "amount": "number", "use_date": "date", "cost_center": "text",
+                  "bank": "text", "account_no": "text", "account_name": "text"}
 
 
 def pick_request_values(rows):
@@ -224,3 +230,60 @@ def find_use_date(questions, values):
         except ValueError:
             return None
     return None
+
+
+# ---------------------------- payee bank account (spec v2 §4.2) ----------------------------
+# value → (Thai label, allowed digit counts). Keep identical to menait-service lib/finance/bank.ts.
+DEFAULT_ACCOUNT_DIGITS = (10, 11, 12)
+BANKS = {
+    "BBL": ("ธนาคารกรุงเทพ", (10,)),
+    "KBANK": ("ธนาคารกสิกรไทย", (10,)),
+    "KTB": ("ธนาคารกรุงไทย", (10,)),
+    "SCB": ("ธนาคารไทยพาณิชย์", (10,)),
+    "BAY": ("ธนาคารกรุงศรีอยุธยา", (10,)),
+    "TTB": ("ธนาคารทหารไทยธนชาต", (10,)),
+    "GSB": ("ธนาคารออมสิน", (12,)),
+    "BAAC": ("ธ.ก.ส.", (12,)),
+    "GHB": ("ธนาคารอาคารสงเคราะห์", (12,)),
+    "UOB": ("ธนาคารยูโอบี", DEFAULT_ACCOUNT_DIGITS),
+    "CIMBT": ("ธนาคารซีไอเอ็มบี ไทย", DEFAULT_ACCOUNT_DIGITS),
+    "LHB": ("ธนาคารแลนด์ แอนด์ เฮ้าส์", DEFAULT_ACCOUNT_DIGITS),
+    "KKP": ("ธนาคารเกียรตินาคินภัทร", DEFAULT_ACCOUNT_DIGITS),
+    "TISCO": ("ธนาคารทิสโก้", DEFAULT_ACCOUNT_DIGITS),
+    "ICBCT": ("ธนาคารไอซีบีซี (ไทย)", DEFAULT_ACCOUNT_DIGITS),
+    "IBANK": ("ธนาคารอิสลามแห่งประเทศไทย", DEFAULT_ACCOUNT_DIGITS),
+}
+_ASCII_DIGITS = re.compile(r"[0-9]+")
+
+
+def normalize_account_no(raw) -> str:
+    return re.sub(r"[\s-]", "", str(raw)) if raw is not None else ""
+
+
+def bank_label(value):
+    if not value:
+        return None
+    return BANKS.get(value, (value,))[0]
+
+
+def check_account_no(bank, raw) -> str:
+    label, counts = BANKS.get(bank or "", (bank or "ธนาคาร", DEFAULT_ACCOUNT_DIGITS))
+    digits = normalize_account_no(raw)
+    if not _ASCII_DIGITS.fullmatch(digits) or len(digits) not in counts:
+        count_text = f"{counts[0]}" if len(counts) == 1 else f"{counts[0]}–{counts[-1]}"
+        raise AdvanceRuleError(f"เลขที่บัญชีไม่ถูกต้อง: {label} ต้องเป็นตัวเลข {count_text} หลัก")
+    return digits
+
+
+def submitted_value(questions, values, name, types, key):
+    """questions: dicts {id, name, type, sort_order}; values: dicts {question_id, value_text, value_number,
+    value_date}. Picks the question by name, else the first by sort_order whose type is in `types`, and
+    returns that value's `key` (or None)."""
+    ordered = sorted(questions, key=lambda q: q.get("sort_order") or 0)
+    question = next((q for q in ordered if q.get("name") == name), None)
+    if question is None:
+        question = next((q for q in ordered if q.get("type") in types), None)
+    if question is None:
+        return None
+    row = next((v for v in values if v.get("question_id") == question.get("id")), None)
+    return row.get(key) if row else None

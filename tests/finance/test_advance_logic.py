@@ -217,15 +217,28 @@ class TestPickRequestValues:
     ]
 
     def test_by_question_name(self):
-        assert L.pick_request_values(self.ROWS) == {
-            "purpose": "ค่าเดินทาง", "amount": Decimal("4840"), "use_date": datetime(2026, 7, 14)}
+        result = L.pick_request_values(self.ROWS)
+        assert result["purpose"] == "ค่าเดินทาง"
+        assert result["amount"] == Decimal("4840")
+        assert result["use_date"] == datetime(2026, 7, 14)
+        assert result["cost_center"] is None
+        assert result["bank"] is None
+        assert result["account_no"] is None
+        assert result["account_name"] is None
 
     def test_falls_back_to_type_when_renamed(self):
         renamed = [dict(r, name=f"q{i}") for i, r in enumerate(self.ROWS)]
         assert L.pick_request_values(renamed)["amount"] == Decimal("4840")
 
     def test_missing_values_are_none(self):
-        assert L.pick_request_values([]) == {"purpose": None, "amount": None, "use_date": None}
+        result = L.pick_request_values([])
+        assert result["purpose"] is None
+        assert result["amount"] is None
+        assert result["use_date"] is None
+        assert result["cost_center"] is None
+        assert result["bank"] is None
+        assert result["account_no"] is None
+        assert result["account_name"] is None
 
 
 class TestDiffFields:
@@ -293,3 +306,84 @@ class TestFindUseDate:
 
     def test_none_when_no_value(self):
         assert L.find_use_date(self.QUESTIONS, []) is None
+
+
+class TestAccountNo:
+    @pytest.mark.parametrize("bank,raw,expected", [
+        ("KBANK", "123-4-56789-0", "1234567890"),
+        ("SCB", " 123 456 7890 ", "1234567890"),
+        ("GSB", "0200-1234-5678", "020012345678"),
+        ("UOB", "12345678901", "12345678901"),
+        ("OTHER", "123456789012", "123456789012"),
+    ])
+    def test_valid(self, bank, raw, expected):
+        assert L.check_account_no(bank, raw) == expected
+
+    @pytest.mark.parametrize("bank,raw,msg", [
+        ("KBANK", "123456789", "เลขที่บัญชีไม่ถูกต้อง: ธนาคารกสิกรไทย ต้องเป็นตัวเลข 10 หลัก"),
+        ("GSB", "1234567890", "เลขที่บัญชีไม่ถูกต้อง: ธนาคารออมสิน ต้องเป็นตัวเลข 12 หลัก"),
+        ("UOB", "123456789", "เลขที่บัญชีไม่ถูกต้อง: ธนาคารยูโอบี ต้องเป็นตัวเลข 10–12 หลัก"),
+        ("KBANK", "๑๒๓๔๕๖๗๘๙๐", "เลขที่บัญชีไม่ถูกต้อง: ธนาคารกสิกรไทย ต้องเป็นตัวเลข 10 หลัก"),
+        ("KBANK", "12345abcde", "เลขที่บัญชีไม่ถูกต้อง: ธนาคารกสิกรไทย ต้องเป็นตัวเลข 10 หลัก"),
+        ("KBANK", None, "เลขที่บัญชีไม่ถูกต้อง: ธนาคารกสิกรไทย ต้องเป็นตัวเลข 10 หลัก"),
+    ])
+    def test_invalid(self, bank, raw, msg):
+        with pytest.raises(L.AdvanceRuleError) as exc:
+            L.check_account_no(bank, raw)
+        assert str(exc.value) == msg
+
+    def test_bank_label(self):
+        assert L.bank_label("KTB") == "ธนาคารกรุงไทย"
+        assert L.bank_label("ZZZ") == "ZZZ"
+        assert L.bank_label(None) is None
+
+
+class TestRequestFieldsV2:
+    def test_new_fields_by_name_only(self):
+        rows = [
+            {"name": "adv_purpose", "type": "longtext", "sort_order": 1, "text": "p", "number": None, "date": None},
+            {"name": "adv_amount", "type": "number", "sort_order": 2, "text": None, "number": Decimal("1500"), "date": None},
+            {"name": "adv_cost_center", "type": "dropdown", "sort_order": 4, "text": "ศลบ", "number": None, "date": None},
+            {"name": "adv_bank", "type": "dropdown", "sort_order": 5, "text": "KBANK", "number": None, "date": None},
+            {"name": "adv_account_no", "type": "text", "sort_order": 6, "text": "1234567890", "number": None, "date": None},
+            {"name": "adv_account_name", "type": "text", "sort_order": 7, "text": "นาย ก", "number": None, "date": None},
+        ]
+        picked = L.pick_request_values(rows)
+        assert (picked["cost_center"], picked["bank"], picked["account_no"], picked["account_name"]) == \
+            ("ศลบ", "KBANK", "1234567890", "นาย ก")
+
+    def test_old_advance_without_new_questions(self):
+        picked = L.pick_request_values([
+            {"name": "adv_purpose", "type": "longtext", "sort_order": 1, "text": "p", "number": None, "date": None},
+        ])
+        assert picked["cost_center"] is None and picked["bank"] is None and picked["account_no"] is None
+
+    def test_account_name_never_falls_back_to_purpose(self):
+        picked = L.pick_request_values([
+            {"name": "something_else", "type": "text", "sort_order": 1, "text": "x", "number": None, "date": None},
+        ])
+        assert picked["account_name"] is None
+
+
+class TestSubmittedValue:
+    QS = [{"id": 1, "name": "adv_amount", "type": "number", "sort_order": 2},
+          {"id": 2, "name": "adv_bank", "type": "dropdown", "sort_order": 5}]
+
+    def test_by_name(self):
+        values = [{"question_id": 2, "value_text": "SCB", "value_number": None, "value_date": None}]
+        assert L.submitted_value(self.QS, values, "adv_bank", (), "value_text") == "SCB"
+
+    def test_fallback_by_type(self):
+        qs = [{"id": 9, "name": "amount_old", "type": "number", "sort_order": 1}]
+        values = [{"question_id": 9, "value_text": None, "value_number": Decimal("10"), "value_date": None}]
+        assert L.submitted_value(qs, values, "adv_amount", ("number",), "value_number") == Decimal("10")
+
+    def test_missing(self):
+        assert L.submitted_value(self.QS, [], "adv_bank", (), "value_text") is None
+        assert L.submitted_value([], [], "adv_bank", (), "value_text") is None
+
+
+def test_clear_date_message_renamed():
+    with pytest.raises(L.AdvanceRuleError, match="กรุณาระบุวันที่ส่งเอกสารเคลียร์"):
+        L.check_clear(L.AWAITING_CLEARING, is_owner=True, amount_paid=100, clear_date=None,
+                      amount_actual=100, settle_date=None)
