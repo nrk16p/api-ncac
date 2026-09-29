@@ -426,3 +426,37 @@ def test_clear_date_message_renamed():
     with pytest.raises(L.AdvanceRuleError, match="กรุณาระบุวันที่ส่งเอกสารเคลียร์"):
         L.check_clear(L.AWAITING_CLEARING, is_owner=True, amount_paid=100, clear_date=None,
                       amount_actual=100, settle_date=None)
+
+
+# ---- Task 14: reject voucher at รอจ่าย ----
+def test_voucher_rejected_derives_awaiting_voucher():
+    from datetime import date
+    status, overdue = L.derive_status("Approved", "VOUCHER_REJECTED", None, date(2026, 9, 29))
+    assert status == L.AWAITING_VOUCHER and overdue is False
+
+
+def test_check_reject_voucher_ok_in_awaiting_payment():
+    L.check_reject_voucher(L.AWAITING_PAYMENT, remark="ข้อมูลไม่ถูกต้อง")
+
+
+@pytest.mark.parametrize("status", [L.AWAITING_VOUCHER, L.AWAITING_CLEARING])
+def test_check_reject_voucher_409_elsewhere(status):
+    with pytest.raises(L.InvalidTransition):
+        L.check_reject_voucher(status, remark="x")
+
+
+@pytest.mark.parametrize("remark", [None, "", "   "])
+def test_check_reject_voucher_requires_remark(remark):
+    with pytest.raises(L.AdvanceRuleError) as exc:
+        L.check_reject_voucher(L.AWAITING_PAYMENT, remark=remark)
+    assert exc.value.http_status == 400
+    assert str(exc.value) == "กรุณาระบุเหตุผลที่ตีกลับ"
+
+
+def test_check_clear_settle_date_message():
+    from datetime import date
+    from decimal import Decimal
+    with pytest.raises(L.AdvanceRuleError) as exc:
+        L.check_clear(L.AWAITING_CLEARING, is_owner=True, amount_paid=Decimal("1000"),
+                          clear_date=date(2026, 9, 29), amount_actual=Decimal("400"), settle_date=None)
+    assert str(exc.value) == "มียอดต้องคืนบริษัท กรุณาระบุวันที่โอนเงินคืนบริษัท"

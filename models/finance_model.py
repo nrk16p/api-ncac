@@ -59,7 +59,7 @@ class FinAdvance(Base):
     __table_args__ = (
         CheckConstraint("amount_paid >= 0", name="ck_fin_advances_amount_paid"),
         CheckConstraint("amount_actual IS NULL OR amount_actual >= 0", name="ck_fin_advances_amount_actual"),
-        CheckConstraint("fin_status IN ('VOUCHERED','PAID','CLEARING_SUBMITTED','SENT_BACK','CLOSED')",
+        CheckConstraint("fin_status IN ('VOUCHERED','VOUCHER_REJECTED','PAID','CLEARING_SUBMITTED','SENT_BACK','CLOSED')",
                         name="ck_fin_advances_fin_status"),
         Index("ix_fin_advances_fin_status", "fin_status"),
         Index("ix_fin_advances_clear_due_date", "clear_due_date"),

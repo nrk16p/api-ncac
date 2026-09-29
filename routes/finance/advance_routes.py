@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from database import get_db
 from models.finance_model import FinAccount, FinAdvance, FinAdvanceLog
 from models.user_model import User
-from schemas.finance_schema import AccountCreate, AccountUpdate, ClearIn, ConfirmIn, PayIn, SendBackIn, VoucherIn
+from schemas.finance_schema import AccountCreate, AccountUpdate, ClearIn, ConfirmIn, PayIn, RejectVoucherIn, SendBackIn, VoucherIn
 from services.finance import advance_logic as logic
 from services.finance import advance_repo as repo
 from services.finance import approval_repo
@@ -201,6 +201,10 @@ def voucher_advance(form_id: str, body: VoucherIn, db: Session = Depends(get_db)
     if adv is None:
         adv = FinAdvance(submission_id=sub.id, form_id=sub.form_id, fin_status=logic.FIN_VOUCHERED)
         db.add(adv)
+    elif adv.fin_status == logic.FIN_VOUCHER_REJECTED and status == logic.AWAITING_VOUCHER:
+        # first save after a reject: reuse the row (voucher fields kept) and go back to รอจ่าย
+        adv.fin_status = logic.FIN_VOUCHERED
+        action = "VOUCHER"
     for field, value in values.items():
         setattr(adv, field, value)
     try:
@@ -209,6 +213,20 @@ def voucher_advance(form_id: str, body: VoucherIn, db: Session = Depends(get_db)
         db.rollback()
         raise HTTPException(status_code=409, detail=_ALREADY_SAVED)
     db.add(FinAdvanceLog(advance_id=adv.id, action=action, changes=logic.diff_fields(before, values),
+                         action_by=body.action_by))
+    return _commit_and_return(db, form_id)
+
+
+@router.put("/advances/{form_id}/reject-voucher")
+def reject_voucher(form_id: str, body: RejectVoucherIn, db: Session = Depends(get_db)):
+    require_finance(db, body.action_by)
+    _, adv, status = _load_for_update(db, form_id)
+    try:
+        logic.check_reject_voucher(status, remark=body.remark)
+    except logic.AdvanceRuleError as exc:
+        raise _rule_error(exc)
+    adv.fin_status = logic.FIN_VOUCHER_REJECTED
+    db.add(FinAdvanceLog(advance_id=adv.id, action="VOUCHER_REJECT", remark=body.remark.strip(),
                          action_by=body.action_by))
     return _commit_and_return(db, form_id)
 

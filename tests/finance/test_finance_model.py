@@ -19,7 +19,7 @@ def test_fin_advances_constraints():
     assert "UNIQUE (submission_id)" in ddl
     assert "UNIQUE (form_id)" in ddl
     assert "amount_paid >= 0" in ddl
-    assert "fin_status IN ('VOUCHERED','PAID','CLEARING_SUBMITTED','SENT_BACK','CLOSED')" in ddl
+    assert "fin_status IN ('VOUCHERED','VOUCHER_REJECTED','PAID','CLEARING_SUBMITTED','SENT_BACK','CLOSED')" in ddl
     assert "amount_paid NUMERIC(12, 2)," in ddl
     assert "transfer_date DATE," in ddl
     assert "NUMERIC(12, 2)" in ddl
@@ -43,3 +43,12 @@ def test_fin_approval_tiers_matches_sql():
                      "UPDATE form_approval_rules SET is_active = false", "'adv_account_no'",
                      "ALTER COLUMN amount_paid    DROP NOT NULL", "'VOUCHERED'"):
         assert fragment in sql
+
+
+def test_fin_status_check_includes_voucher_rejected():
+    from pathlib import Path
+    from models.finance_model import FinAdvance
+    ddl = str(CreateTable(FinAdvance.__table__).compile(dialect=postgresql.dialect()))
+    assert "VOUCHER_REJECTED" in ddl
+    sql = (Path(__file__).resolve().parents[2] / "scripts/migrations/2026-09-29_finance_advance_v2b.sql").read_text()
+    assert "VOUCHER_REJECTED" in sql and "DO $$" not in sql

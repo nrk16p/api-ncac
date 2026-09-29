@@ -43,3 +43,10 @@ def test_confirm_in_clear_doc_no_optional_and_blank_becomes_none():
     assert ConfirmIn(action_by="a").clear_doc_no is None
     assert ConfirmIn(action_by="a", clear_doc_no="  ").clear_doc_no is None
     assert ConfirmIn(action_by="a", clear_doc_no=" R1 ").clear_doc_no == "R1"
+
+
+def test_reject_voucher_in_requires_remark():
+    from schemas.finance_schema import RejectVoucherIn
+    assert RejectVoucherIn(action_by="680001", remark="ผิด").remark == "ผิด"
+    with pytest.raises(ValidationError):
+        RejectVoucherIn(action_by="680001")

@@ -62,6 +62,11 @@ class SendBackIn(_Body):
     expected_clear_submitted_at: Optional[datetime] = None
 
 
+class RejectVoucherIn(_Body):
+    action_by: str
+    remark: str
+
+
 class ConfirmIn(_Body):
     action_by: str
     clear_doc_no: Optional[str] = Field(default=None, max_length=100)

@@ -97,3 +97,16 @@ def test_people_by_employee_id_includes_position():
             return Q([user])
     people = advance_repo.people_by_employee_id(DB(), ["670108"])
     assert people["670108"]["position"] == "ผู้จัดการ"
+
+
+def test_serialize_fin_closed_and_paid_by_names():
+    people = {"680001": {"name": "สมชาย ใจดี"}, "690002": {"name": "สมหญิง บัญชี"}}
+    out = repo.serialize_fin(_adv(paid_by="680001", closed_by="690002"), {}, people)
+    assert out["paid_by_name"] == "สมชาย ใจดี"
+    assert out["closed_by_name"] == "สมหญิง บัญชี"
+
+
+def test_serialize_fin_names_none_when_unknown():
+    out = repo.serialize_fin(_adv(closed_by=None), {}, {})
+    assert out["closed_by_name"] is None and out["paid_by_name"] is None
+    assert repo.serialize_fin(_adv(), {})["paid_by_name"] is None

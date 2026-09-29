@@ -110,9 +110,10 @@ def serialize_request(request):
     }
 
 
-def serialize_fin(adv, acc_names):
+def serialize_fin(adv, acc_names, people=None):
     if adv is None:
         return None
+    people = people or {}
     return {
         "acc_code": adv.acc_code,
         "acc_name": acc_names.get(adv.acc_code),
@@ -124,6 +125,7 @@ def serialize_fin(adv, acc_names):
         "transfer_date": _iso(adv.transfer_date),
         "clear_due_date": _iso(adv.clear_due_date),
         "paid_by": adv.paid_by,
+        "paid_by_name": (people.get(adv.paid_by) or {}).get("name"),
         "paid_at": _iso(adv.paid_at),
         "clear_date": _iso(adv.clear_date),
         "amount_actual": _num(adv.amount_actual),
@@ -134,6 +136,7 @@ def serialize_fin(adv, acc_names):
         "clear_submitted_at": _iso(adv.clear_submitted_at),
         "review_remark": adv.review_remark,
         "closed_by": adv.closed_by,
+        "closed_by_name": (people.get(adv.closed_by) or {}).get("name"),
         "closed_at": _iso(adv.closed_at),
         "fin_status": adv.fin_status,
     }
@@ -160,7 +163,7 @@ def serialize_advance(sub, adv, request, people, acc_names, today):
         "overdue": overdue,
         "requester": requester,
         "request": serialize_request(request),
-        "fin": serialize_fin(adv, acc_names),
+        "fin": serialize_fin(adv, acc_names, people),
     }
 
 
@@ -182,7 +185,9 @@ def list_advances(db, *, status=None, overdue=None, employee_id=None, acc_code=N
     rows = query.order_by(FormSubmission.id.desc()).all()
 
     requests = request_values_by_submission(db, [sub.id for sub, _ in rows])
-    people = people_by_employee_id(db, [sub.created_by for sub, _ in rows])
+    people = people_by_employee_id(
+        db, [sub.created_by for sub, _ in rows]
+        + [a.paid_by for _, a in rows if a is not None] + [a.closed_by for _, a in rows if a is not None])
     acc_names = account_names(db)
     today = today_bkk()
     items = [serialize_advance(sub, adv, requests.get(sub.id), people, acc_names, today) for sub, adv in rows]
@@ -201,7 +206,7 @@ def get_advance_detail(db, form_id):
     item = serialize_advance(
         sub, adv,
         request_values_by_submission(db, [sub.id]).get(sub.id),
-        people_by_employee_id(db, [sub.created_by]),
+        people_by_employee_id(db, [sub.created_by] + ([adv.paid_by, adv.closed_by] if adv is not None else [])),
         account_names(db),
         today_bkk(),
     )

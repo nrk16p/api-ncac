@@ -34,6 +34,7 @@ STATUS_LABELS = {
 }
 
 FIN_VOUCHERED = "VOUCHERED"
+FIN_VOUCHER_REJECTED = "VOUCHER_REJECTED"
 FIN_PAID = "PAID"
 FIN_CLEARING_SUBMITTED = "CLEARING_SUBMITTED"
 FIN_SENT_BACK = "SENT_BACK"
@@ -41,6 +42,7 @@ FIN_CLOSED = "CLOSED"
 
 _FIN_TO_STATUS = {
     FIN_VOUCHERED: AWAITING_PAYMENT,
+    FIN_VOUCHER_REJECTED: AWAITING_VOUCHER,
     FIN_PAID: AWAITING_CLEARING,
     FIN_SENT_BACK: SENT_BACK,
     FIN_CLEARING_SUBMITTED: AWAITING_REVIEW,
@@ -125,6 +127,11 @@ def check_voucher(status, *, voucher_date, is_edit: bool = False):
     _require(voucher_date is not None, "กรุณาระบุวันที่ตั้งเบิก")
 
 
+def check_reject_voucher(status, *, remark):
+    _require_status(status, (AWAITING_PAYMENT,), "ตีกลับไปตั้งเบิกใหม่")
+    _require(bool(remark and remark.strip()), "กรุณาระบุเหตุผลที่ตีกลับ")
+
+
 def check_clear(status, *, is_owner, amount_paid, clear_date, amount_actual, settle_date):
     if not is_owner:
         raise NotAllowed("เฉพาะผู้เบิกเงินเท่านั้นที่บันทึกการเคลียร์ได้")
@@ -133,7 +140,7 @@ def check_clear(status, *, is_owner, amount_paid, clear_date, amount_actual, set
     _require(amount_actual is not None and Decimal(amount_actual) >= 0, "ยอดใช้จริงต้องไม่ติดลบ")
     settle = compute_settle_amount(amount_paid, amount_actual)
     if settle > 0:
-        _require(settle_date is not None, "มียอดต้องคืนบริษัท กรุณาระบุวันที่โอนเงินคืน")
+        _require(settle_date is not None, "มียอดต้องคืนบริษัท กรุณาระบุวันที่โอนเงินคืนบริษัท")
         return settle, settle_date
     return settle, None
 
