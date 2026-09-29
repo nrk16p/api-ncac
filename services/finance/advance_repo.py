@@ -94,6 +94,20 @@ def account_names(db):
     return {a.acc_code: a.acc_name for a in db.query(FinAccount).all()}
 
 
+def serialize_request(request):
+    request = request or {}
+    return {
+        "purpose": request.get("purpose"),
+        "amount": _num(request.get("amount")),
+        "use_date": _iso(request.get("use_date")),
+        "cost_center": request.get("cost_center"),
+        "bank": request.get("bank"),
+        "bank_label": logic.bank_label(request.get("bank")),
+        "account_no": request.get("account_no"),
+        "account_name": request.get("account_name"),
+    }
+
+
 def serialize_fin(adv, acc_names):
     if adv is None:
         return None
@@ -130,7 +144,6 @@ def serialize_advance(sub, adv, request, people, acc_names, today):
         adv.clear_due_date if adv is not None else None,
         today,
     )
-    request = request or {}
     requester = people.get(sub.created_by) or {
         "employee_id": sub.created_by, "name": None, "department": None, "site": None, "site_code": None,
     }
@@ -143,11 +156,7 @@ def serialize_advance(sub, adv, request, people, acc_names, today):
         "status_label": logic.STATUS_LABELS[status],
         "overdue": overdue,
         "requester": requester,
-        "request": {
-            "purpose": request.get("purpose"),
-            "amount": _num(request.get("amount")),
-            "use_date": _iso(request.get("use_date")),
-        },
+        "request": serialize_request(request),
         "fin": serialize_fin(adv, acc_names),
     }
 

@@ -76,3 +76,18 @@ class FinAdvanceLog(Base):
     remark = Column(Text)
     action_by = Column(String(50))
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class FinApprovalTier(Base):
+    """ADV approval by amount (clause 6). Created by scripts/migrations/2026-09-29_finance_advance_v2.sql."""
+    __tablename__ = "fin_approval_tiers"
+
+    clause = Column(String(10), primary_key=True)
+    amount_max = Column(Numeric(14, 2))           # NULL = no cap
+    min_level = Column(Integer, nullable=False)
+    approver_label = Column(String(120), nullable=False)
+    sort_order = Column(Integer, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("min_level BETWEEN 1 AND 20", name="ck_fin_approval_tiers_min_level"),
+    )

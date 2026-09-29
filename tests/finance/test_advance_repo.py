@@ -30,7 +30,9 @@ def test_awaiting_payment_without_fin_row():
     assert item["status"] == "AWAITING_PAYMENT"
     assert item["status_label"] == "รอจ่าย"
     assert item["fin"] is None
-    assert item["request"] == {"purpose": "ค่าแอร์", "amount": 12740.0, "use_date": "2026-07-09T00:00:00+00:00"}
+    assert item["request"] == {"purpose": "ค่าแอร์", "amount": 12740.0, "use_date": "2026-07-09T00:00:00+00:00",
+                              "cost_center": None, "bank": None, "bank_label": None, "account_no": None,
+                              "account_name": None}
     assert item["created_at"] == "2026-07-07T03:00:00+00:00"
     assert item["requester"]["site_code"] == "สสบ."
 
@@ -47,8 +49,25 @@ def test_unknown_requester_falls_back_to_employee_id():
     item = repo.serialize_advance(SUB, None, None, {}, {}, date(2026, 7, 8))
     assert item["requester"] == {"employee_id": "670001", "name": None, "department": None,
                                  "site": None, "site_code": None}
-    assert item["request"] == {"purpose": None, "amount": None, "use_date": None}
+    assert item["request"] == {"purpose": None, "amount": None, "use_date": None, "cost_center": None,
+                              "bank": None, "bank_label": None, "account_no": None, "account_name": None}
 
 
 def test_bkk_day_start_is_previous_utc_evening():
     assert repo.bkk_day_start_utc(date(2026, 7, 9)) == datetime(2026, 7, 8, 17, 0)
+
+
+def test_serialize_request_v2_fields():
+    from decimal import Decimal
+    from services.finance.advance_repo import serialize_request
+    out = serialize_request({"purpose": "p", "amount": Decimal("1500.50"), "use_date": None,
+                             "cost_center": "ศลบ", "bank": "KBANK", "account_no": "1234567890",
+                             "account_name": "นาย ก"})
+    assert out == {"purpose": "p", "amount": 1500.5, "use_date": None, "cost_center": "ศลบ", "bank": "KBANK",
+                   "bank_label": "ธนาคารกสิกรไทย", "account_no": "1234567890", "account_name": "นาย ก"}
+
+
+def test_serialize_request_empty():
+    from services.finance.advance_repo import serialize_request
+    out = serialize_request(None)
+    assert out["amount"] is None and out["bank_label"] is None and out["cost_center"] is None
