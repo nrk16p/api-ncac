@@ -7,7 +7,7 @@ from models.user_model import User ,Position
 from services.email_service import send_email, render_form_submit_th, render_form_done_th
 from services.line_service import send_line_message
 from services.notify_guard import ADVANCE_FORM_TYPE, notifications_enabled
-from services.finance import advance_logic
+from services.finance import advance_logic, approval_repo
 from database import get_db
 from models.master_model import (
     FormMaster, FormQuestion, FormSubmission,
@@ -209,6 +209,22 @@ def submit_form(
         except advance_logic.AdvanceRuleError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 
+        questions = [{"id": q.id, "name": q.question_name, "type": q.question_type, "sort_order": q.sort_order}
+                     for q in form.questions]
+        raw_values = [{"question_id": v.question_id, "value_text": v.value_text, "value_number": v.value_number,
+                       "value_date": v.value_date} for v in payload.values]
+        try:
+            account_q = next((q for q in form.questions if q.question_name == "adv_account_no"), None)
+            if account_q is not None:
+                bank = advance_logic.submitted_value(questions, raw_values, "adv_bank", (), "value_text")
+                account_value = next((v for v in payload.values if v.question_id == account_q.id), None)
+                digits = advance_logic.check_account_no(bank, account_value.value_text if account_value else None)
+                account_value.value_text = digits
+            amount = advance_logic.submitted_value(questions, raw_values, "adv_amount", ("number",), "value_number")
+            approval_repo.describe(db, payload.created_by, amount)
+        except advance_logic.AdvanceRuleError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
     try:
 
         form_id = generate_form_id(db, form.form_code)
@@ -218,7 +234,10 @@ def submit_form(
             payload.created_by
         )
 
-        if not form.need_approval:
+        if form.form_type == ADVANCE_FORM_TYPE:
+            # approval by amount (spec v2 §3): always one step, eligibility is computed on the fly
+            status_approve, current_level = "In Progress", 1
+        elif not form.need_approval:
             status_approve, current_level = "Approved", None
         else:
             status_approve, current_level = determine_initial_approval(
@@ -741,6 +760,12 @@ def update_form_details(
     # 🔒 lock done
     if submission.status == "Done":
         raise HTTPException(status_code=400, detail="Cannot edit completed form")
+
+    if submission.form is not None and submission.form.form_type == ADVANCE_FORM_TYPE:
+        if submission.status_approve != "In Progress":
+            raise HTTPException(status_code=400, detail="แก้ไขคำขอเบิกไม่ได้หลังอนุมัติ/ไม่อนุมัติแล้ว")
+        if payload.updated_by != submission.created_by:
+            raise HTTPException(status_code=403, detail="เฉพาะผู้ขอเบิกเท่านั้นที่แก้ไขคำขอได้")
 
     try:
         submission.updated_by = payload.updated_by

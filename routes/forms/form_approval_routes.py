@@ -3,7 +3,8 @@ from sqlalchemy.orm import Session
 from database import get_db
 from fastapi import BackgroundTasks
 from services.email_service import render_form_rejected_th ,  send_email , render_form_approved_th
-from services.notify_guard import notifications_enabled
+from services.notify_guard import ADVANCE_FORM_TYPE, notifications_enabled
+from services.finance import approval_repo
 
 from models.master_model import (
     FormSubmission,
@@ -32,6 +33,10 @@ def parse_dt(val):
         return datetime.fromisoformat(val)
     except Exception:
         return None
+
+
+def is_advance_submission(submission: FormSubmission) -> bool:
+    return submission.form is not None and submission.form.form_type == ADVANCE_FORM_TYPE
 
 
 def get_user_by_employee_id(db: Session, employee_id: str) -> User | None:
@@ -204,6 +209,7 @@ def get_pending_approvals(
     result = []
 
     for sub in submissions:
+        if is_advance_submission(sub): continue  # ADV has its own queue: GET /finance/approvals/pending
         requester = get_user_by_employee_id(db, sub.created_by)
         if not requester or not requester.position_id:
             continue
@@ -354,34 +360,39 @@ def approve_submission(
     if not requester or not approver:
         raise HTTPException(404, "User not found")
 
-    approver_level = get_employee_position_level(db, employee_id)
-    if not approver_level:
-        raise HTTPException(403, "Approver has no position level")
+    advance = is_advance_submission(submission)
+    if advance:
+        if not approval_repo.can_approve_submission(db, submission, employee_id):
+            raise HTTPException(403, "Not authorized to approve")
+    else:
+        approver_level = get_employee_position_level(db, employee_id)
+        if not approver_level:
+            raise HTTPException(403, "Approver has no position level")
 
-    pos_req = db.query(Position).filter(
-        Position.position_id == requester.position_id
-    ).first()
-    if not pos_req:
-        raise HTTPException(400, "Requester position not found")
+        pos_req = db.query(Position).filter(
+            Position.position_id == requester.position_id
+        ).first()
+        if not pos_req:
+            raise HTTPException(400, "Requester position not found")
 
-    rule = get_applicable_rule_with_fallback(
-        db=db,
-        form_master_id=submission.form_master_id,
-        creator_level=pos_req.position_level_id,
-        level_no=submission.current_approval_level,
-        requester=requester,
-    )
-    if not rule:
-        raise HTTPException(400, "Approval rule not found")
+        rule = get_applicable_rule_with_fallback(
+            db=db,
+            form_master_id=submission.form_master_id,
+            creator_level=pos_req.position_level_id,
+            level_no=submission.current_approval_level,
+            requester=requester,
+        )
+        if not rule:
+            raise HTTPException(400, "Approval rule not found")
 
-    if not can_user_approve(
-        db=db,
-        rule=rule,
-        approver=approver,
-        approver_level=approver_level,
-        requester=requester,
-    ):
-        raise HTTPException(403, "Not authorized to approve")
+        if not can_user_approve(
+            db=db,
+            rule=rule,
+            approver=approver,
+            approver_level=approver_level,
+            requester=requester,
+        ):
+            raise HTTPException(403, "Not authorized to approve")
 
     db.add(FormApprovalLog(
         submission_id=submission.id,
@@ -391,18 +402,20 @@ def approve_submission(
         remark=remark,
     ))
 
-    next_rule = get_applicable_rule(
-        db=db,
-        form_master_id=submission.form_master_id,
-        creator_level=pos_req.position_level_id,
-        level_no=submission.current_approval_level + 1,
-    )
-
-    if next_rule:
-        submission.current_approval_level += 1
-        submission.status_approve = "In Progress"
-    else:
+    if advance:
         submission.status_approve = "Approved"
+    else:
+        next_rule = get_applicable_rule(
+            db=db,
+            form_master_id=submission.form_master_id,
+            creator_level=pos_req.position_level_id,
+            level_no=submission.current_approval_level + 1,
+        )
+        if next_rule:
+            submission.current_approval_level += 1
+            submission.status_approve = "In Progress"
+        else:
+            submission.status_approve = "Approved"
 
     db.commit()
     if submission.status_approve == "Approved" and notifications_enabled(submission.form):
@@ -461,34 +474,39 @@ def reject_submission(
     if not requester or not approver:
         raise HTTPException(404, "User not found")
 
-    approver_level = get_employee_position_level(db, employee_id)
-    if not approver_level:
-        raise HTTPException(403, "Approver has no position level")
+    advance = is_advance_submission(submission)
+    if advance:
+        if not approval_repo.can_approve_submission(db, submission, employee_id):
+            raise HTTPException(403, "Not authorized to reject")
+    else:
+        approver_level = get_employee_position_level(db, employee_id)
+        if not approver_level:
+            raise HTTPException(403, "Approver has no position level")
 
-    pos_req = db.query(Position).filter(
-        Position.position_id == requester.position_id
-    ).first()
-    if not pos_req:
-        raise HTTPException(400, "Requester position not found")
+        pos_req = db.query(Position).filter(
+            Position.position_id == requester.position_id
+        ).first()
+        if not pos_req:
+            raise HTTPException(400, "Requester position not found")
 
-    rule = get_applicable_rule_with_fallback(
-        db=db,
-        form_master_id=submission.form_master_id,
-        creator_level=pos_req.position_level_id,
-        level_no=submission.current_approval_level,
-        requester=requester,
-    )
-    if not rule:
-        raise HTTPException(400, "Approval rule not found")
+        rule = get_applicable_rule_with_fallback(
+            db=db,
+            form_master_id=submission.form_master_id,
+            creator_level=pos_req.position_level_id,
+            level_no=submission.current_approval_level,
+            requester=requester,
+        )
+        if not rule:
+            raise HTTPException(400, "Approval rule not found")
 
-    if not can_user_approve(
-        db=db,
-        rule=rule,
-        approver=approver,
-        approver_level=approver_level,
-        requester=requester,
-    ):
-        raise HTTPException(403, "Not authorized to reject")
+        if not can_user_approve(
+            db=db,
+            rule=rule,
+            approver=approver,
+            approver_level=approver_level,
+            requester=requester,
+        ):
+            raise HTTPException(403, "Not authorized to reject")
 
     db.add(FormApprovalLog(
         submission_id=submission.id,
