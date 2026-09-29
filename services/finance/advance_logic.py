@@ -29,7 +29,7 @@ STATUS_LABELS = {
     AWAITING_PAYMENT: "รอจ่าย",
     AWAITING_CLEARING: "จ่ายแล้วรอเคลียร์",
     SENT_BACK: "ส่งกลับแก้ไข",
-    AWAITING_REVIEW: "รอการเงินตรวจ",
+    AWAITING_REVIEW: "รอบัญชีตรวจ",
     CLOSED: "ปิดแล้ว",
 }
 

@@ -43,6 +43,9 @@ class TestDeriveStatus:
             assert L.STATUS_LABELS[code]
         assert L.STATUS_LABELS[L.AWAITING_VOUCHER] == "รอตั้งเบิกทำจ่าย"
 
+    def test_awaiting_review_label(self):
+        assert L.STATUS_LABELS[L.AWAITING_REVIEW] == "รอบัญชีตรวจ"
+
 
 class TestDueDateAndSettle:
     def test_default_due_is_plus_7(self):
