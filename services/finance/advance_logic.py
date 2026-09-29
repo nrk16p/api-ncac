@@ -279,12 +279,24 @@ def bank_label(value):
     return BANKS.get(value, (value,))[0]
 
 
-def check_account_no(bank, raw) -> str:
+def check_bank(value) -> str:
+    """The submitted bank must be one of BANKS' keys (rejects blank/unknown values)."""
+    if not isinstance(value, str) or value not in BANKS:
+        raise AdvanceRuleError("กรุณาเลือกธนาคารจากรายการ")
+    return value
+
+
+def account_error(bank) -> AdvanceRuleError:
     label, counts = BANKS.get(bank or "", (bank or "ธนาคาร", DEFAULT_ACCOUNT_DIGITS))
+    count_text = f"{counts[0]}" if len(counts) == 1 else f"{counts[0]}–{counts[-1]}"
+    return AdvanceRuleError(f"เลขที่บัญชีไม่ถูกต้อง: {label} ต้องเป็นตัวเลข {count_text} หลัก")
+
+
+def check_account_no(bank, raw) -> str:
+    _, counts = BANKS.get(bank or "", (bank or "ธนาคาร", DEFAULT_ACCOUNT_DIGITS))
     digits = normalize_account_no(raw)
     if not _ASCII_DIGITS.fullmatch(digits) or len(digits) not in counts:
-        count_text = f"{counts[0]}" if len(counts) == 1 else f"{counts[0]}–{counts[-1]}"
-        raise AdvanceRuleError(f"เลขที่บัญชีไม่ถูกต้อง: {label} ต้องเป็นตัวเลข {count_text} หลัก")
+        raise account_error(bank)
     return digits
 
 

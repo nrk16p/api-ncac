@@ -39,7 +39,7 @@ class FinAdvance(Base):
     paid_at = Column(DateTime(timezone=True))
 
     # step 4 — requester clears
-    clear_date = Column(Date)                # วันที่เคลียร์
+    clear_date = Column(Date)                # วันที่ส่งเอกสารเคลียร์
     amount_actual = Column(Numeric(12, 2))   # ยอดใช้จริง
     clear_doc_no = Column(String(100))       # เอกสารเคลียร์
     settle_amount = Column(Numeric(12, 2))   # รับคืน (+) / เบิกเพิ่ม (−)

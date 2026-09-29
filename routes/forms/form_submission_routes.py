@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime, timedelta
 from typing import List, Optional
+from types import SimpleNamespace
 from models.user_model import User ,Position
 from services.email_service import send_email, render_form_submit_th, render_form_done_th
 from services.line_service import send_line_message
@@ -175,6 +176,33 @@ def get_current_approver_emails(db: Session, submission: FormSubmission) -> list
 
     return list(set(result))
     
+def _guard_advance_values(db: Session, form, values, created_by):
+    """ADV submit/edit guard (spec v2): use-date, bank, account number (normalized digits written back
+    into `values`) and the approval tier for the amount. `values` are objects with question_id /
+    value_text / value_number / value_date. Raises HTTPException(400) on a rule error."""
+    questions = [{"id": q.id, "name": q.question_name, "type": q.question_type, "sort_order": q.sort_order}
+                 for q in form.questions]
+    raw_values = [{"question_id": v.question_id, "value_text": v.value_text, "value_number": v.value_number,
+                   "value_date": v.value_date} for v in values]
+    try:
+        use_date = advance_logic.find_use_date(questions, raw_values)
+        advance_logic.check_use_date(use_date, datetime.now(ZoneInfo("Asia/Bangkok")).date())
+        bank_q = next((q for q in form.questions if q.question_name == "adv_bank"), None)
+        bank = advance_logic.submitted_value(questions, raw_values, "adv_bank", (), "value_text")
+        if bank_q is not None:
+            advance_logic.check_bank(bank)
+        account_q = next((q for q in form.questions if q.question_name == "adv_account_no"), None)
+        if account_q is not None:
+            account_value = next((v for v in values if v.question_id == account_q.id), None)
+            if account_value is None:
+                raise advance_logic.account_error(bank)
+            account_value.value_text = advance_logic.check_account_no(bank, account_value.value_text)
+        amount = advance_logic.submitted_value(questions, raw_values, "adv_amount", ("number",), "value_number")
+        approval_repo.describe(db, created_by, amount)
+    except advance_logic.AdvanceRuleError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 # ----------------------------
 # Submit
 # ----------------------------
@@ -199,31 +227,7 @@ def submit_form(
         raise HTTPException(status_code=404, detail="Active form not found")
 
     if form.form_type == ADVANCE_FORM_TYPE:
-        use_date = advance_logic.find_use_date(
-            [{"id": q.id, "name": q.question_name, "type": q.question_type, "sort_order": q.sort_order}
-             for q in form.questions],
-            [{"question_id": v.question_id, "value_date": v.value_date} for v in payload.values],
-        )
-        try:
-            advance_logic.check_use_date(use_date, datetime.now(ZoneInfo("Asia/Bangkok")).date())
-        except advance_logic.AdvanceRuleError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-
-        questions = [{"id": q.id, "name": q.question_name, "type": q.question_type, "sort_order": q.sort_order}
-                     for q in form.questions]
-        raw_values = [{"question_id": v.question_id, "value_text": v.value_text, "value_number": v.value_number,
-                       "value_date": v.value_date} for v in payload.values]
-        try:
-            account_q = next((q for q in form.questions if q.question_name == "adv_account_no"), None)
-            if account_q is not None:
-                bank = advance_logic.submitted_value(questions, raw_values, "adv_bank", (), "value_text")
-                account_value = next((v for v in payload.values if v.question_id == account_q.id), None)
-                digits = advance_logic.check_account_no(bank, account_value.value_text if account_value else None)
-                account_value.value_text = digits
-            amount = advance_logic.submitted_value(questions, raw_values, "adv_amount", ("number",), "value_number")
-            approval_repo.describe(db, payload.created_by, amount)
-        except advance_logic.AdvanceRuleError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+        _guard_advance_values(db, form, payload.values, payload.created_by)
 
     try:
 
@@ -766,6 +770,18 @@ def update_form_details(
             raise HTTPException(status_code=400, detail="แก้ไขคำขอเบิกไม่ได้หลังอนุมัติ/ไม่อนุมัติแล้ว")
         if payload.updated_by != submission.created_by:
             raise HTTPException(status_code=403, detail="เฉพาะผู้ขอเบิกเท่านั้นที่แก้ไขคำขอได้")
+        # validate the edit as a whole: edited values merged over the stored ones
+        merged = {
+            v.question_id: SimpleNamespace(question_id=v.question_id, value_text=v.value_text,
+                                           value_number=v.value_number, value_date=v.value_date)
+            for v in submission.values
+        }
+        for v in payload.values:
+            merged[v.question_id] = SimpleNamespace(question_id=v.question_id, value_text=v.value_text,
+                                                    value_number=v.value_number, value_date=v.value_date)
+        _guard_advance_values(db, submission.form, list(merged.values()), submission.created_by)
+        for v in payload.values:  # persist the normalized account number
+            v.value_text = merged[v.question_id].value_text
 
     try:
         submission.updated_by = payload.updated_by
