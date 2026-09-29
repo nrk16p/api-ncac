@@ -15,8 +15,11 @@ class TestDeriveStatus:
     def test_rejected(self):
         assert L.derive_status("Rejected", None, None, TODAY) == (L.REJECTED, False)
 
-    def test_approved_without_fin_row_awaits_payment(self):
-        assert L.derive_status("Approved", None, None, TODAY) == (L.AWAITING_PAYMENT, False)
+    def test_approved_without_fin_row_awaits_voucher(self):
+        assert L.derive_status("Approved", None, None, TODAY) == (L.AWAITING_VOUCHER, False)
+
+    def test_vouchered_awaits_payment(self):
+        assert L.derive_status("Approved", L.FIN_VOUCHERED, None, TODAY) == (L.AWAITING_PAYMENT, False)
 
     def test_paid_due_today_is_not_overdue(self):
         assert L.derive_status("Approved", L.FIN_PAID, date(2026, 9, 28), TODAY) == (L.AWAITING_CLEARING, False)
@@ -35,9 +38,10 @@ class TestDeriveStatus:
 
     def test_labels(self):
         assert L.STATUS_LABELS[L.AWAITING_CLEARING] == "จ่ายแล้วรอเคลียร์"
-        for code in (L.PENDING_APPROVAL, L.REJECTED, L.AWAITING_PAYMENT, L.AWAITING_CLEARING,
+        for code in (L.PENDING_APPROVAL, L.REJECTED, L.AWAITING_VOUCHER, L.AWAITING_PAYMENT, L.AWAITING_CLEARING,
                      L.SENT_BACK, L.AWAITING_REVIEW, L.CLOSED):
             assert L.STATUS_LABELS[code]
+        assert L.STATUS_LABELS[L.AWAITING_VOUCHER] == "รอตั้งเบิกทำจ่าย"
 
 
 class TestDueDateAndSettle:
@@ -104,6 +108,38 @@ class TestCheckPay:
     def test_rejects_due_before_transfer(self):
         with pytest.raises(L.AdvanceRuleError):
             self._pay(clear_due_date=date(2026, 7, 1))
+
+
+class TestCheckVoucher:
+    def test_create_on_awaiting_voucher(self):
+        L.check_voucher(L.AWAITING_VOUCHER, voucher_date=date(2026, 9, 29))
+
+    def test_edit_after_voucher_and_after_pay(self):
+        L.check_voucher(L.AWAITING_PAYMENT, voucher_date=date(2026, 9, 29), is_edit=True)
+        L.check_voucher(L.AWAITING_CLEARING, voucher_date=date(2026, 9, 29), is_edit=True)
+
+    def test_stale_create_rejected(self):
+        with pytest.raises(L.InvalidTransition, match="รายการนี้ถูกตั้งเบิกไปแล้ว"):
+            L.check_voucher(L.AWAITING_PAYMENT, voucher_date=date(2026, 9, 29))
+
+    def test_edit_without_voucher_rejected(self):
+        with pytest.raises(L.InvalidTransition, match="ยังไม่มีข้อมูลการตั้งเบิกให้แก้ไข"):
+            L.check_voucher(L.AWAITING_VOUCHER, voucher_date=date(2026, 9, 29), is_edit=True)
+
+    def test_voucher_date_required(self):
+        with pytest.raises(L.AdvanceRuleError, match="กรุณาระบุวันที่ตั้งเบิก"):
+            L.check_voucher(L.AWAITING_VOUCHER, voucher_date=None)
+
+    @pytest.mark.parametrize("status", ["PENDING_APPROVAL", "REJECTED", "AWAITING_REVIEW", "CLOSED", "SENT_BACK"])
+    def test_wrong_status(self, status):
+        with pytest.raises(L.InvalidTransition):
+            L.check_voucher(status, voucher_date=date(2026, 9, 29), is_edit=True)
+
+
+def test_pay_needs_voucher_first():
+    with pytest.raises(L.InvalidTransition, match="รอตั้งเบิกทำจ่าย"):
+        L.check_pay(L.AWAITING_VOUCHER, acc_active=True, amount_paid=100, transfer_date=date(2026, 10, 1),
+                    clear_due_date=None)
 
 
 class TestCheckClear:

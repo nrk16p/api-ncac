@@ -32,9 +32,9 @@ class FinAdvance(Base):
     voucher_date = Column(Date)              # วันที่ตั้งเบิก
     payment_doc_no = Column(String(50))      # เลขที่เอกสารจ่าย
     purpose = Column(Text)                   # วัตถุประสงค์
-    amount_paid = Column(Numeric(12, 2), nullable=False)   # ยอดเงิน
-    transfer_date = Column(Date, nullable=False)           # วันที่โอนเงิน
-    clear_due_date = Column(Date, nullable=False)          # กำหนดการเคลียร์
+    amount_paid = Column(Numeric(12, 2))     # ยอดเงิน — NULL until paid
+    transfer_date = Column(Date)             # วันที่โอนเงิน — NULL until paid
+    clear_due_date = Column(Date)            # กำหนดการเคลียร์ — NULL until paid
     paid_by = Column(String(50))
     paid_at = Column(DateTime(timezone=True))
 
@@ -59,7 +59,7 @@ class FinAdvance(Base):
     __table_args__ = (
         CheckConstraint("amount_paid >= 0", name="ck_fin_advances_amount_paid"),
         CheckConstraint("amount_actual IS NULL OR amount_actual >= 0", name="ck_fin_advances_amount_actual"),
-        CheckConstraint("fin_status IN ('PAID','CLEARING_SUBMITTED','SENT_BACK','CLOSED')",
+        CheckConstraint("fin_status IN ('VOUCHERED','PAID','CLEARING_SUBMITTED','SENT_BACK','CLOSED')",
                         name="ck_fin_advances_fin_status"),
         Index("ix_fin_advances_fin_status", "fin_status"),
         Index("ix_fin_advances_clear_due_date", "clear_due_date"),

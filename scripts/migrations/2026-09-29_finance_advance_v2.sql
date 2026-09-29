@@ -70,4 +70,12 @@ JOIN (VALUES
      ) AS o(qname, value, label, sort_order) ON o.qname = fq.question_name
 WHERE NOT EXISTS (SELECT 1 FROM form_question_options x WHERE x.question_id = fq.id AND x.option_value = o.value);
 
+-- 4) ตั้งเบิกทำจ่าย before จ่ายเงิน (spec §5d): the fin row exists before payment
+ALTER TABLE fin_advances ALTER COLUMN amount_paid    DROP NOT NULL;
+ALTER TABLE fin_advances ALTER COLUMN transfer_date  DROP NOT NULL;
+ALTER TABLE fin_advances ALTER COLUMN clear_due_date DROP NOT NULL;
+ALTER TABLE fin_advances DROP CONSTRAINT IF EXISTS ck_fin_advances_fin_status;
+ALTER TABLE fin_advances ADD CONSTRAINT ck_fin_advances_fin_status
+    CHECK (fin_status IN ('VOUCHERED','PAID','CLEARING_SUBMITTED','SENT_BACK','CLOSED'));
+
 COMMIT;

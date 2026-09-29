@@ -15,6 +15,7 @@ USE_DATE_MESSAGE = "วันที่ใช้เงินต้องเป็
 
 PENDING_APPROVAL = "PENDING_APPROVAL"
 REJECTED = "REJECTED"
+AWAITING_VOUCHER = "AWAITING_VOUCHER"
 AWAITING_PAYMENT = "AWAITING_PAYMENT"
 AWAITING_CLEARING = "AWAITING_CLEARING"
 SENT_BACK = "SENT_BACK"
@@ -24,6 +25,7 @@ CLOSED = "CLOSED"
 STATUS_LABELS = {
     PENDING_APPROVAL: "รออนุมัติ",
     REJECTED: "ไม่อนุมัติ",
+    AWAITING_VOUCHER: "รอตั้งเบิกทำจ่าย",
     AWAITING_PAYMENT: "รอจ่าย",
     AWAITING_CLEARING: "จ่ายแล้วรอเคลียร์",
     SENT_BACK: "ส่งกลับแก้ไข",
@@ -31,12 +33,14 @@ STATUS_LABELS = {
     CLOSED: "ปิดแล้ว",
 }
 
+FIN_VOUCHERED = "VOUCHERED"
 FIN_PAID = "PAID"
 FIN_CLEARING_SUBMITTED = "CLEARING_SUBMITTED"
 FIN_SENT_BACK = "SENT_BACK"
 FIN_CLOSED = "CLOSED"
 
 _FIN_TO_STATUS = {
+    FIN_VOUCHERED: AWAITING_PAYMENT,
     FIN_PAID: AWAITING_CLEARING,
     FIN_SENT_BACK: SENT_BACK,
     FIN_CLEARING_SUBMITTED: AWAITING_REVIEW,
@@ -65,7 +69,7 @@ def derive_status(status_approve, fin_status, clear_due_date, today):
     if fin_status:
         status = _FIN_TO_STATUS[fin_status]
     elif status_approve == "Approved":
-        status = AWAITING_PAYMENT
+        status = AWAITING_VOUCHER
     elif status_approve == "Rejected":
         status = REJECTED
     else:
@@ -110,6 +114,15 @@ def check_pay(status, *, acc_active, amount_paid, transfer_date, clear_due_date,
     due = clear_due_date or default_due_date(transfer_date)
     _require(due >= transfer_date, "กำหนดการเคลียร์ต้องไม่ก่อนวันที่โอนเงิน")
     return due
+
+
+def check_voucher(status, *, voucher_date, is_edit: bool = False):
+    _require_status(status, (AWAITING_VOUCHER, AWAITING_PAYMENT, AWAITING_CLEARING), "บันทึกการตั้งเบิก")
+    if status == AWAITING_VOUCHER and is_edit:
+        raise InvalidTransition("ยังไม่มีข้อมูลการตั้งเบิกให้แก้ไข กรุณารีเฟรชหน้าจอ")
+    if status != AWAITING_VOUCHER and not is_edit:
+        raise InvalidTransition("รายการนี้ถูกตั้งเบิกไปแล้ว กรุณารีเฟรชหน้าจอ")
+    _require(voucher_date is not None, "กรุณาระบุวันที่ตั้งเบิก")
 
 
 def check_clear(status, *, is_owner, amount_paid, clear_date, amount_actual, settle_date):

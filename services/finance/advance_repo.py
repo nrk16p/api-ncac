@@ -227,7 +227,7 @@ def get_advance_detail(db, form_id):
 
 
 def outstanding_summary(db):
-    items = [i for i in list_advances(db) if i["fin"] is not None and i["status"] != logic.CLOSED]
+    items = [i for i in list_advances(db) if i["status"] in (logic.AWAITING_CLEARING, logic.SENT_BACK, logic.AWAITING_REVIEW)]
     by_employee, by_account = {}, {}
     for item in items:
         amount = item["fin"]["amount_paid"] or 0.0

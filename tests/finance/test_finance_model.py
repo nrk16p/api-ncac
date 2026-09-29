@@ -19,7 +19,9 @@ def test_fin_advances_constraints():
     assert "UNIQUE (submission_id)" in ddl
     assert "UNIQUE (form_id)" in ddl
     assert "amount_paid >= 0" in ddl
-    assert "fin_status IN ('PAID','CLEARING_SUBMITTED','SENT_BACK','CLOSED')" in ddl
+    assert "fin_status IN ('VOUCHERED','PAID','CLEARING_SUBMITTED','SENT_BACK','CLOSED')" in ddl
+    assert "amount_paid NUMERIC(12, 2)," in ddl
+    assert "transfer_date DATE," in ddl
     assert "NUMERIC(12, 2)" in ddl
 
 
@@ -38,5 +40,6 @@ def test_fin_approval_tiers_matches_sql():
                             "2026-09-29_finance_advance_v2.sql"), encoding="utf-8").read()
     for fragment in ("CREATE TABLE IF NOT EXISTS fin_approval_tiers", "numeric(14,2)",
                      "CHECK (min_level BETWEEN 1 AND 20)", "'6.1'", "ON CONFLICT (clause) DO NOTHING",
-                     "UPDATE form_approval_rules SET is_active = false", "'adv_account_no'"):
+                     "UPDATE form_approval_rules SET is_active = false", "'adv_account_no'",
+                     "ALTER COLUMN amount_paid    DROP NOT NULL", "'VOUCHERED'"):
         assert fragment in sql

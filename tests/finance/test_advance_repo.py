@@ -27,8 +27,8 @@ def _adv(**kw):
 
 def test_awaiting_payment_without_fin_row():
     item = repo.serialize_advance(SUB, None, REQUEST, PEOPLE, {}, date(2026, 7, 8))
-    assert item["status"] == "AWAITING_PAYMENT"
-    assert item["status_label"] == "รอจ่าย"
+    assert item["status"] == "AWAITING_VOUCHER"
+    assert item["status_label"] == "รอตั้งเบิกทำจ่าย"
     assert item["fin"] is None
     assert item["request"] == {"purpose": "ค่าแอร์", "amount": 12740.0, "use_date": "2026-07-09T00:00:00+00:00",
                               "cost_center": None, "bank": None, "bank_label": None, "account_no": None,
