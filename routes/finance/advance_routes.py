@@ -15,9 +15,10 @@ from sqlalchemy.orm import Session
 from database import get_db
 from models.finance_model import FinAccount, FinAdvance, FinAdvanceLog
 from models.user_model import User
-from schemas.finance_schema import AccountCreate, AccountUpdate, ClearIn, ConfirmIn, PayIn, SendBackIn
+from schemas.finance_schema import AccountCreate, AccountUpdate, ClearIn, ConfirmIn, PayIn, SendBackIn, VoucherIn
 from services.finance import advance_logic as logic
 from services.finance import advance_repo as repo
+from services.finance import approval_repo
 
 router = APIRouter(prefix="/finance", tags=["Finance - Advance"])
 
@@ -105,18 +106,44 @@ def summary(db: Session = Depends(get_db)):
     return repo.outstanding_summary(db)
 
 
+@router.get("/approval-tiers")
+def approval_tiers(db: Session = Depends(get_db)):
+    return approval_repo.list_tiers(db)
+
+
+@router.get("/approval-preview")
+def approval_preview(employee_id: str, amount: str, db: Session = Depends(get_db)):
+    try:
+        result = approval_repo.describe(db, employee_id, amount)
+    except logic.AdvanceRuleError as exc:
+        raise _rule_error(exc)
+    return {"clause": result["clause"], "approver_label": result["approver_label"],
+            "required_level": result["required_level"]}
+
+
+@router.get("/approvals/pending")
+def approvals_pending(employee_id: str, db: Session = Depends(get_db)):
+    return approval_repo.pending_for(db, employee_id)
+
+
 @router.get("/advances/{form_id}")
 def get_advance(form_id: str, db: Session = Depends(get_db)):
     detail = repo.get_advance_detail(db, form_id)
     if detail is None:
         raise HTTPException(status_code=404, detail="ไม่พบรายการเบิกเงิน")
+    try:
+        result = approval_repo.describe(db, detail["requester"]["employee_id"], detail["request"]["amount"])
+        detail["approval"] = {"clause": result["clause"], "approver_label": result["approver_label"],
+                              "required_level": result["required_level"]}
+    except logic.AdvanceRuleError:
+        detail["approval"] = None
     return detail
 
 
 # ---------------------------- advances (write) ----------------------------
 
-PAY_FIELDS = ("acc_code", "voucher_no", "voucher_date", "payment_doc_no", "purpose",
-              "amount_paid", "transfer_date", "clear_due_date")
+PAY_FIELDS = ("acc_code", "payment_doc_no", "purpose", "amount_paid", "transfer_date", "clear_due_date")
+VOUCHER_FIELDS = ("voucher_no", "voucher_date")
 CLEAR_FIELDS = ("clear_date", "amount_actual", "clear_doc_no", "settle_amount", "settle_date", "remark")
 
 _ALREADY_SAVED = "รายการนี้ถูกบันทึกไปแล้ว กรุณารีเฟรชหน้าจอ"
@@ -129,8 +156,6 @@ def _snapshot(adv, fields):
 def _pay_values(body, due):
     return {
         "acc_code": body.acc_code,
-        "voucher_no": body.voucher_no,
-        "voucher_date": body.voucher_date,
         "payment_doc_no": body.payment_doc_no,
         "purpose": body.purpose,
         "amount_paid": body.amount_paid,
@@ -162,25 +187,56 @@ def _commit_and_return(db: Session, form_id: str):
     return repo.get_advance_detail(db, form_id)
 
 
+@router.put("/advances/{form_id}/voucher")
+def voucher_advance(form_id: str, body: VoucherIn, db: Session = Depends(get_db)):
+    require_finance(db, body.action_by)
+    sub, adv, status = _load_for_update(db, form_id)
+    try:
+        logic.check_voucher(status, voucher_date=body.voucher_date, is_edit=body.is_edit)
+    except logic.AdvanceRuleError as exc:
+        raise _rule_error(exc)
+    values = {"voucher_no": body.voucher_no, "voucher_date": body.voucher_date}
+    before = _snapshot(adv, VOUCHER_FIELDS)
+    action = "VOUCHER_EDIT" if adv is not None else "VOUCHER"
+    if adv is None:
+        adv = FinAdvance(submission_id=sub.id, form_id=sub.form_id, fin_status=logic.FIN_VOUCHERED)
+        db.add(adv)
+    for field, value in values.items():
+        setattr(adv, field, value)
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=_ALREADY_SAVED)
+    db.add(FinAdvanceLog(advance_id=adv.id, action=action, changes=logic.diff_fields(before, values),
+                         action_by=body.action_by))
+    return _commit_and_return(db, form_id)
+
+
 @router.put("/advances/{form_id}/pay")
 def pay_advance(form_id: str, body: PayIn, db: Session = Depends(get_db)):
     require_finance(db, body.action_by)
     sub, adv, status = _load_for_update(db, form_id)
-    account = db.get(FinAccount, body.acc_code)
+    account = db.get(FinAccount, body.acc_code) if body.acc_code else None
+    acc_active = True if not body.acc_code else bool(account and account.is_active)
     try:
-        due = logic.check_pay(status, acc_active=bool(account and account.is_active), amount_paid=body.amount_paid,
+        due = logic.check_pay(status, acc_active=acc_active, amount_paid=body.amount_paid,
                               transfer_date=body.transfer_date, clear_due_date=body.clear_due_date,
                               is_edit=body.is_edit)
     except logic.AdvanceRuleError as exc:
         raise _rule_error(exc)
 
+    if adv is None:  # unreachable: check_pay rejects AWAITING_VOUCHER — defensive
+        raise HTTPException(status_code=409, detail="ยังไม่ได้ตั้งเบิก กรุณาตั้งเบิกก่อนจ่ายเงิน")
     values = _pay_values(body, due)
+    if body.acc_code is None:
+        values["acc_code"] = adv.acc_code
     before = _snapshot(adv, PAY_FIELDS)
-    action = "PAY_EDIT" if adv is not None else "PAY"
-    if adv is None:
-        adv = FinAdvance(submission_id=sub.id, form_id=sub.form_id, fin_status=logic.FIN_PAID,
-                         paid_by=body.action_by, paid_at=func.now())
-        db.add(adv)
+    action = "PAY" if status == logic.AWAITING_PAYMENT else "PAY_EDIT"
+    if status == logic.AWAITING_PAYMENT:
+        adv.fin_status = logic.FIN_PAID
+        adv.paid_by = body.action_by
+        adv.paid_at = func.now()
     for field, value in values.items():
         setattr(adv, field, value)
     try:

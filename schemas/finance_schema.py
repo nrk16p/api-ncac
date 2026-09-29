@@ -31,14 +31,19 @@ class AccountUpdate(_Body):
 
 class PayIn(_Body):
     action_by: str
-    acc_code: str
-    voucher_no: Optional[str] = Field(default=None, max_length=50)
-    voucher_date: Optional[date] = None
+    acc_code: Optional[str] = None
     payment_doc_no: Optional[str] = Field(default=None, max_length=50)
     purpose: Optional[str] = None
     amount_paid: Decimal = Field(max_digits=12, decimal_places=2)
     transfer_date: date
     clear_due_date: Optional[date] = None
+    is_edit: bool = False
+
+
+class VoucherIn(_Body):
+    action_by: str
+    voucher_no: Optional[str] = Field(default=None, max_length=50)
+    voucher_date: date
     is_edit: bool = False
 
 
