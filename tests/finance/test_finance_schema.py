@@ -36,3 +36,10 @@ def test_voucher_in_requires_date():
     assert VoucherIn(action_by="670108", voucher_date="2026-09-29").voucher_no is None
     with pytest.raises(ValidationError):
         VoucherIn(action_by="670108")
+
+
+def test_confirm_in_clear_doc_no_optional_and_blank_becomes_none():
+    from schemas.finance_schema import ConfirmIn
+    assert ConfirmIn(action_by="a").clear_doc_no is None
+    assert ConfirmIn(action_by="a", clear_doc_no="  ").clear_doc_no is None
+    assert ConfirmIn(action_by="a", clear_doc_no=" R1 ").clear_doc_no == "R1"

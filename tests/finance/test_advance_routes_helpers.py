@@ -25,3 +25,7 @@ def test_pay_values_mapping():
     values = r._pay_values(body, date(2026, 7, 16))
     assert values["clear_due_date"] == date(2026, 7, 16)
     assert set(values) == set(r.PAY_FIELDS)
+
+
+def test_clear_fields_no_longer_include_clear_doc_no():
+    assert "clear_doc_no" not in r.CLEAR_FIELDS

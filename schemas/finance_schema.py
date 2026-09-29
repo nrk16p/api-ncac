@@ -64,5 +64,6 @@ class SendBackIn(_Body):
 
 class ConfirmIn(_Body):
     action_by: str
+    clear_doc_no: Optional[str] = Field(default=None, max_length=100)
     settle_date: Optional[date] = None
     expected_clear_submitted_at: Optional[datetime] = None

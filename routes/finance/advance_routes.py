@@ -144,7 +144,7 @@ def get_advance(form_id: str, db: Session = Depends(get_db)):
 
 PAY_FIELDS = ("acc_code", "payment_doc_no", "purpose", "amount_paid", "transfer_date", "clear_due_date")
 VOUCHER_FIELDS = ("voucher_no", "voucher_date")
-CLEAR_FIELDS = ("clear_date", "amount_actual", "clear_doc_no", "settle_amount", "settle_date", "remark")
+CLEAR_FIELDS = ("clear_date", "amount_actual", "settle_amount", "settle_date", "remark")
 
 _ALREADY_SAVED = "รายการนี้ถูกบันทึกไปแล้ว กรุณารีเฟรชหน้าจอ"
 
@@ -261,7 +261,7 @@ def clear_advance(form_id: str, body: ClearIn, db: Session = Depends(get_db)):
     except logic.AdvanceRuleError as exc:
         raise _rule_error(exc)
 
-    values = {"clear_date": body.clear_date, "amount_actual": body.amount_actual, "clear_doc_no": body.clear_doc_no,
+    values = {"clear_date": body.clear_date, "amount_actual": body.amount_actual,
               "settle_amount": settle, "settle_date": settle_date, "remark": body.remark}
     before = _snapshot(adv, CLEAR_FIELDS)
     action = "CLEAR_EDIT" if status == logic.AWAITING_REVIEW else "CLEAR_SUBMIT"
@@ -304,6 +304,10 @@ def confirm_advance(form_id: str, body: ConfirmIn, db: Session = Depends(get_db)
     if extra_paid_on is not None:
         changes = logic.diff_fields({"settle_date": adv.settle_date}, {"settle_date": extra_paid_on})
         adv.settle_date = extra_paid_on
+    if body.clear_doc_no is not None:  # เอกสารเคลียร์ is recorded by บัญชี at review
+        changes = {**changes, **logic.diff_fields({"clear_doc_no": adv.clear_doc_no},
+                                                  {"clear_doc_no": body.clear_doc_no})}
+        adv.clear_doc_no = body.clear_doc_no
     adv.fin_status = logic.FIN_CLOSED
     adv.closed_by = body.action_by
     adv.closed_at = func.now()
