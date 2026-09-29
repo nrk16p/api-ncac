@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 from models.finance_model import FinAccount, FinAdvance, FinAdvanceLog
 from models.master_model import FormApprovalLog, FormMaster, FormQuestion, FormSubmission, FormSubmissionValue
-from models.user_model import Department, Site, User
+from models.user_model import Department, Position, Site, User
 from services.finance import advance_logic as logic
 
 BKK = ZoneInfo("Asia/Bangkok")
@@ -77,6 +77,7 @@ def people_by_employee_id(db, employee_ids):
         return {}
     departments = {d.department_id: d.department_name_th for d in db.query(Department).all()}
     sites = {s.site_id: (s.site_name_th, s.site_code) for s in db.query(Site).all()}
+    positions = {p.position_id: p.position_name_th for p in db.query(Position).all()}
     people = {}
     for user in db.query(User).filter(User.employee_id.in_(ids)).all():
         site_name, site_code = sites.get(user.site_id, (None, None))
@@ -86,6 +87,7 @@ def people_by_employee_id(db, employee_ids):
             "department": departments.get(user.department_id),
             "site": site_name,
             "site_code": site_code,
+            "position": positions.get(user.position_id),
         }
     return people
 
@@ -146,6 +148,7 @@ def serialize_advance(sub, adv, request, people, acc_names, today):
     )
     requester = people.get(sub.created_by) or {
         "employee_id": sub.created_by, "name": None, "department": None, "site": None, "site_code": None,
+        "position": None,
     }
     return {
         "form_id": sub.form_id,

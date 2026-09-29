@@ -109,7 +109,8 @@ def pending_for(db, employee_id):
             "submission_id": sub.id,
             "created_at": advance_repo._iso(sub.created_at),
             "requester": people_info.get(sub.created_by) or {
-                "employee_id": sub.created_by, "name": None, "department": None, "site": None, "site_code": None},
+                "employee_id": sub.created_by, "name": None, "department": None, "site": None, "site_code": None,
+                "position": None},
             "request": advance_repo.serialize_request(request),
             "tier": {"clause": result["clause"], "approver_label": result["approver_label"],
                      "required_level": result["required_level"]},

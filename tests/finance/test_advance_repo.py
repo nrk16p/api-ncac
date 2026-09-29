@@ -48,7 +48,7 @@ def test_paid_overdue_with_account_name():
 def test_unknown_requester_falls_back_to_employee_id():
     item = repo.serialize_advance(SUB, None, None, {}, {}, date(2026, 7, 8))
     assert item["requester"] == {"employee_id": "670001", "name": None, "department": None,
-                                 "site": None, "site_code": None}
+                                 "site": None, "site_code": None, "position": None}
     assert item["request"] == {"purpose": None, "amount": None, "use_date": None, "cost_center": None,
                               "bank": None, "bank_label": None, "account_no": None, "account_name": None}
 
@@ -71,3 +71,29 @@ def test_serialize_request_empty():
     from services.finance.advance_repo import serialize_request
     out = serialize_request(None)
     assert out["amount"] is None and out["bank_label"] is None and out["cost_center"] is None
+
+
+def test_people_by_employee_id_includes_position():
+    from types import SimpleNamespace
+    from services.finance import advance_repo
+
+    class Q:
+        def __init__(self, rows): self.rows = rows
+        def filter(self, *a, **k): return self
+        def outerjoin(self, *a, **k): return self
+        def all(self): return self.rows
+
+    user = SimpleNamespace(employee_id="670108", firstname="ณรงค์กรณ์", lastname="ท", department_id=11,
+                           site_id=1, position_id=7)
+    class DB:
+        def query(self, *models):
+            names = [getattr(m, "__name__", getattr(m, "key", "")) for m in models]
+            if names == ["Department"]:
+                return Q([SimpleNamespace(department_id=11, department_name_th="Operation Support")])
+            if names == ["Site"]:
+                return Q([SimpleNamespace(site_id=1, site_name_th="HQ", site_code="HQ")])
+            if names == ["Position"]:
+                return Q([SimpleNamespace(position_id=7, position_name_th="ผู้จัดการ")])
+            return Q([user])
+    people = advance_repo.people_by_employee_id(DB(), ["670108"])
+    assert people["670108"]["position"] == "ผู้จัดการ"
