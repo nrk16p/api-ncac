@@ -70,6 +70,16 @@ def direct_level(people: Iterable[Mapping], requester: Mapping, required: int,
     return min(levels) if levels else None
 
 
+def direct_approvers(people: Iterable[Mapping], requester: Mapping, required: int,
+                     mappings: Mapping[str, Iterable[int]]) -> list:
+    eligible = [p for p in people
+                if can_approve(p, requester, required, mappings.get(p["employee_id"], ()))]
+    if not eligible:
+        return []
+    lowest = min(p["level"] for p in eligible)
+    return [p for p in eligible if p["level"] == lowest]
+
+
 def approval_tab(approver_level: int, direct: Optional[int]) -> str:
     return TAB_MINE if direct is not None and approver_level <= direct else TAB_DELEGABLE
 

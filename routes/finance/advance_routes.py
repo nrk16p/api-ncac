@@ -140,6 +140,17 @@ def get_advance(form_id: str, db: Session = Depends(get_db)):
     return detail
 
 
+@router.get("/advances/{form_id}/approvers")
+def advance_approvers(form_id: str, db: Session = Depends(get_db)):
+    sub = repo.get_advance_submission(db, form_id)
+    if sub is None:
+        raise HTTPException(status_code=404, detail="ไม่พบรายการเบิกเงิน")
+    try:
+        return approval_repo.suggested_approvers(db, sub)
+    except logic.AdvanceRuleError as exc:
+        raise _rule_error(exc)
+
+
 # ---------------------------- advances (write) ----------------------------
 
 PAY_FIELDS = ("acc_code", "payment_doc_no", "purpose", "amount_paid", "transfer_date", "clear_due_date")

@@ -139,3 +139,26 @@ class TestEvaluate:
         people = {"R": person("R", 9, 1)}
         with pytest.raises(AdvanceRuleError, match=A.MSG_NO_APPROVER):
             A.evaluate(TIERS, people, {}, "R", "100")
+
+
+class TestDirectApprovers:
+    def test_only_lowest_eligible_level(self):
+        req = person("R", 1, 10)
+        people = [req, person("A", 3, 10), person("B", 5, 10), person("C", 3, 10)]
+        got = A.direct_approvers(people, req, 2, {})
+        assert sorted(p["employee_id"] for p in got) == ["A", "C"]
+
+    def test_requester_excluded(self):
+        req = person("R", 9, 10)
+        people = [req, person("X", 9, 20)]
+        assert [p["employee_id"] for p in A.direct_approvers(people, req, 9, {})] == ["X"]
+
+    def test_level_9_is_org_wide(self):
+        req = person("R", 4, 10)
+        people = [req, person("N", 9, 99), person("D", 5, 10), person("E", 6, 20)]
+        assert [p["employee_id"] for p in A.direct_approvers(people, req, 5, {})] == ["D"]
+        assert [p["employee_id"] for p in A.direct_approvers([req, person("N", 9, 99)], req, 9, {})] == ["N"]
+
+    def test_empty_when_nobody_eligible(self):
+        req = person("R", 1, 10)
+        assert A.direct_approvers([req, person("A", 1, 10), person("B", 5, 20, active=False)], req, 3, {}) == []

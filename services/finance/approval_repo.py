@@ -63,6 +63,24 @@ def _amount_of(db, submission_id):
     return (advance_repo.request_values_by_submission(db, [submission_id]).get(submission_id) or {}).get("amount")
 
 
+def suggested_approvers(db, submission) -> dict:
+    ctx = load_context(db)
+    requester_id = submission.created_by
+    info = describe(db, requester_id, _amount_of(db, submission.id), ctx)
+    requester = ctx.people[requester_id]
+    direct = rules.direct_approvers(ctx.people.values(), requester, info["required_level"], ctx.mappings)
+    details = advance_repo.people_by_employee_id(db, [p["employee_id"] for p in direct])
+    approvers = []
+    for p in direct:
+        d = details.get(p["employee_id"]) or {}
+        approvers.append({"employee_id": p["employee_id"], "name": d.get("name"),
+                          "position": d.get("position"), "department": d.get("department")})
+    approvers.sort(key=lambda a: (a["name"] or "", a["employee_id"]))
+    return {"requester_employee_id": requester_id, "clause": info["clause"],
+            "approver_label": info["approver_label"], "required_level": info["required_level"],
+            "approvers": approvers}
+
+
 def can_approve_submission(db, submission, approver_employee_id) -> bool:
     ctx = load_context(db)
     try:
