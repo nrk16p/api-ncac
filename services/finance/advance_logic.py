@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import re
 from datetime import date, datetime, timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Iterable, Mapping
 
 CLEAR_DUE_DAYS = 7
@@ -162,9 +162,9 @@ def check_clear_items(items):
         _require(a >= 0, label + "ยอดเงินก่อน VAT ต้องไม่ติดลบ")
         _require(b >= 0, label + "ภาษีมูลค่าเพิ่มต้องไม่ติดลบ")
         _require(d >= 0, label + "หัก ณ ที่จ่ายต้องไม่ติดลบ")
-        a, b, d = a.quantize(_CENT), b.quantize(_CENT), d.quantize(_CENT)
-        c = (a + b).quantize(_CENT)
-        e = (c - d).quantize(_CENT)
+        a, b, d = (x.quantize(_CENT, rounding=ROUND_HALF_UP) for x in (a, b, d))
+        c = a + b
+        e = c - d
         _require(e >= 0, label + "หัก ณ ที่จ่ายต้องไม่เกินยอดรวม ทำให้ยอดสุทธิติดลบ")
         vehicle = (get(item, "vehicle") or "").strip() or None
         has_receipt = get(item, "has_receipt")

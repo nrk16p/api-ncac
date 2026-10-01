@@ -302,7 +302,7 @@ def clear_advance(form_id: str, body: ClearIn, db: Session = Depends(get_db)):
     db.add_all([FinAdvanceClearItem(advance_id=adv.id, **row) for row in rows])
     adv.fin_status = logic.FIN_CLEARING_SUBMITTED
     adv.clear_submitted_at = func.now()
-    changes = {**logic.diff_fields(before, values), "items": [old_count, len(rows)]}
+    changes = {**logic.diff_fields(before, values), "items": [old_count, len(rows)], "items_total": str(total_net)}
     db.add(FinAdvanceLog(advance_id=adv.id, action=action, changes=changes,
                          remark=body.remark, action_by=body.action_by))
     return _commit_and_return(db, form_id)
