@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 from database import get_db
 from fastapi import BackgroundTasks
 from services.email_service import render_form_rejected_th ,  send_email , render_form_approved_th
@@ -39,8 +39,121 @@ def is_advance_submission(submission: FormSubmission) -> bool:
     return submission.form is not None and submission.form.form_type == ADVANCE_FORM_TYPE
 
 
-def get_user_by_employee_id(db: Session, employee_id: str) -> User | None:
-    return db.query(User).filter(User.employee_id == employee_id).first()
+# ------------------------------------------------------------
+# Per-request cache
+#
+# One FastAPI request = one SQLAlchemy Session (see database.get_db,
+# which opens/closes a fresh Session per request), so Session.info is a
+# safe place to stash a request-scoped cache: it can never leak into
+# another request, and nothing in approve/reject mutates these tables
+# mid-request (they only write FormSubmission/FormApprovalLog), so the
+# cache can't go stale within the lifetime of one request either.
+#
+# This replaces what used to be N+1 / N*M per-row queries (one
+# get_user_by_employee_id + one Position lookup + a full "all active
+# users" rescan per FormSubmission row, each doing its own queries) with
+# a handful of bulk loads done at most once per request.
+# ------------------------------------------------------------
+
+_CACHE_KEY = "_approval_cache"
+
+
+def _get_request_cache(db: Session) -> dict:
+    cache = db.info.get(_CACHE_KEY)
+    if cache is None:
+        cache = {
+            "users_by_employee_id": None,
+            "active_users": None,
+            "positions_level_by_id": None,
+            "departments_by_id": None,
+            "approver_dept_pairs": None,
+            "rules_by_form_level": None,
+            "eligible_approver_memo": {},
+        }
+        db.info[_CACHE_KEY] = cache
+    return cache
+
+
+def _load_users(db: Session, cache: dict) -> dict:
+    """Populates + returns users_by_employee_id; also fills active_users.
+
+    Loaded ordered by id ascending so that, if duplicate employee_id rows
+    ever exist, the first one (lowest id) wins — approximating the
+    previous `.filter(...).first()` behavior without relying on
+    Postgres's unspecified default row order.
+    """
+    if cache["users_by_employee_id"] is None:
+        by_emp: dict[str, User] = {}
+        active: list[User] = []
+        for u in db.query(User).order_by(User.id.asc()).all():
+            if u.employee_id is not None and u.employee_id not in by_emp:
+                by_emp[u.employee_id] = u
+            if u.employee_status == "Active":
+                active.append(u)
+        cache["users_by_employee_id"] = by_emp
+        cache["active_users"] = active
+    return cache["users_by_employee_id"]
+
+
+def _load_position_levels(db: Session, cache: dict) -> dict:
+    if cache["positions_level_by_id"] is None:
+        cache["positions_level_by_id"] = {
+            p.position_id: p.position_level_id for p in db.query(Position).all()
+        }
+    return cache["positions_level_by_id"]
+
+
+def _load_departments(db: Session, cache: dict) -> dict:
+    if cache["departments_by_id"] is None:
+        cache["departments_by_id"] = {
+            d.department_id: d for d in db.query(Department).all()
+        }
+    return cache["departments_by_id"]
+
+
+def _load_approver_dept_pairs(db: Session, cache: dict) -> set:
+    if cache["approver_dept_pairs"] is None:
+        cache["approver_dept_pairs"] = {
+            (r.employee_id, r.department_id)
+            for r in db.query(FormApproverDepartment)
+            .filter(FormApproverDepartment.is_active == True)
+            .all()
+        }
+    return cache["approver_dept_pairs"]
+
+
+def _load_rules_by_form_level(db: Session, cache: dict) -> dict:
+    """All active rules grouped by (form_master_id, level_no), each list
+    ordered by id ascending.
+
+    Used both for the fallback candidate scan (same order as the old
+    explicit `.order_by(FormApprovalRule.id.asc())` query) and, in
+    get_applicable_rule below, to approximate the old creator-range
+    `.first()` query — which had **no** ORDER BY, so Postgres was free to
+    return any matching row. We pick the lowest-id match deterministically;
+    this only differs from the old behavior if a form/level ever has more
+    than one rule whose creator_min/max band contains the same
+    creator_level (an overlapping-rule misconfiguration), in which case
+    the old code's choice was itself unspecified.
+    """
+    if cache["rules_by_form_level"] is None:
+        grouped: dict[tuple[int, int], list[FormApprovalRule]] = {}
+        for r in (
+            db.query(FormApprovalRule)
+            .filter(FormApprovalRule.is_active == True)
+            .order_by(FormApprovalRule.id.asc())
+            .all()
+        ):
+            grouped.setdefault((r.form_master_id, r.level_no), []).append(r)
+        cache["rules_by_form_level"] = grouped
+    return cache["rules_by_form_level"]
+
+
+def get_user_by_employee_id(db: Session, employee_id: str | None) -> User | None:
+    if not employee_id:
+        return None
+    cache = _get_request_cache(db)
+    return _load_users(db, cache).get(employee_id)
 
 
 def get_employee_position_level(db: Session, employee_id: str) -> int | None:
@@ -48,8 +161,8 @@ def get_employee_position_level(db: Session, employee_id: str) -> int | None:
     if not user or not user.position_id:
         return None
 
-    pos = db.query(Position).filter(Position.position_id == user.position_id).first()
-    return pos.position_level_id if pos else None
+    cache = _get_request_cache(db)
+    return _load_position_levels(db, cache).get(user.position_id)
 
 
 def get_applicable_rule(
@@ -58,17 +171,12 @@ def get_applicable_rule(
     creator_level: int,
     level_no: int,
 ) -> FormApprovalRule | None:
-    return (
-        db.query(FormApprovalRule)
-        .filter(
-            FormApprovalRule.form_master_id == form_master_id,
-            FormApprovalRule.level_no == level_no,
-            FormApprovalRule.is_active == True,
-            FormApprovalRule.creator_min <= creator_level,
-            FormApprovalRule.creator_max >= creator_level,
-        )
-        .first()
-    )
+    cache = _get_request_cache(db)
+    rules = _load_rules_by_form_level(db, cache).get((form_master_id, level_no), [])
+    for r in rules:
+        if r.creator_min <= creator_level <= r.creator_max:
+            return r
+    return None
 
 
 def _rule_has_eligible_approver(
@@ -76,10 +184,19 @@ def _rule_has_eligible_approver(
     rule: FormApprovalRule,
     requester: User,
 ) -> bool:
-    users = db.query(User).filter(User.employee_status == "Active").all()
+    cache = _get_request_cache(db)
+    memo_key = (rule.id, requester.department_id)
+    memo = cache["eligible_approver_memo"]
+    if memo_key in memo:
+        return memo[memo_key]
 
-    for user in users:
-        approver_level = get_employee_position_level(db, user.employee_id)
+    _load_users(db, cache)  # ensures active_users is populated
+    positions = _load_position_levels(db, cache)
+    active_users = cache["active_users"]
+
+    result = False
+    for user in active_users:
+        approver_level = positions.get(user.position_id) if user.position_id else None
         if not approver_level:
             continue
 
@@ -90,9 +207,11 @@ def _rule_has_eligible_approver(
             approver_level=approver_level,
             requester=requester,
         ):
-            return True
+            result = True
+            break
 
-    return False
+    memo[memo_key] = result
+    return result
 
 
 def get_applicable_rule_with_fallback(
@@ -107,16 +226,8 @@ def get_applicable_rule_with_fallback(
     if rule and _rule_has_eligible_approver(db, rule, requester):
         return rule
 
-    candidates = (
-        db.query(FormApprovalRule)
-        .filter(
-            FormApprovalRule.form_master_id == form_master_id,
-            FormApprovalRule.level_no == level_no,
-            FormApprovalRule.is_active == True,
-        )
-        .order_by(FormApprovalRule.id.asc())
-        .all()
-    )
+    cache = _get_request_cache(db)
+    candidates = _load_rules_by_form_level(db, cache).get((form_master_id, level_no), [])
 
     for candidate in candidates:
         if rule and candidate.id == rule.id:
@@ -132,16 +243,9 @@ def approver_can_handle_department(
     employee_id: str,
     department_id: int,
 ) -> bool:
-    return (
-        db.query(FormApproverDepartment)
-        .filter(
-            FormApproverDepartment.employee_id == employee_id,
-            FormApproverDepartment.department_id == department_id,
-            FormApproverDepartment.is_active == True,
-        )
-        .first()
-        is not None
-    )
+    cache = _get_request_cache(db)
+    pairs = _load_approver_dept_pairs(db, cache)
+    return (employee_id, department_id) in pairs
 
 
 def can_user_approve(
@@ -200,8 +304,12 @@ def get_pending_approvals(
     if not approver_level:
         return []
 
+    cache = _get_request_cache(db)
+    positions = _load_position_levels(db, cache)
+
     submissions = (
         db.query(FormSubmission)
+        .options(selectinload(FormSubmission.form))
         .filter(FormSubmission.status_approve == "In Progress")
         .all()
     )
@@ -214,16 +322,14 @@ def get_pending_approvals(
         if not requester or not requester.position_id:
             continue
 
-        pos_req = db.query(Position).filter(
-            Position.position_id == requester.position_id
-        ).first()
-        if not pos_req:
+        creator_level = positions.get(requester.position_id)
+        if creator_level is None:
             continue
 
         rule = get_applicable_rule_with_fallback(
             db=db,
             form_master_id=sub.form_master_id,
-            creator_level=pos_req.position_level_id,
+            creator_level=creator_level,
             level_no=sub.current_approval_level,
             requester=requester,
         )
@@ -274,6 +380,7 @@ def get_approval_history(
     query = (
         db.query(FormApprovalLog, FormSubmission)
         .join(FormSubmission, FormApprovalLog.submission_id == FormSubmission.id)
+        .options(selectinload(FormSubmission.form))
         .filter(
             FormApprovalLog.action_by == approver.id,
             FormApprovalLog.action.in_(["APPROVED", "REJECTED"]),
@@ -291,6 +398,9 @@ def get_approval_history(
 
     rows = query.order_by(FormApprovalLog.action_at.desc()).all()
 
+    cache = _get_request_cache(db)
+    departments = _load_departments(db, cache)
+
     result = []
     seen_submissions = set()
 
@@ -303,9 +413,7 @@ def get_approval_history(
         requester = get_user_by_employee_id(db, sub.created_by)
         department = None
         if requester and requester.department_id:
-            department = db.query(Department).filter(
-                Department.department_id == requester.department_id
-            ).first()
+            department = departments.get(requester.department_id)
 
         result.append({
             "submission_id": sub.id,
