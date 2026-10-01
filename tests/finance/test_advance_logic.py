@@ -470,6 +470,15 @@ class TestCheckClearItems:
         base.update(kw)
         return base
 
+    def test_row_over_numeric_limit_is_rule_error(self):
+        with pytest.raises(L.AdvanceRuleError, match="รายการที่ 1: ยอดเงินเกินกำหนด"):
+            L.check_clear_items([self.item(amount_before_vat="9999999999.99", vat_amount="1")])
+
+    def test_total_over_numeric_limit_is_rule_error(self):
+        big = self.item(amount_before_vat="6000000000", vat_amount="0")
+        with pytest.raises(L.AdvanceRuleError, match="ยอดรวมรายการค่าใช้จ่ายเกินกำหนด"):
+            L.check_clear_items([big, big])
+
     def test_totals_and_normalisation(self):
         rows, total = L.check_clear_items([self.item(), self.item(amount_before_vat="200", vat_amount="14", wht_amount="3")])
         assert [r["line_no"] for r in rows] == [1, 2]

@@ -297,12 +297,14 @@ def clear_advance(form_id: str, body: ClearIn, db: Session = Depends(get_db)):
     action = "CLEAR_EDIT" if status == logic.AWAITING_REVIEW else "CLEAR_SUBMIT"
     for field, value in values.items():
         setattr(adv, field, value)
+    old_total = (db.query(func.sum(FinAdvanceClearItem.net_amount))
+                 .filter(FinAdvanceClearItem.advance_id == adv.id).scalar())
     old_count = (db.query(FinAdvanceClearItem).filter(FinAdvanceClearItem.advance_id == adv.id)
                  .delete(synchronize_session=False))
     db.add_all([FinAdvanceClearItem(advance_id=adv.id, **row) for row in rows])
     adv.fin_status = logic.FIN_CLEARING_SUBMITTED
     adv.clear_submitted_at = func.now()
-    changes = {**logic.diff_fields(before, values), "items": [old_count, len(rows)], "items_total": str(total_net)}
+    changes = {**logic.diff_fields(before, values), "items": [old_count, len(rows)], "items_total": [None if old_total is None else str(old_total), str(total_net)]}
     db.add(FinAdvanceLog(advance_id=adv.id, action=action, changes=changes,
                          remark=body.remark, action_by=body.action_by))
     return _commit_and_return(db, form_id)

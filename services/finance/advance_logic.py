@@ -133,6 +133,7 @@ def check_reject_voucher(status, *, remark):
 
 
 MAX_CLEAR_ITEMS = 30
+MAX_AMOUNT = Decimal("9999999999.99")  # numeric(12,2)
 
 
 def check_clear_items(items):
@@ -166,6 +167,7 @@ def check_clear_items(items):
         c = a + b
         e = c - d
         _require(e >= 0, label + "หัก ณ ที่จ่ายต้องไม่เกินยอดรวม ทำให้ยอดสุทธิติดลบ")
+        _require(c <= MAX_AMOUNT, label + "ยอดเงินเกินกำหนด")
         vehicle = (get(item, "vehicle") or "").strip() or None
         has_receipt = get(item, "has_receipt")
         rows.append({
@@ -175,6 +177,7 @@ def check_clear_items(items):
             "total_amount": c, "wht_amount": d, "net_amount": e,
         })
         total_net += e
+    _require(total_net <= MAX_AMOUNT, "ยอดรวมรายการค่าใช้จ่ายเกินกำหนด")
     return rows, total_net.quantize(_CENT)
 
 
