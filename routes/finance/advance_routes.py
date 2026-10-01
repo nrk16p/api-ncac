@@ -13,7 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from database import get_db
-from models.finance_model import FinAccount, FinAdvance, FinAdvanceLog
+from models.finance_model import FinAccount, FinAdvance, FinAdvanceClearItem, FinAdvanceLog
 from models.user_model import User
 from schemas.finance_schema import AccountCreate, AccountUpdate, ClearIn, ConfirmIn, PayIn, RejectVoucherIn, SendBackIn, VoucherIn
 from services.finance import advance_logic as logic
@@ -284,21 +284,26 @@ def clear_advance(form_id: str, body: ClearIn, db: Session = Depends(get_db)):
     if adv is None:
         raise HTTPException(status_code=409, detail="การเงินยังไม่ได้จ่ายเงิน จึงยังเคลียร์ไม่ได้")
     try:
+        rows, total_net = logic.check_clear_items(body.items)  # amount_actual = Σ net; client value ignored
         settle, settle_date = logic.check_clear(
             status, is_owner=(body.action_by == sub.created_by), amount_paid=adv.amount_paid,
-            clear_date=body.clear_date, amount_actual=body.amount_actual, settle_date=body.settle_date)
+            clear_date=body.clear_date, amount_actual=total_net, settle_date=body.settle_date)
     except logic.AdvanceRuleError as exc:
         raise _rule_error(exc)
 
-    values = {"clear_date": body.clear_date, "amount_actual": body.amount_actual,
+    values = {"clear_date": body.clear_date, "amount_actual": total_net,
               "settle_amount": settle, "settle_date": settle_date, "remark": body.remark}
     before = _snapshot(adv, CLEAR_FIELDS)
     action = "CLEAR_EDIT" if status == logic.AWAITING_REVIEW else "CLEAR_SUBMIT"
     for field, value in values.items():
         setattr(adv, field, value)
+    old_count = (db.query(FinAdvanceClearItem).filter(FinAdvanceClearItem.advance_id == adv.id)
+                 .delete(synchronize_session=False))
+    db.add_all([FinAdvanceClearItem(advance_id=adv.id, **row) for row in rows])
     adv.fin_status = logic.FIN_CLEARING_SUBMITTED
     adv.clear_submitted_at = func.now()
-    db.add(FinAdvanceLog(advance_id=adv.id, action=action, changes=logic.diff_fields(before, values),
+    changes = {**logic.diff_fields(before, values), "items": [old_count, len(rows)]}
+    db.add(FinAdvanceLog(advance_id=adv.id, action=action, changes=changes,
                          remark=body.remark, action_by=body.action_by))
     return _commit_and_return(db, form_id)
 

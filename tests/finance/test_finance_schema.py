@@ -6,6 +6,8 @@ from pydantic import ValidationError
 
 from schemas.finance_schema import ClearIn, PayIn
 
+ITEM = {"expense_date": "2026-07-14", "description": "x", "amount_before_vat": "10"}
+
 
 def test_blank_strings_become_none():
     body = PayIn(action_by="680001", acc_code="110103", payment_doc_no="  ", amount_paid="1000",
@@ -17,7 +19,7 @@ def test_blank_strings_become_none():
 
 def test_blank_action_by_rejected():
     with pytest.raises(ValidationError):
-        ClearIn(action_by=" ", clear_date="2026-07-15", amount_actual="10")
+        ClearIn(action_by=" ", clear_date="2026-07-15", items=[ITEM])
 
 
 def test_more_than_two_decimals_rejected():
@@ -50,3 +52,26 @@ def test_reject_voucher_in_requires_remark():
     assert RejectVoucherIn(action_by="680001", remark="ผิด").remark == "ผิด"
     with pytest.raises(ValidationError):
         RejectVoucherIn(action_by="680001")
+
+
+def test_clear_in_items_required_and_amount_actual_optional():
+    body = ClearIn(action_by="680001", clear_date="2026-07-15", items=[ITEM])
+    assert body.amount_actual is None
+    item = body.items[0]
+    assert item.has_receipt is True and item.vat_amount == Decimal("0") and item.wht_amount == Decimal("0")
+    assert item.vehicle is None
+    with pytest.raises(ValidationError):
+        ClearIn(action_by="680001", clear_date="2026-07-15", amount_actual="10")
+    with pytest.raises(ValidationError):
+        ClearIn(action_by="680001", clear_date="2026-07-15", items=[])
+
+
+def test_clear_item_limits():
+    with pytest.raises(ValidationError):
+        ClearIn(action_by="a", clear_date="2026-07-15", items=[{**ITEM, "vehicle": "x" * 51}])
+    with pytest.raises(ValidationError):
+        ClearIn(action_by="a", clear_date="2026-07-15", items=[{**ITEM, "description": "x" * 256}])
+    with pytest.raises(ValidationError):
+        ClearIn(action_by="a", clear_date="2026-07-15", items=[{**ITEM, "amount_before_vat": "1.234"}])
+    with pytest.raises(ValidationError):
+        ClearIn(action_by="a", clear_date="2026-07-15", items=[{k: v for k, v in ITEM.items() if k != "amount_before_vat"}])

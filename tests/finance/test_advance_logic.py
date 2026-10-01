@@ -460,3 +460,64 @@ def test_check_clear_settle_date_message():
         L.check_clear(L.AWAITING_CLEARING, is_owner=True, amount_paid=Decimal("1000"),
                           clear_date=date(2026, 9, 29), amount_actual=Decimal("400"), settle_date=None)
     assert str(exc.value) == "มียอดต้องคืนบริษัท กรุณาระบุวันที่โอนเงินคืนบริษัท"
+
+
+class TestCheckClearItems:
+    @staticmethod
+    def item(**kw):
+        base = {"expense_date": date(2026, 9, 14), "vehicle": " 70-1234 ", "has_receipt": True,
+                "description": " ค่าน้ำมัน ", "amount_before_vat": "100.00", "vat_amount": "7.00", "wht_amount": "0"}
+        base.update(kw)
+        return base
+
+    def test_totals_and_normalisation(self):
+        rows, total = L.check_clear_items([self.item(), self.item(amount_before_vat="200", vat_amount="14", wht_amount="3")])
+        assert [r["line_no"] for r in rows] == [1, 2]
+        assert rows[0]["total_amount"] == Decimal("107.00") and rows[0]["net_amount"] == Decimal("107.00")
+        assert rows[1]["total_amount"] == Decimal("214.00") and rows[1]["net_amount"] == Decimal("211.00")
+        assert total == Decimal("318.00")
+        assert rows[0]["description"] == "ค่าน้ำมัน" and rows[0]["vehicle"] == "70-1234"
+
+    def test_rounding_to_cents_and_defaults(self):
+        rows, total = L.check_clear_items([self.item(amount_before_vat="10", vat_amount=None, wht_amount=None,
+                                                    vehicle=" ", has_receipt=None)])
+        assert rows[0]["amount_before_vat"] == Decimal("10.00") and rows[0]["total_amount"] == Decimal("10.00")
+        assert rows[0]["vat_amount"] == Decimal("0.00") and rows[0]["wht_amount"] == Decimal("0.00")
+        assert rows[0]["vehicle"] is None and rows[0]["has_receipt"] is True
+        assert total == rows[0]["net_amount"]
+
+    def test_accepts_objects(self):
+        from types import SimpleNamespace
+        rows, total = L.check_clear_items([SimpleNamespace(**self.item(has_receipt=False))])
+        assert rows[0]["has_receipt"] is False and total == Decimal("107.00")
+
+    @pytest.mark.parametrize("items,msg", [
+        ([], "กรุณาระบุรายการค่าใช้จ่ายอย่างน้อย 1 รายการ"),
+        (None, "กรุณาระบุรายการค่าใช้จ่ายอย่างน้อย 1 รายการ"),
+        ([{}] * 31, "ระบุรายการค่าใช้จ่ายได้ไม่เกิน 30 รายการ"),
+    ])
+    def test_count_limits(self, items, msg):
+        with pytest.raises(L.AdvanceRuleError, match=msg):
+            L.check_clear_items(items)
+
+    def test_thirty_rows_ok(self):
+        rows, total = L.check_clear_items([self.item()] * 30)
+        assert len(rows) == 30 and rows[-1]["line_no"] == 30 and total == Decimal("3210.00")
+
+    @pytest.mark.parametrize("override,msg", [
+        ({"expense_date": None}, "รายการที่ 2: กรุณาระบุวันที่"),
+        ({"description": "   "}, "รายการที่ 2: กรุณาระบุรายละเอียด"),
+        ({"description": None}, "รายการที่ 2: กรุณาระบุรายละเอียด"),
+        ({"amount_before_vat": None}, "รายการที่ 2: กรุณาระบุยอดเงินก่อน VAT"),
+        ({"amount_before_vat": "-1"}, "รายการที่ 2: ยอดเงินก่อน VAT ต้องไม่ติดลบ"),
+        ({"vat_amount": "-0.01"}, "รายการที่ 2: ภาษีมูลค่าเพิ่มต้องไม่ติดลบ"),
+        ({"wht_amount": "-5"}, "รายการที่ 2: หัก ณ ที่จ่ายต้องไม่ติดลบ"),
+        ({"wht_amount": "107.01"}, "รายการที่ 2: หัก ณ ที่จ่ายต้องไม่เกินยอดรวม"),
+    ])
+    def test_per_row_messages(self, override, msg):
+        with pytest.raises(L.AdvanceRuleError, match=msg):
+            L.check_clear_items([self.item(), self.item(**override)])
+
+    def test_wht_equal_to_total_gives_zero_net(self):
+        rows, total = L.check_clear_items([self.item(wht_amount="107")])
+        assert rows[0]["net_amount"] == Decimal("0.00") and total == Decimal("0.00")

@@ -52,3 +52,30 @@ def test_fin_status_check_includes_voucher_rejected():
     assert "VOUCHER_REJECTED" in ddl
     sql = (Path(__file__).resolve().parents[2] / "scripts/migrations/2026-09-29_finance_advance_v2b.sql").read_text()
     assert "VOUCHER_REJECTED" in sql and "DO $$" not in sql
+
+
+def test_fin_advance_clear_items_matches_sql():
+    import models  # noqa: F401
+    from database import Base
+    from pathlib import Path
+    from models.finance_model import FinAdvanceClearItem
+    assert "fin_advance_clear_items" in Base.metadata.tables
+    ddl = str(CreateTable(FinAdvanceClearItem.__table__).compile(dialect=postgresql.dialect()))
+    sql = (Path(__file__).resolve().parents[2]
+           / "scripts/migrations/2026-10-01_finance_advance_v2d_clear_items.sql").read_text()
+    for fragment in ("advance_id INTEGER NOT NULL", "line_no INTEGER NOT NULL", "expense_date DATE NOT NULL",
+                     "vehicle VARCHAR(50)", "has_receipt BOOLEAN DEFAULT 'true' NOT NULL",
+                     "description VARCHAR(255) NOT NULL", "amount_before_vat NUMERIC(12, 2) NOT NULL",
+                     "vat_amount NUMERIC(12, 2) NOT NULL", "total_amount NUMERIC(12, 2) NOT NULL",
+                     "wht_amount NUMERIC(12, 2) NOT NULL", "net_amount NUMERIC(12, 2) NOT NULL",
+                     "ON DELETE CASCADE", "net_amount >= 0"):
+        assert fragment in ddl, fragment
+    for fragment in ("CREATE TABLE IF NOT EXISTS fin_advance_clear_items", "REFERENCES fin_advances(id) ON DELETE CASCADE",
+                     "has_receipt       boolean       NOT NULL DEFAULT true", "description       varchar(255)  NOT NULL",
+                     "vehicle           varchar(50)", "amount_before_vat numeric(12,2) NOT NULL",
+                     "vat_amount        numeric(12,2) NOT NULL", "total_amount      numeric(12,2) NOT NULL",
+                     "wht_amount        numeric(12,2) NOT NULL", "net_amount        numeric(12,2) NOT NULL",
+                     "CREATE INDEX IF NOT EXISTS ix_fin_advance_clear_items_advance_id", "CONSTRAINT ck_fin_advance_clear_items_amounts",
+                     "net_amount >= 0", "BEGIN;", "COMMIT;"):
+        assert fragment in sql, fragment
+    assert "DO $$" not in sql

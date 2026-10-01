@@ -132,6 +132,52 @@ def check_reject_voucher(status, *, remark):
     _require(bool(remark and remark.strip()), "กรุณาระบุเหตุผลที่ตีกลับ")
 
 
+MAX_CLEAR_ITEMS = 30
+
+
+def check_clear_items(items):
+    """Validate the clearing expense table (spec v2 §5i.1). `items`: dicts/objects with expense_date, vehicle,
+    has_receipt, description, amount_before_vat (A), vat_amount (B), wht_amount (D).
+    Returns (rows, total_net): rows carry line_no 1..n plus computed total_amount (C = A+B) and
+    net_amount (E = C-D), all quantized to 0.01; total_net = sum of E. The client never supplies C or E."""
+    items = list(items or [])
+    _require(len(items) >= 1, "กรุณาระบุรายการค่าใช้จ่ายอย่างน้อย 1 รายการ")
+    _require(len(items) <= MAX_CLEAR_ITEMS, f"ระบุรายการค่าใช้จ่ายได้ไม่เกิน {MAX_CLEAR_ITEMS} รายการ")
+
+    def get(item, key, default=None):
+        return item.get(key, default) if isinstance(item, Mapping) else getattr(item, key, default)
+
+    rows, total_net = [], Decimal("0.00")
+    for n, item in enumerate(items, start=1):
+        label = f"รายการที่ {n}: "
+        expense_date = get(item, "expense_date")
+        _require(expense_date is not None, label + "กรุณาระบุวันที่")
+        description = (get(item, "description") or "").strip()
+        _require(bool(description), label + "กรุณาระบุรายละเอียด")
+        a, b, d = (get(item, key) for key in ("amount_before_vat", "vat_amount", "wht_amount"))
+        a = Decimal(a) if a is not None else None
+        b = Decimal(b if b is not None else 0)
+        d = Decimal(d if d is not None else 0)
+        _require(a is not None, label + "กรุณาระบุยอดเงินก่อน VAT")
+        _require(a >= 0, label + "ยอดเงินก่อน VAT ต้องไม่ติดลบ")
+        _require(b >= 0, label + "ภาษีมูลค่าเพิ่มต้องไม่ติดลบ")
+        _require(d >= 0, label + "หัก ณ ที่จ่ายต้องไม่ติดลบ")
+        a, b, d = a.quantize(_CENT), b.quantize(_CENT), d.quantize(_CENT)
+        c = (a + b).quantize(_CENT)
+        e = (c - d).quantize(_CENT)
+        _require(e >= 0, label + "หัก ณ ที่จ่ายต้องไม่เกินยอดรวม ทำให้ยอดสุทธิติดลบ")
+        vehicle = (get(item, "vehicle") or "").strip() or None
+        has_receipt = get(item, "has_receipt")
+        rows.append({
+            "line_no": n, "expense_date": expense_date, "vehicle": vehicle,
+            "has_receipt": True if has_receipt is None else bool(has_receipt),
+            "description": description, "amount_before_vat": a, "vat_amount": b,
+            "total_amount": c, "wht_amount": d, "net_amount": e,
+        })
+        total_net += e
+    return rows, total_net.quantize(_CENT)
+
+
 def check_clear(status, *, is_owner, amount_paid, clear_date, amount_actual, settle_date):
     if not is_owner:
         raise NotAllowed("เฉพาะผู้เบิกเงินเท่านั้นที่บันทึกการเคลียร์ได้")

@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from models.finance_model import FinAccount, FinAdvance, FinAdvanceLog
+from models.finance_model import FinAccount, FinAdvance, FinAdvanceClearItem, FinAdvanceLog
 from models.master_model import FormApprovalLog, FormMaster, FormQuestion, FormSubmission, FormSubmissionValue
 from models.user_model import Department, Position, Site, User
 from services.finance import advance_logic as logic
@@ -110,7 +110,26 @@ def serialize_request(request):
     }
 
 
-def serialize_fin(adv, acc_names, people=None):
+def clear_items_by_advance(db, advance_ids):
+    """One query for all advances' clearing lines → {advance_id: [serialized item, ...]} ordered by line_no."""
+    ids = [i for i in advance_ids if i is not None]
+    grouped = {}
+    if not ids:
+        return grouped
+    rows = (db.query(FinAdvanceClearItem).filter(FinAdvanceClearItem.advance_id.in_(ids))
+            .order_by(FinAdvanceClearItem.advance_id, FinAdvanceClearItem.line_no).all())
+    for r in rows:
+        grouped.setdefault(r.advance_id, []).append({
+            "line_no": r.line_no, "expense_date": _iso(r.expense_date), "vehicle": r.vehicle,
+            "has_receipt": bool(r.has_receipt), "description": r.description,
+            "amount_before_vat": _num(r.amount_before_vat), "vat_amount": _num(r.vat_amount),
+            "total_amount": _num(r.total_amount), "wht_amount": _num(r.wht_amount),
+            "net_amount": _num(r.net_amount),
+        })
+    return grouped
+
+
+def serialize_fin(adv, acc_names, people=None, clear_items=None):
     if adv is None:
         return None
     people = people or {}
@@ -139,10 +158,11 @@ def serialize_fin(adv, acc_names, people=None):
         "closed_by_name": (people.get(adv.closed_by) or {}).get("name"),
         "closed_at": _iso(adv.closed_at),
         "fin_status": adv.fin_status,
+        "clear_items": clear_items or [],
     }
 
 
-def serialize_advance(sub, adv, request, people, acc_names, today):
+def serialize_advance(sub, adv, request, people, acc_names, today, clear_items=None):
     status, overdue = logic.derive_status(
         sub.status_approve,
         adv.fin_status if adv is not None else None,
@@ -163,7 +183,7 @@ def serialize_advance(sub, adv, request, people, acc_names, today):
         "overdue": overdue,
         "requester": requester,
         "request": serialize_request(request),
-        "fin": serialize_fin(adv, acc_names, people),
+        "fin": serialize_fin(adv, acc_names, people, clear_items),
     }
 
 
@@ -190,7 +210,9 @@ def list_advances(db, *, status=None, overdue=None, employee_id=None, acc_code=N
         + [a.paid_by for _, a in rows if a is not None] + [a.closed_by for _, a in rows if a is not None])
     acc_names = account_names(db)
     today = today_bkk()
-    items = [serialize_advance(sub, adv, requests.get(sub.id), people, acc_names, today) for sub, adv in rows]
+    clear_items = clear_items_by_advance(db, [a.id for _, a in rows if a is not None])
+    items = [serialize_advance(sub, adv, requests.get(sub.id), people, acc_names, today,
+                               clear_items.get(adv.id) if adv is not None else None) for sub, adv in rows]
     if status:
         items = [item for item in items if item["status"] == status]
     if overdue is not None:
@@ -209,6 +231,7 @@ def get_advance_detail(db, form_id):
         people_by_employee_id(db, [sub.created_by] + ([adv.paid_by, adv.closed_by] if adv is not None else [])),
         account_names(db),
         today_bkk(),
+        clear_items_by_advance(db, [adv.id]).get(adv.id) if adv is not None else None,
     )
     approval_rows = (
         db.query(FormApprovalLog, User)

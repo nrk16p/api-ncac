@@ -91,3 +91,28 @@ class FinApprovalTier(Base):
     __table_args__ = (
         CheckConstraint("min_level BETWEEN 1 AND 20", name="ck_fin_approval_tiers_min_level"),
     )
+
+
+class FinAdvanceClearItem(Base):
+    """Clearing expense lines (A/B/C/D/E). Created by scripts/migrations/2026-10-01_finance_advance_v2d_clear_items.sql."""
+    __tablename__ = "fin_advance_clear_items"
+
+    id = Column(Integer, primary_key=True)
+    advance_id = Column(Integer, ForeignKey("fin_advances.id", ondelete="CASCADE"), nullable=False)
+    line_no = Column(Integer, nullable=False)
+    expense_date = Column(Date, nullable=False)
+    vehicle = Column(String(50))
+    has_receipt = Column(Boolean, nullable=False, default=True, server_default="true")
+    description = Column(String(255), nullable=False)
+    amount_before_vat = Column(Numeric(12, 2), nullable=False)   # A
+    vat_amount = Column(Numeric(12, 2), nullable=False)          # B
+    total_amount = Column(Numeric(12, 2), nullable=False)        # C = A + B
+    wht_amount = Column(Numeric(12, 2), nullable=False)          # D
+    net_amount = Column(Numeric(12, 2), nullable=False)          # E = C - D
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint("amount_before_vat >= 0 AND vat_amount >= 0 AND total_amount >= 0 "
+                        "AND wht_amount >= 0 AND net_amount >= 0", name="ck_fin_advance_clear_items_amounts"),
+        Index("ix_fin_advance_clear_items_advance_id", "advance_id"),
+    )
