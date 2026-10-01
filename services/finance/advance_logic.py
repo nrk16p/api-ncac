@@ -184,7 +184,8 @@ def check_clear_items(items):
 def check_clear(status, *, is_owner, amount_paid, clear_date, amount_actual, settle_date):
     if not is_owner:
         raise NotAllowed("เฉพาะผู้เบิกเงินเท่านั้นที่บันทึกการเคลียร์ได้")
-    _require_status(status, (AWAITING_CLEARING, SENT_BACK, AWAITING_REVIEW), "เคลียร์เงิน")
+    # submitted clearings are locked; the requester edits again only after Accounting sends it back
+    _require_status(status, (AWAITING_CLEARING, SENT_BACK), "เคลียร์เงิน")
     _require(clear_date is not None, "กรุณาระบุวันที่ส่งเอกสารเคลียร์")
     _require(amount_actual is not None and Decimal(amount_actual) >= 0, "ยอดใช้จริงต้องไม่ติดลบ")
     settle = compute_settle_amount(amount_paid, amount_actual)

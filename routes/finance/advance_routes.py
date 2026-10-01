@@ -294,7 +294,7 @@ def clear_advance(form_id: str, body: ClearIn, db: Session = Depends(get_db)):
     values = {"clear_date": body.clear_date, "amount_actual": total_net,
               "settle_amount": settle, "settle_date": settle_date, "remark": body.remark}
     before = _snapshot(adv, CLEAR_FIELDS)
-    action = "CLEAR_EDIT" if status == logic.AWAITING_REVIEW else "CLEAR_SUBMIT"
+    action = "CLEAR_SUBMIT"
     for field, value in values.items():
         setattr(adv, field, value)
     old_total = (db.query(func.sum(FinAdvanceClearItem.net_amount))

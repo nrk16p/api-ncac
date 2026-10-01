@@ -169,9 +169,12 @@ class TestCheckClear:
         with pytest.raises(L.NotAllowed):
             self._clear(is_owner=False)
 
-    @pytest.mark.parametrize("status", [L.SENT_BACK, L.AWAITING_REVIEW])
-    def test_resubmit_and_edit_allowed(self, status):
-        assert self._clear(status)[0] == Decimal("200.00")
+    def test_resubmit_after_send_back_allowed(self):
+        assert self._clear(L.SENT_BACK)[0] == Decimal("200.00")
+
+    def test_submitted_clearing_is_locked(self):
+        with pytest.raises(L.InvalidTransition, match="รอบัญชีตรวจ"):
+            self._clear(L.AWAITING_REVIEW)
 
     @pytest.mark.parametrize("status", [L.PENDING_APPROVAL, L.REJECTED, L.AWAITING_PAYMENT, L.CLOSED])
     def test_rejects_other_statuses(self, status):
