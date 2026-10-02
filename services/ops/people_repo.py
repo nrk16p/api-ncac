@@ -1,54 +1,11 @@
-"""Resolves OPS people from the Postgres `users` table (SQLAlchemy, read-only).
-
-Deviation worth flagging to the Next.js side: models/user_model.py's `User` ORM
-model has no `role` column, and routes/auth.py's build_user_response() does not
-return one either — yet menaIT-v2's frontend already reads `user.role === 'a'` as
-admin in several places (app/ops/team.ts, navbar, settings...). We could not find
-where that value is actually populated from this repo (no local .env / DB access
-to check the live `users` table either), so `get_user_role()` below *probes* for a
-`role` column with a guarded raw-SQL SELECT the first time it's called, caches
-whether the column exists for the life of the process, and returns None (never
-raises) if it doesn't. If the column truly doesn't exist in production, ops
-"manager" status falls back to OPS_TEAM-username-only — still correct for the 4
-named usernames, just missing the role=='a' admin bypass until that's wired up.
-"""
+"""Resolves OPS people from the Postgres `users` table (SQLAlchemy, read-only)."""
 from __future__ import annotations
 
 from typing import Dict, Iterable, List, Optional
 
-from sqlalchemy import text
-from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import Session
 
 from models.user_model import User
-
-# tri-state: None = not probed yet, True/False = probed result, cached per-process
-_role_column_available: Optional[bool] = None
-
-
-def _role_column_is_available(db: Session) -> bool:
-    global _role_column_available
-    if _role_column_available is not None:
-        return _role_column_available
-    try:
-        db.execute(text("SELECT role FROM users LIMIT 0"))
-        _role_column_available = True
-    except (ProgrammingError, OperationalError):
-        db.rollback()
-        _role_column_available = False
-    return _role_column_available
-
-
-def get_user_role(db: Session, user_id: int) -> Optional[str]:
-    """Best-effort lookup of users.role — see module docstring. Never raises."""
-    if not _role_column_is_available(db):
-        return None
-    try:
-        row = db.execute(text("SELECT role FROM users WHERE id = :id"), {"id": user_id}).first()
-        return row[0] if row else None
-    except (ProgrammingError, OperationalError):
-        db.rollback()
-        return None
 
 
 def person_from_user(user: User) -> dict:

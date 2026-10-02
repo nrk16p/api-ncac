@@ -26,7 +26,10 @@ except ImportError:  # pragma: no cover - nh3 is a required dependency; only mis
 OPS_TEAM = ["patcharapan.p", "narongkorn.a", "sutiwat.c", "kittaboon.l"]
 _OPS_TEAM_SET = {u.lower() for u in OPS_TEAM}
 
-ADMIN_ROLE_VALUE = "a"
+# menaIT admin (role "a") is not stored anywhere — app/api/login/route.ts derives it from these on login.
+# Keep both in sync.
+ADMIN_DEPARTMENT_IDS = {21}
+ADMIN_EMPLOYEE_IDS = {"680043", "670108"}
 
 STATUSES = ("Open", "To-Do", "In Progress", "Review", "Done", "Reject")
 CLOSED_STATUSES = ("Done", "Reject")
@@ -109,10 +112,10 @@ class OpsConflict(OpsError):
 # Manager rule
 # ---------------------------------------------------------------------------
 
-def is_manager(username: Optional[str], role: Optional[str]) -> bool:
+def is_manager(username: Optional[str], department_id: Optional[int], employee_id: Optional[str]) -> bool:
     if username and username.strip().lower() in _OPS_TEAM_SET:
         return True
-    return role == ADMIN_ROLE_VALUE
+    return department_id in ADMIN_DEPARTMENT_IDS or employee_id in ADMIN_EMPLOYEE_IDS
 
 
 def require_manager(is_mgr: bool) -> None:

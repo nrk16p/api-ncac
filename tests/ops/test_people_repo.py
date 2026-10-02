@@ -1,68 +1,7 @@
-"""Unit tests for services/ops/people_repo.py pieces that don't need a real
-Postgres connection: the person-snapshot mapping, and the users.role probe's
-guarded fallback (see the module docstring for why that probe exists at all).
-"""
+"""Unit tests for services/ops/people_repo.py pieces that don't need a real Postgres connection."""
 from types import SimpleNamespace
 
-import pytest
-from sqlalchemy.exc import OperationalError
-
 from services.ops import people_repo as P
-
-
-def _op_error():
-    return OperationalError("SELECT role FROM users", {}, Exception("column users.role does not exist"))
-
-
-class _FakeSession:
-    def __init__(self, *, fails: bool):
-        self.fails = fails
-        self.rollback_calls = 0
-        self.execute_calls = 0
-
-    def execute(self, *args, **kwargs):
-        self.execute_calls += 1
-        if self.fails:
-            raise _op_error()
-        return SimpleNamespace(first=lambda: ("a",))
-
-    def rollback(self):
-        self.rollback_calls += 1
-
-
-@pytest.fixture(autouse=True)
-def _reset_probe_cache(monkeypatch):
-    monkeypatch.setattr(P, "_role_column_available", None)
-    yield
-    monkeypatch.setattr(P, "_role_column_available", None)
-
-
-class TestRoleProbe:
-    def test_missing_column_falls_back_to_none_without_raising(self):
-        db = _FakeSession(fails=True)
-        assert P.get_user_role(db, 1) is None
-        assert db.rollback_calls == 1  # must roll back the aborted transaction
-
-    def test_probe_result_is_cached_across_calls(self):
-        db = _FakeSession(fails=True)
-        P.get_user_role(db, 1)
-        P.get_user_role(db, 2)
-        # only the first call actually probes with "SELECT role FROM users LIMIT 0";
-        # the second short-circuits on the cached False and never calls db.execute at all
-        assert db.execute_calls == 1
-
-    def test_existing_column_returns_value(self):
-        db = _FakeSession(fails=False)
-        assert P.get_user_role(db, 1) == "a"
-
-    def test_probe_is_process_wide_not_per_session(self):
-        first_db = _FakeSession(fails=False)
-        assert P.get_user_role(first_db, 1) == "a"
-        # once the probe says the column exists, a value lookup on a brand new
-        # session just runs the query directly — no repeated "LIMIT 0" probe first
-        second_db = _FakeSession(fails=False)
-        assert P.get_user_role(second_db, 2) == "a"
-        assert second_db.execute_calls == 1
 
 
 class TestPersonFromUser:

@@ -3,18 +3,21 @@ from services.ops import ops_logic as L
 
 class TestManagerRule:
     def test_ops_team_username_is_manager_case_insensitive(self):
-        assert L.is_manager("Kittaboon.L", None) is True
-        assert L.is_manager("PATCHARAPAN.P", None) is True
+        assert L.is_manager("Kittaboon.L", None, None) is True
+        assert L.is_manager("PATCHARAPAN.P", 5, "999999") is True
 
-    def test_admin_role_is_manager(self):
-        assert L.is_manager("someone.else", "a") is True
+    def test_admin_department_is_manager(self):
+        assert L.is_manager("someone.else", 21, "999999") is True
+
+    def test_admin_employee_id_is_manager(self):
+        assert L.is_manager("someone.else", 5, "680043") is True
+        assert L.is_manager("someone.else", None, "670108") is True
 
     def test_non_team_non_admin_is_not_manager(self):
-        assert L.is_manager("someone.else", None) is False
-        assert L.is_manager("someone.else", "u") is False
+        assert L.is_manager("someone.else", 5, "999999") is False
 
-    def test_no_username_no_role(self):
-        assert L.is_manager(None, None) is False
+    def test_no_username_no_admin_fields(self):
+        assert L.is_manager(None, None, None) is False
 
     def test_require_manager_raises_forbidden(self):
         try:

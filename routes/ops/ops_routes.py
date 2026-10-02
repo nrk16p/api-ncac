@@ -85,9 +85,8 @@ def get_caller(
     user = people_repo.get_user_by_employee_id(db, x_employee_id)
     if user is None:
         raise HTTPException(status_code=401, detail=ops_logic.MSG_LOGIN_REQUIRED)
-    role = people_repo.get_user_role(db, user.id)
     person = people_repo.person_from_user(user)
-    is_mgr = ops_logic.is_manager(user.username, role)
+    is_mgr = ops_logic.is_manager(user.username, user.department_id, user.employee_id)
     return Caller(person=person, employee_id=person["employee_id"], username=user.username, is_manager=is_mgr)
 
 
