@@ -1,7 +1,8 @@
 """Finance (Advance) email notifications — built, switched OFF by default (v3 §7).
 
 * `send_finance_email` is the only sender. It returns at once unless FINANCE_EMAIL_ENABLED is "true"
-  (case-insensitive) and it never falls back to the IT SMTP_USER credentials.
+  (case-insensitive) and it never falls back to the IT SMTP_USER credentials. Each recipient gets their own
+  message, so nobody sees the other recipients' addresses.
 * Render functions are pure: every value is HTML-escaped, and a link is built only when FE_BASE_URL is a bare
   http(s) origin.
 * `queue_event` is what routes call (after their commit). It does nothing (no query, no render) while the switch
@@ -51,7 +52,10 @@ def email_enabled() -> bool:
 
 
 def send_finance_email(to, subject: str, html: str) -> None:
-    """`to`: one address or a list. Never raises; opens no connection unless enabled and credentialed."""
+    """`to`: one address or a list (deduped, capped at MAX_RECIPIENTS). One message per recipient, each with only
+    that recipient in To, over one SMTP connection per batch. A failed recipient is logged and the rest are still
+    sent (on a fresh connection, as the failure may have broken the session); if no connection can be opened the
+    remaining recipients are skipped. Never raises; opens no connection unless enabled and credentialed."""
     if not email_enabled():
         log.info("finance email skipped (FINANCE_EMAIL_ENABLED is not true): %s", subject)
         return
@@ -61,27 +65,57 @@ def send_finance_email(to, subject: str, html: str) -> None:
         log.warning("finance email enabled but FINANCE_SMTP_USER / FINANCE_SMTP_PASSWORD missing; skipped: %s",
                     subject)
         return
+    server = None
     try:
-        recipients = [to] if isinstance(to, str) else [a for a in (to or []) if a]
-        if not recipients:
-            return
-        msg = MIMEMultipart()
-        msg["From"] = user
-        msg["To"] = ", ".join(recipients)
-        msg["Subject"] = _one_line(subject)
-        msg.attach(MIMEText(html, "html", "utf-8"))
-        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=30)
-        try:
-            server.starttls()
-            server.login(user, password)
-            server.sendmail(user, recipients, msg.as_string())
-        finally:
+        recipients = pick_recipients([to] if isinstance(to, str) else list(to or []))
+        subject = _one_line(subject)
+        for index, addr in enumerate(recipients):
+            if server is None:
+                try:
+                    server = _connect(user, password)
+                except Exception:  # noqa: BLE001
+                    log.exception("finance email: SMTP connection failed, %d recipient(s) not sent: %s",
+                                  len(recipients) - index, subject)
+                    return
             try:
-                server.quit()
-            except Exception:  # noqa: BLE001
-                pass
+                server.sendmail(user, [addr], _message(user, addr, subject, html))
+            except Exception:  # noqa: BLE001 - one recipient's failure must not stop the others
+                log.exception("finance email to %s failed: %s", addr, subject)
+                _quit(server)
+                server = None
     except Exception:  # noqa: BLE001 - a mail failure must never affect the request
         log.exception("finance email failed: %s", subject)
+    finally:
+        _quit(server)
+
+
+def _connect(user, password):
+    server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=30)
+    try:
+        server.starttls()
+        server.login(user, password)
+    except Exception:
+        _quit(server)
+        raise
+    return server
+
+
+def _quit(server) -> None:
+    if server is None:
+        return
+    try:
+        server.quit()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _message(sender, recipient, subject, html) -> str:
+    msg = MIMEMultipart()
+    msg["From"] = sender
+    msg["To"] = _one_line(recipient)
+    msg["Subject"] = subject
+    msg.attach(MIMEText(html, "html", "utf-8"))
+    return msg.as_string()
 
 
 def _one_line(text) -> str:

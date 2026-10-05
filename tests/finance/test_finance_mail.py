@@ -79,9 +79,104 @@ def test_flag_on_sends_with_finance_credentials(monkeypatch, smtp, value):
     init = smtp[0]
     assert init[0] == "init" and init[2] == {"timeout": 30}
     assert ("login", "fin@x.com", "pw") in smtp
-    sent = next(c for c in smtp if c[0] == "sendmail")
-    assert sent[1] == "fin@x.com" and sent[2] == ["a@x.com", "b@x.com"]
-    assert "\nBcc:" not in sent[3] and "it@x.com" not in sent[3]
+    sent = [c for c in smtp if c[0] == "sendmail"]
+    assert [(c[1], c[2]) for c in sent] == [("fin@x.com", ["a@x.com"]), ("fin@x.com", ["b@x.com"])]
+    for c in sent:
+        assert "\nBcc:" not in c[3] and "it@x.com" not in c[3]
+
+
+def _to_headers(body):
+    return [line for line in body.splitlines() if line.startswith("To:")]
+
+
+@pytest.mark.parametrize("n", [1, 3, 20])
+def test_one_message_per_recipient_over_one_connection(monkeypatch, smtp, n):
+    """Nobody sees the other recipients: N recipients -> N sends, each with a single To."""
+    _enable(monkeypatch)
+    addrs = [f"u{i}@x.com" for i in range(n)]
+    fm.send_finance_email(addrs, "s", "<p>x</p>")
+    sent = [c for c in smtp if c[0] == "sendmail"]
+    assert [c[2] for c in sent] == [[a] for a in addrs]
+    for addr, c in zip(addrs, sent):
+        assert _to_headers(c[3]) == [f"To: {addr}"]
+        assert not any(other in c[3] for other in addrs if other != addr)
+    assert [c[0] for c in smtp].count("init") == 1 and [c[0] for c in smtp].count("login") == 1
+    assert smtp[-1] == ("quit",)
+
+
+def test_per_recipient_sends_keep_the_cap_and_dedupe(monkeypatch, smtp):
+    _enable(monkeypatch)
+    fm.send_finance_email(["a@x.com", "A@x.com", "", None] + [f"u{i}@x.com" for i in range(30)], "s", "h")
+    sent = [c[2] for c in smtp if c[0] == "sendmail"]
+    assert len(sent) == fm.MAX_RECIPIENTS and sent[0] == ["a@x.com"]
+
+
+def test_one_failed_recipient_does_not_stop_the_others(monkeypatch, caplog):
+    _enable(monkeypatch)
+    calls = []
+
+    class FlakySMTP:
+        def __init__(self, *a, **k):
+            calls.append(("init",))
+
+        def starttls(self):
+            pass
+
+        def login(self, u, p):
+            pass
+
+        def sendmail(self, frm, to, body):
+            if to == ["bad@x.com"]:
+                raise smtplib.SMTPRecipientsRefused({"bad@x.com": (550, b"no such user")})
+            calls.append(("sendmail", to))
+
+        def quit(self):
+            calls.append(("quit",))
+
+    monkeypatch.setattr(smtplib, "SMTP", FlakySMTP)
+    with caplog.at_level(logging.ERROR):
+        fm.send_finance_email(["a@x.com", "bad@x.com", "c@x.com"], "s", "h")  # must not raise
+    assert [c[1] for c in calls if c[0] == "sendmail"] == [["a@x.com"], ["c@x.com"]]
+    assert calls.count(("init",)) == 2  # a fresh connection after the failure
+    assert any("bad@x.com" in r.getMessage() for r in caplog.records)
+
+
+def test_connection_failure_skips_the_batch_without_retrying_per_recipient(monkeypatch):
+    _enable(monkeypatch)
+    attempts = []
+
+    def boom(*a, **k):
+        attempts.append(1)
+        raise OSError("down")
+
+    monkeypatch.setattr(smtplib, "SMTP", boom)
+    fm.send_finance_email(["a@x.com", "b@x.com", "c@x.com"], "s", "h")  # must not raise
+    assert attempts == [1]
+
+
+def test_login_failure_closes_the_connection(monkeypatch):
+    _enable(monkeypatch)
+    calls = []
+
+    class BadLogin:
+        def __init__(self, *a, **k):
+            calls.append("init")
+
+        def starttls(self):
+            pass
+
+        def login(self, u, p):
+            raise smtplib.SMTPAuthenticationError(535, b"bad credentials")
+
+        def sendmail(self, *a):
+            calls.append("sendmail")
+
+        def quit(self):
+            calls.append("quit")
+
+    monkeypatch.setattr(smtplib, "SMTP", BadLogin)
+    fm.send_finance_email(["a@x.com", "b@x.com"], "s", "h")
+    assert calls == ["init", "quit"]
 
 
 @pytest.mark.parametrize("user,pw", [(None, "pw"), ("u@x.com", None), (None, None), ("", "")])
