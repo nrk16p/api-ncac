@@ -276,7 +276,7 @@ def get_advance_detail(db, form_id):
     fin_logs = []
     if adv is not None:
         fin_logs = [
-            {"action": log.action, "changes": log.changes, "remark": log.remark,
+            {"action": log.action, "changes": {k: v for k, v in (log.changes or {}).items() if k != "snapshot"} or log.changes, "remark": log.remark,
              "action_by": log.action_by, "created_at": _iso(log.created_at)}
             for log in db.query(FinAdvanceLog).filter(FinAdvanceLog.advance_id == adv.id)
             .order_by(FinAdvanceLog.id.asc()).all()

@@ -293,7 +293,7 @@ def pick_request_values(rows):
     return picked
 
 
-def _jsonable(value):
+def jsonable(value):
     if isinstance(value, date):  # datetime is a subclass of date
         return value.isoformat()
     if isinstance(value, Decimal):
@@ -306,7 +306,7 @@ def diff_fields(before: Mapping, after: Mapping):
     for field, new in after.items():
         old = before.get(field)
         if old != new:
-            changes[field] = [_jsonable(old), _jsonable(new)]
+            changes[field] = [jsonable(old), jsonable(new)]
     return changes
 
 

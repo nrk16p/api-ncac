@@ -3,6 +3,7 @@
 ยังไม่มี auth เหมือน route อื่นของ api-ncac ในตอนนี้ (ใช้ทดสอบ local เท่านั้น) — ต้องทำ launch gate
 ด้านความปลอดภัยก่อนขึ้น production ดู spec §9 ใน menait-service
 """
+import logging
 import os
 from datetime import date
 from typing import Optional
@@ -26,6 +27,8 @@ from services.finance import advance_repo as repo
 from services.finance import approval_logic as approval_rules
 from services.finance import approval_repo
 from services.finance import finance_mail as mail
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/finance", tags=["Finance - Advance"])
 
@@ -166,10 +169,38 @@ RETURN_FIELDS = ("fin_status", "voucher_no", "voucher_date")
 CLEAR_FIELDS = ("clear_date", "amount_actual", "settle_amount", "settle_date", "remark")
 
 _ALREADY_SAVED = "รายการนี้ถูกบันทึกไปแล้ว กรุณารีเฟรชหน้าจอ"
+_SQL_NOT_RUN = "ฐานข้อมูลยังไม่รองรับสถานะนี้ — กรุณารัน SQL finance_advance_v3 ก่อน"
+_PG_CHECK_VIOLATION = "23514"
+
+
+def _integrity_error(exc: IntegrityError) -> HTTPException:
+    """A CHECK violation (fin_status RETURNED/RESUBMITTED before the v3 SQL ran) is a deployment problem, not a
+    concurrent write: 500 with a clear message. Anything else (unique conflicts) stays 409."""
+    if getattr(getattr(exc, "orig", None), "pgcode", None) == _PG_CHECK_VIOLATION:
+        logger.error("finance advance write hit a CHECK violation (finance_advance_v3 SQL not run?): %s", exc)
+        return HTTPException(status_code=500, detail=_SQL_NOT_RUN)
+    return HTTPException(status_code=409, detail=_ALREADY_SAVED)
 
 
 def _snapshot(adv, fields):
     return {field: getattr(adv, field) for field in fields} if adv is not None else {}
+
+
+def _request_snapshot(form, values) -> dict:
+    """The request's logged fields (amount, use_date, purpose, cost_center, bank, account_no, account_name,
+    payee_type) from stored/merged answer rows; JSON-safe."""
+    rows = []
+    for q in form.questions:
+        v = next((x for x in values if x.question_id == q.id), None)
+        if v is None:
+            continue
+        rows.append({"name": q.question_name, "type": q.question_type, "sort_order": q.sort_order,
+                     "text": v.value_text, "number": v.value_number, "date": v.value_date})
+    return {k: logic.jsonable(v) for k, v in logic.pick_request_values(rows).items()}
+
+
+def _pairs(before: dict, after: dict) -> dict:
+    return {k: [before.get(k), v] for k, v in after.items() if before.get(k) != v}
 
 
 def _pay_values(body, due):
@@ -200,9 +231,9 @@ def _load_for_update(db: Session, form_id: str):
 def _commit_and_return(db: Session, form_id: str):
     try:
         db.commit()
-    except IntegrityError:
+    except IntegrityError as exc:
         db.rollback()
-        raise HTTPException(status_code=409, detail=_ALREADY_SAVED)
+        raise _integrity_error(exc)
     return repo.get_advance_detail(db, form_id)
 
 
@@ -230,9 +261,9 @@ def voucher_advance(form_id: str, body: VoucherIn, db: Session = Depends(get_db)
         setattr(adv, field, value)
     try:
         db.flush()
-    except IntegrityError:
+    except IntegrityError as exc:
         db.rollback()
-        raise HTTPException(status_code=409, detail=_ALREADY_SAVED)
+        raise _integrity_error(exc)
     db.add(FinAdvanceLog(advance_id=adv.id, action=action, changes=logic.diff_fields(before, values),
                          action_by=body.action_by))
     return _commit_and_return(db, form_id)
@@ -260,10 +291,13 @@ def return_advance(form_id: str, body: ReturnIn, background_tasks: BackgroundTas
         setattr(adv, field, value)
     try:
         db.flush()
-    except IntegrityError:  # a concurrent first voucher/return created the row
+    except IntegrityError as exc:  # a concurrent first voucher/return created the row (or the v3 SQL is missing)
         db.rollback()
-        raise HTTPException(status_code=409, detail=_ALREADY_SAVED)
-    db.add(FinAdvanceLog(advance_id=adv.id, action="RETURN", changes=logic.diff_fields(before, values),
+        raise _integrity_error(exc)
+    changes = logic.diff_fields(before, values)
+    # the request's values at the time of the return: the resubmit compares the requester's edits against this
+    changes["snapshot"] = _request_snapshot(sub.form, sub.values)
+    db.add(FinAdvanceLog(advance_id=adv.id, action="RETURN", changes=changes,
                          remark=remark, action_by=body.action_by))
     db.add(FormApprovalLog(submission_id=sub.id, level_no=0, action=approval_rules.MARKER_RETURNED,
                            action_by=finance_user.id, remark=remark))
@@ -289,17 +323,28 @@ def resubmit_advance(form_id: str, body: ResubmitIn, background_tasks: Backgroun
     if requester is None:
         raise HTTPException(status_code=403, detail="ไม่พบข้อมูลผู้ขอเบิกในระบบ")
     sub = repo.lock_submission_with_values(db, sub.id)  # the edit path's row lock, then fresh values
+    pre = _request_snapshot(sub.form, sub.values)  # the requester's edits, before the guard rewrites anything
     try:
-        advance_guard.apply(db, sub, [])
+        merged = advance_guard.apply(db, sub, [])
     except logic.AdvanceRuleError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    post = _request_snapshot(sub.form, merged)
+    returned = (db.query(FinAdvanceLog)
+                .filter(FinAdvanceLog.advance_id == adv.id, FinAdvanceLog.action == "RETURN")
+                .order_by(FinAdvanceLog.id.desc()).first())
+    base = ((returned.changes or {}).get("snapshot") if returned is not None else None) or pre
+    request_changes = _pairs(base, post)  # request field → [value at the return, value now]
+    forced = _pairs(pre, post) if post.get("payee_type") == "SELF" else {}
+    for key, value in forced.items():  # fields the guard forced (SELF payee) over the edit
+        request_changes[f"{key}_forced"] = [pre.get(key), value[1]]
     before = {"fin_status": adv.fin_status, "status_approve": sub.status_approve,
               "current_approval_level": sub.current_approval_level}
     values = {"fin_status": logic.FIN_RESUBMITTED, "status_approve": "In Progress", "current_approval_level": 1}
     adv.fin_status = logic.FIN_RESUBMITTED
     sub.status_approve = "In Progress"
     sub.current_approval_level = 1
-    db.add(FinAdvanceLog(advance_id=adv.id, action="RESUBMIT", changes=logic.diff_fields(before, values),
+    db.add(FinAdvanceLog(advance_id=adv.id, action="RESUBMIT",
+                         changes={**request_changes, **logic.diff_fields(before, values)},
                          action_by=body.action_by))
     db.add(FormApprovalLog(submission_id=sub.id, level_no=0, action=approval_rules.MARKER_RESUBMITTED,
                            action_by=requester.id))
@@ -351,9 +396,9 @@ def pay_advance(form_id: str, body: PayIn, background_tasks: BackgroundTasks,
         setattr(adv, field, value)
     try:
         db.flush()
-    except IntegrityError:
+    except IntegrityError as exc:
         db.rollback()
-        raise HTTPException(status_code=409, detail=_ALREADY_SAVED)
+        raise _integrity_error(exc)
     db.add(FinAdvanceLog(advance_id=adv.id, action=action, changes=logic.diff_fields(before, values),
                          action_by=body.action_by))
     detail = _commit_and_return(db, form_id)

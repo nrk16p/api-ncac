@@ -77,7 +77,7 @@ def _copy(value):
                            value_number=value.value_number, value_date=value.value_date)
 
 
-def apply(db, submission, payload_values) -> None:
+def apply(db, submission, payload_values) -> list:
     """Guard a stored ADV `submission` with `payload_values` (the edit; [] for a resubmit) merged over its stored
     values, then write back:
 
@@ -87,7 +87,7 @@ def apply(db, submission, payload_values) -> None:
       row must not keep a stale or forged value), adding the row when none is stored.
 
     A SUPPLIER value that is not in the payload is never rewritten. Raises AdvanceRuleError, before writing
-    anything."""
+    anything. Returns the merged post-guard values (question_id / value_* objects)."""
     merged = {v.question_id: _copy(v) for v in submission.values}
     for v in payload_values:
         merged[v.question_id] = _copy(v)
@@ -109,3 +109,4 @@ def apply(db, submission, payload_values) -> None:
         for rec in submission.values:
             if rec.question_id == qid:
                 rec.value_text = merged[qid].value_text
+    return list(merged.values())

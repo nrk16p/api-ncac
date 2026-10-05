@@ -294,13 +294,17 @@ class _Q:
     def with_for_update(self):
         return self
 
+    def order_by(self, *a):
+        return self
+
     def first(self):
         return self.result
 
 
 class _Db:
-    def __init__(self, adv=None, requester=None, flush_error=False, master=None):
+    def __init__(self, adv=None, requester=None, flush_error=False, master=None, return_log=None):
         self.adv, self.requester, self.flush_error, self.master = adv, requester, flush_error, master
+        self.return_log = return_log
         self.added, self.committed, self.rolled_back = [], False, False
 
     def query(self, entity, *a):
@@ -310,6 +314,8 @@ class _Db:
             return _Q(self.requester)
         if entity is FinPayeeAccount:  # the resubmit guard's SELF master lookup
             return _Q(self.master)
+        if entity is FinAdvanceLog:  # the resubmit's lookup of the latest RETURN snapshot
+            return _Q(self.return_log)
         raise AssertionError(f"unexpected query {entity}")
 
     def add(self, obj):
@@ -357,6 +363,12 @@ def _sub(status_approve="Approved", level=2, values=None):
               created_by="E1", form=form, values=_supplier_values() if values is None else values)
 
 
+# the fixture form has no adv_purpose question, so pick_request_values falls back to the first text question
+SUPPLIER_SNAPSHOT = {"purpose": "1234567890", "amount": "15000", "use_date": (TODAY + timedelta(days=5)).isoformat(),
+                     "cost_center": None, "bank": "SCB", "account_no": "1234567890",
+                     "account_name": "Supplier Co", "payee_type": "SUPPLIER"}
+
+
 def _adv(fin_status, **kw):
     return FinAdvance(id=10, submission_id=5, form_id="ADV-2610-001", fin_status=fin_status, **kw)
 
@@ -398,7 +410,7 @@ def test_return_without_fin_row_creates_returned_row(wired):
     assert adv.amount_paid is None and adv.voucher_no is None and adv.purpose is None
     (log,) = db.of(FinAdvanceLog)
     assert (log.advance_id, log.action, log.remark, log.action_by) == (42, "RETURN", "บัญชีผิด", "F1")
-    assert log.changes == {"fin_status": [None, "RETURNED"]}
+    assert log.changes == {"fin_status": [None, "RETURNED"], "snapshot": SUPPLIER_SNAPSHOT}
     (marker,) = db.of(FormApprovalLog)
     assert (marker.submission_id, marker.level_no, marker.action, marker.action_by, marker.remark) == \
         (5, 0, "RETURNED", 77, "บัญชีผิด")
@@ -412,7 +424,8 @@ def test_return_at_awaiting_payment_clears_voucher(wired):
     assert db.of(FinAdvance) == []  # the existing row is reused
     (log,) = db.of(FinAdvanceLog)
     assert log.advance_id == 10 and log.changes == {
-        "fin_status": ["VOUCHERED", "RETURNED"], "voucher_no": ["SADV-1", None], "voucher_date": ["2026-10-01", None]}
+        "fin_status": ["VOUCHERED", "RETURNED"], "voucher_no": ["SADV-1", None], "voucher_date": ["2026-10-01", None],
+        "snapshot": SUPPLIER_SNAPSHOT}
     assert db.of(FormApprovalLog)[0].action == "RETURNED"
 
 
@@ -860,3 +873,85 @@ def test_returned_edit_keeps_duplicate_row_check(monkeypatch):
     with pytest.raises(HTTPException) as ei:
         sr.update_form_details("ADV-2610-001", payload, db)
     assert ei.value.status_code == 400 and ei.value.detail == sr._DUPLICATE_VALUES and not db.committed
+
+
+# ---------------------------- fix batch: 23514 vs 409, edit audit trail ----------------------------
+
+def _integrity(pgcode):
+    return IntegrityError("x", {}, NS(pgcode=pgcode))
+
+
+class _FailDb:
+    def __init__(self, exc, on="commit"):
+        self.exc, self.on, self.rolled_back = exc, on, False
+
+    def commit(self):
+        if self.on == "commit":
+            raise self.exc
+
+    def rollback(self):
+        self.rolled_back = True
+
+
+def test_check_violation_is_500_with_sql_hint(caplog):
+    db = _FailDb(_integrity("23514"))
+    with caplog.at_level("ERROR"):
+        with pytest.raises(HTTPException) as ei:
+            ar._commit_and_return(db, "ADV-2610-001")
+    assert ei.value.status_code == 500 and "finance_advance_v3" in ei.value.detail
+    assert db.rolled_back and any("CHECK violation" in r.message for r in caplog.records)
+
+
+@pytest.mark.parametrize("pgcode", ["23505", None])
+def test_unique_conflict_stays_409(pgcode):
+    with pytest.raises(HTTPException) as ei:
+        ar._commit_and_return(_FailDb(_integrity(pgcode)), "ADV-2610-001")
+    assert ei.value.status_code == 409 and ei.value.detail == ar._ALREADY_SAVED
+
+
+def test_return_flush_check_violation_is_500(wired):
+    db = _Db(adv=None)
+    db.flush = lambda: (_ for _ in ()).throw(_integrity("23514"))
+    with pytest.raises(HTTPException) as ei:
+        ar.return_advance("ADV-2610-001", ReturnIn(action_by="F1", remark="x"), BackgroundTasks(), db)
+    assert ei.value.status_code == 500 and db.rolled_back
+
+
+def test_resubmit_logs_edits_made_while_returned(wired):
+    """15,000 at the return, the requester raised it to 20,000 and moved the use date: Finance sees the pairs."""
+    new_date = TODAY + timedelta(days=9)
+    stored = _supplier_values()
+    stored[0].value_number = Decimal("20000")
+    stored[5].value_date = new_date
+    wired["sub"] = _sub(values=stored)
+    ret = NS(changes={"fin_status": ["VOUCHERED", "RETURNED"], "snapshot": SUPPLIER_SNAPSHOT})
+    db = _Db(adv=_adv("RETURNED"), requester=REQUESTER, return_log=ret)
+    ar.resubmit_advance("ADV-2610-001", ResubmitIn(action_by="E1"), BackgroundTasks(), db)
+    (log,) = db.of(FinAdvanceLog)
+    assert log.changes["amount"] == ["15000", "20000"]
+    assert log.changes["use_date"] == [SUPPLIER_SNAPSHOT["use_date"], new_date.isoformat()]
+    assert log.changes["fin_status"] == ["RETURNED", "RESUBMITTED"]
+    assert set(log.changes) == {"amount", "use_date", "fin_status", "status_approve", "current_approval_level"}
+    import json
+    json.dumps(log.changes)
+
+
+def test_resubmit_without_edits_logs_no_request_fields(wired):
+    ret = NS(changes={"snapshot": SUPPLIER_SNAPSHOT})
+    db = _Db(adv=_adv("RETURNED"), requester=REQUESTER, return_log=ret)
+    ar.resubmit_advance("ADV-2610-001", ResubmitIn(action_by="E1"), BackgroundTasks(), db)
+    assert set(db.of(FinAdvanceLog)[0].changes) == {"fin_status", "status_approve", "current_approval_level"}
+
+
+def test_resubmit_logs_self_payee_forced_by_guard(wired):
+    wired["sub"] = _sub(values=_self_values())
+    snap = {**SUPPLIER_SNAPSHOT, "payee_type": "SELF", "bank": "KBANK", "account_no": "1112223334",
+            "account_name": "สมชาย เก่า"}
+    master = NS(account_no="5556667778", account_name="สมชาย ใหม่", status="ACTIVE")
+    db = _Db(adv=_adv("RETURNED"), requester=REQUESTER, master=master, return_log=NS(changes={"snapshot": snap}))
+    ar.resubmit_advance("ADV-2610-001", ResubmitIn(action_by="E1"), BackgroundTasks(), db)
+    changes = db.of(FinAdvanceLog)[0].changes
+    assert changes["account_no"] == ["1112223334", "5556667778"]
+    assert changes["account_no_forced"] == ["1112223334", "5556667778"]
+    assert changes["account_name_forced"] == ["สมชาย เก่า", "สมชาย ใหม่"]
+    assert "bank" not in changes
