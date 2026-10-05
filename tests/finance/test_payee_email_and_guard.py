@@ -180,8 +180,9 @@ def test_submit_and_update_call_duplicate_check():
     assert "_reject_duplicate_values" in inspect.getsource(sr.update_form_details)
 
 
-def test_update_to_self_persists_master_snapshot():
+def test_update_to_self_persists_master_snapshot(monkeypatch):
     from datetime import date as _d
+    monkeypatch.setattr(sr, "_advance_edit_state", lambda db, sub: (sr.advance_logic.PENDING_APPROVAL, False))
     form = _form()
     form.form_type = sr.ADVANCE_FORM_TYPE
     form.version = 1

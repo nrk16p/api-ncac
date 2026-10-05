@@ -8,8 +8,8 @@ from models.user_model import User ,Position
 from services.email_service import send_email, render_form_submit_th, render_form_done_th
 from services.line_service import send_line_message
 from services.notify_guard import ADVANCE_FORM_TYPE, notifications_enabled
-from services.finance import advance_logic, approval_repo, payee_logic
-from models.finance_model import FinPayeeAccount
+from services.finance import advance_logic, approval_logic, approval_repo, payee_logic
+from models.finance_model import FinAdvance, FinPayeeAccount
 from database import get_db
 from models.master_model import (
     FormMaster, FormQuestion, FormSubmission,
@@ -241,6 +241,36 @@ def _guard_advance_values(db: Session, form, values, created_by):
     except advance_logic.AdvanceRuleError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return overwritten
+
+
+def _advance_edit_state(db: Session, submission):
+    """Fresh ADV state for the edit lock → (derived status, step 1 approved in the current round).
+    SELECT … FOR UPDATE on the submission row (approve/reject lock it too), so a step-1 approval cannot land
+    between this check and the edit. Column-only query: no eager joins under FOR UPDATE."""
+    status_approve, current_level = (
+        db.query(FormSubmission.status_approve, FormSubmission.current_approval_level)
+        .filter(FormSubmission.id == submission.id)
+        .with_for_update()
+        .one()
+    )
+    fin_status = db.query(FinAdvance.fin_status).filter(FinAdvance.submission_id == submission.id).scalar()
+    status, _ = advance_logic.derive_status(status_approve, fin_status, None, _now_bkk().date())
+    step1_approved = False
+    if status == advance_logic.PENDING_APPROVAL:
+        step1_approved = approval_logic.leader_approved(approval_repo.current_round_logs(db, submission.id),
+                                                        current_level)
+    return status, step1_approved
+
+
+def _check_advance_edit(db: Session, submission, updated_by):
+    """ADV edit lock (v3 §6 + ruling): only the creator, and only (a) In Progress with no step-1 approval in the
+    current round or (b) ตีกลับให้ผู้เบิกแก้ไข (RETURNED). 403 for anyone else, 409 in any other state."""
+    status, step1_approved = _advance_edit_state(db, submission)
+    try:
+        advance_logic.check_requester_edit(status, is_owner=(updated_by == submission.created_by),
+                                           step1_approved=step1_approved)
+    except advance_logic.AdvanceRuleError as exc:
+        raise HTTPException(status_code=exc.http_status, detail=str(exc))
 
 
 def _reject_duplicate_values(values):
@@ -813,10 +843,7 @@ def update_form_details(
         raise HTTPException(status_code=400, detail="Cannot edit completed form")
 
     if submission.form is not None and submission.form.form_type == ADVANCE_FORM_TYPE:
-        if submission.status_approve != "In Progress":
-            raise HTTPException(status_code=400, detail="แก้ไขคำขอเบิกไม่ได้หลังอนุมัติ/ไม่อนุมัติแล้ว")
-        if payload.updated_by != submission.created_by:
-            raise HTTPException(status_code=403, detail="เฉพาะผู้ขอเบิกเท่านั้นที่แก้ไขคำขอได้")
+        _check_advance_edit(db, submission, payload.updated_by)
         # validate the edit as a whole: edited values merged over the stored ones
         merged = {
             v.question_id: SimpleNamespace(question_id=v.question_id, value_text=v.value_text,

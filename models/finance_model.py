@@ -59,7 +59,9 @@ class FinAdvance(Base):
     __table_args__ = (
         CheckConstraint("amount_paid >= 0", name="ck_fin_advances_amount_paid"),
         CheckConstraint("amount_actual IS NULL OR amount_actual >= 0", name="ck_fin_advances_amount_actual"),
-        CheckConstraint("fin_status IN ('VOUCHERED','VOUCHER_REJECTED','PAID','CLEARING_SUBMITTED','SENT_BACK','CLOSED')",
+        # widened by scripts/migrations/2026-10-05_finance_advance_v3.sql (RETURNED, RESUBMITTED)
+        CheckConstraint("fin_status IN ('VOUCHERED','VOUCHER_REJECTED','RETURNED','RESUBMITTED','PAID',"
+                        "'CLEARING_SUBMITTED','SENT_BACK','CLOSED')",
                         name="ck_fin_advances_fin_status"),
         Index("ix_fin_advances_fin_status", "fin_status"),
         Index("ix_fin_advances_clear_due_date", "clear_due_date"),
@@ -71,7 +73,7 @@ class FinAdvanceLog(Base):
 
     id = Column(Integer, primary_key=True)
     advance_id = Column(Integer, ForeignKey("fin_advances.id", ondelete="CASCADE"), nullable=False, index=True)
-    action = Column(String(30), nullable=False)  # PAY / PAY_EDIT / CLEAR_SUBMIT / CLEAR_EDIT / SEND_BACK / CONFIRM
+    action = Column(String(30), nullable=False)  # VOUCHER / PAY / PAY_EDIT / CLEAR_SUBMIT / SEND_BACK / CONFIRM / RETURN / RESUBMIT
     changes = Column(JSONB)
     remark = Column(Text)
     action_by = Column(String(50))

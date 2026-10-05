@@ -162,6 +162,13 @@ def step_approvals(round_logs: Iterable[Mapping]) -> list:
     return [by_step[step] for step in sorted(by_step)]
 
 
+def leader_approved(round_logs: Iterable[Mapping], current_level=None) -> bool:
+    """Step 1 is approved in this round, or the submission already sits past step 1 (ADV edit lock, v3 §6)."""
+    if isinstance(current_level, int) and current_level > STEP_LEADER:
+        return True
+    return any(a["step"] == STEP_LEADER for a in step_approvals(round_logs))
+
+
 # ---------------------------- eligibility ----------------------------
 
 def can_approve(approver: Mapping, requester: Mapping, required: int, mapped_departments: Iterable[int],

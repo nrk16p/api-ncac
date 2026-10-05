@@ -79,6 +79,16 @@ class RejectVoucherIn(_Body):
     remark: str
 
 
+class ReturnIn(_Body):
+    """ตีกลับให้ผู้เบิกแก้ไข (v3 §6). remark is optional here so a blank one reaches check_return's Thai 400."""
+    action_by: str
+    remark: Optional[str] = Field(default=None, max_length=1000)
+
+
+class ResubmitIn(_Body):
+    action_by: str
+
+
 class ConfirmIn(_Body):
     action_by: str
     clear_doc_no: Optional[str] = Field(default=None, max_length=100)

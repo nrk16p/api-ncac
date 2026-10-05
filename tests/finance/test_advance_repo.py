@@ -32,7 +32,7 @@ def test_awaiting_payment_without_fin_row():
     assert item["fin"] is None
     assert item["request"] == {"purpose": "ค่าแอร์", "amount": 12740.0, "use_date": "2026-07-09T00:00:00+00:00",
                               "cost_center": None, "bank": None, "bank_label": None, "account_no": None,
-                              "account_name": None}
+                              "account_name": None, "payee_type": None}
     assert item["created_at"] == "2026-07-07T03:00:00+00:00"
     assert item["requester"]["site_code"] == "สสบ."
 
@@ -50,7 +50,8 @@ def test_unknown_requester_falls_back_to_employee_id():
     assert item["requester"] == {"employee_id": "670001", "name": None, "department": None,
                                  "site": None, "site_code": None, "position": None}
     assert item["request"] == {"purpose": None, "amount": None, "use_date": None, "cost_center": None,
-                              "bank": None, "bank_label": None, "account_no": None, "account_name": None}
+                              "bank": None, "bank_label": None, "account_no": None, "account_name": None,
+                              "payee_type": None}
 
 
 def test_bkk_day_start_is_previous_utc_evening():
@@ -62,9 +63,10 @@ def test_serialize_request_v2_fields():
     from services.finance.advance_repo import serialize_request
     out = serialize_request({"purpose": "p", "amount": Decimal("1500.50"), "use_date": None,
                              "cost_center": "ศลบ", "bank": "KBANK", "account_no": "1234567890",
-                             "account_name": "นาย ก"})
+                             "account_name": "นาย ก", "payee_type": "SELF"})
     assert out == {"purpose": "p", "amount": 1500.5, "use_date": None, "cost_center": "ศลบ", "bank": "KBANK",
-                   "bank_label": "ธนาคารกสิกรไทย", "account_no": "1234567890", "account_name": "นาย ก"}
+                   "bank_label": "ธนาคารกสิกรไทย", "account_no": "1234567890", "account_name": "นาย ก",
+                   "payee_type": "SELF"}
 
 
 def test_serialize_request_empty():

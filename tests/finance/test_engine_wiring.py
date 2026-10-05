@@ -24,8 +24,14 @@ def test_update_runs_advance_guard():
 
 def test_update_locks_advance():
     src = inspect.getsource(submission_routes.update_form_details)
-    assert "แก้ไขคำขอเบิกไม่ได้หลังอนุมัติ/ไม่อนุมัติแล้ว" in src
-    assert "เฉพาะผู้ขอเบิกเท่านั้นที่แก้ไขคำขอได้" in src
+    assert "_check_advance_edit(db, submission, payload.updated_by)" in src
+    check = inspect.getsource(submission_routes._check_advance_edit)
+    assert "check_requester_edit" in check and "_advance_edit_state" in check
+    state = inspect.getsource(submission_routes._advance_edit_state)
+    assert ".with_for_update()" in state and "current_round_logs" in state
+    from services.finance import advance_logic as L
+    assert L.EDIT_LOCKED == "แก้ไขคำขอเบิกไม่ได้หลังอนุมัติ/ไม่อนุมัติแล้ว"
+    assert L.EDIT_NOT_OWNER == "เฉพาะผู้ขอเบิกเท่านั้นที่แก้ไขคำขอได้"
 
 
 def test_approve_reject_branch_on_advance():

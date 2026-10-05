@@ -8,6 +8,7 @@ from models.finance_model import FinAccount, FinAdvance, FinAdvanceClearItem, Fi
 from models.master_model import FormApprovalLog, FormMaster, FormQuestion, FormSubmission, FormSubmissionValue
 from models.user_model import Department, Position, Site, User
 from services.finance import advance_logic as logic
+from services.finance import payee_logic
 
 BKK = ZoneInfo("Asia/Bangkok")
 ADVANCE_FORM_TYPE = "Advance"
@@ -107,7 +108,13 @@ def serialize_request(request):
         "bank_label": logic.bank_label(request.get("bank")),
         "account_no": request.get("account_no"),
         "account_name": request.get("account_name"),
+        "payee_type": _payee_type(request.get("payee_type")),
     }
+
+
+def _payee_type(value):
+    """'SELF' / 'SUPPLIER', else None (pre-payee requests have no adv_payee_type answer)."""
+    return value if value in (payee_logic.PAYEE_SELF, payee_logic.PAYEE_SUPPLIER) else None
 
 
 def clear_items_by_advance(db, advance_ids):

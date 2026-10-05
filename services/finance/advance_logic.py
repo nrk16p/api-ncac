@@ -21,6 +21,7 @@ AWAITING_CLEARING = "AWAITING_CLEARING"
 SENT_BACK = "SENT_BACK"
 AWAITING_REVIEW = "AWAITING_REVIEW"
 CLOSED = "CLOSED"
+RETURNED = "RETURNED"  # v3 §6: Finance sent it back to the requester to edit + resubmit
 
 STATUS_LABELS = {
     PENDING_APPROVAL: "รออนุมัติ",
@@ -31,10 +32,13 @@ STATUS_LABELS = {
     SENT_BACK: "ส่งกลับแก้ไข",
     AWAITING_REVIEW: "รอบัญชีตรวจ",
     CLOSED: "ปิดแล้ว",
+    RETURNED: "ตีกลับให้ผู้เบิกแก้ไข",
 }
 
 FIN_VOUCHERED = "VOUCHERED"
-FIN_VOUCHER_REJECTED = "VOUCHER_REJECTED"
+FIN_VOUCHER_REJECTED = "VOUCHER_REJECTED"  # legacy (v2 reject-voucher); still maps to AWAITING_VOUCHER
+FIN_RETURNED = "RETURNED"        # v3 §6: waiting for the requester
+FIN_RESUBMITTED = "RESUBMITTED"  # v3 §6: the requester sent it again (re-approval, then รอตั้งเบิก)
 FIN_PAID = "PAID"
 FIN_CLEARING_SUBMITTED = "CLEARING_SUBMITTED"
 FIN_SENT_BACK = "SENT_BACK"
@@ -43,6 +47,8 @@ FIN_CLOSED = "CLOSED"
 _FIN_TO_STATUS = {
     FIN_VOUCHERED: AWAITING_PAYMENT,
     FIN_VOUCHER_REJECTED: AWAITING_VOUCHER,
+    FIN_RETURNED: RETURNED,
+    FIN_RESUBMITTED: AWAITING_VOUCHER,
     FIN_PAID: AWAITING_CLEARING,
     FIN_SENT_BACK: SENT_BACK,
     FIN_CLEARING_SUBMITTED: AWAITING_REVIEW,
@@ -68,13 +74,13 @@ class NotAllowed(AdvanceRuleError):
 
 
 def derive_status(status_approve, fin_status, clear_due_date, today):
-    if fin_status:
-        status = _FIN_TO_STATUS[fin_status]
-    elif status_approve == "Approved":
-        status = AWAITING_VOUCHER
+    """v3 §6 precedence: the approval state wins over the fin row (a RESUBMITTED request is back in approval);
+    only an Approved request maps its fin_status (none → รอตั้งเบิกทำจ่าย)."""
+    if status_approve == "Approved":
+        status = _FIN_TO_STATUS[fin_status] if fin_status else AWAITING_VOUCHER
     elif status_approve == "Rejected":
         status = REJECTED
-    else:
+    else:  # 'In Progress' (the prod CHECK allows only these three values)
         status = PENDING_APPROVAL
     overdue = (
         status in (AWAITING_CLEARING, SENT_BACK)
@@ -125,6 +131,42 @@ def check_voucher(status, *, voucher_date, is_edit: bool = False):
     if status != AWAITING_VOUCHER and not is_edit:
         raise InvalidTransition("รายการนี้ถูกตั้งเบิกไปแล้ว กรุณารีเฟรชหน้าจอ")
     _require(voucher_date is not None, "กรุณาระบุวันที่ตั้งเบิก")
+
+
+RETURN_ACTION = "ตีกลับให้ผู้เบิกแก้ไข"
+RETURN_REMARK_REQUIRED = "กรุณาระบุเหตุผลที่ตีกลับ"
+
+
+def check_return(status, *, remark):
+    """v3 §6: Finance returns the request to the requester from รอตั้งเบิกทำจ่าย or รอจ่าย; a reason is required."""
+    _require_status(status, (AWAITING_VOUCHER, AWAITING_PAYMENT), RETURN_ACTION)
+    _require(bool(remark and remark.strip()), RETURN_REMARK_REQUIRED)
+
+
+def check_resubmit(status, *, is_owner):
+    """v3 §6: only the requester, only while ตีกลับให้ผู้เบิกแก้ไข."""
+    if not is_owner:
+        raise NotAllowed("เฉพาะผู้ขอเบิกเท่านั้นที่ส่งคำขอใหม่ได้")
+    _require_status(status, (RETURNED,), "ส่งคำขอใหม่")
+
+
+EDIT_NOT_OWNER = "เฉพาะผู้ขอเบิกเท่านั้นที่แก้ไขคำขอได้"
+EDIT_LOCKED_STEP1 = "แก้ไขคำขอเบิกไม่ได้ เนื่องจากหัวหน้าอนุมัติขั้นที่ 1 แล้ว"
+EDIT_LOCKED = "แก้ไขคำขอเบิกไม่ได้หลังอนุมัติ/ไม่อนุมัติแล้ว"
+
+
+def check_requester_edit(status, *, is_owner, step1_approved):
+    """ADV edit lock (v3 §6 + ruling): the creator edits only (a) while waiting for step 1 — PENDING_APPROVAL with
+    no step-1 approval in the current round — or (b) at RETURNED. 403 for anyone else, 409 for any other state."""
+    if not is_owner:
+        raise NotAllowed(EDIT_NOT_OWNER)
+    if status == RETURNED:
+        return
+    if status == PENDING_APPROVAL:
+        if step1_approved:
+            raise InvalidTransition(EDIT_LOCKED_STEP1)
+        return
+    raise InvalidTransition(EDIT_LOCKED)
 
 
 def check_reject_voucher(status, *, remark):
@@ -233,9 +275,10 @@ _REQUEST_FIELDS = {
     "bank": ("adv_bank", ()),
     "account_no": ("adv_account_no", ()),
     "account_name": ("adv_account_name", ()),
+    "payee_type": ("adv_payee_type", ()),
 }
 _ROW_VALUE_KEY = {"purpose": "text", "amount": "number", "use_date": "date", "cost_center": "text",
-                  "bank": "text", "account_no": "text", "account_name": "text"}
+                  "bank": "text", "account_no": "text", "account_name": "text", "payee_type": "text"}
 
 
 def pick_request_values(rows):

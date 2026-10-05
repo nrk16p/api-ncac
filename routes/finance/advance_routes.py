@@ -14,10 +14,15 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from models.finance_model import FinAccount, FinAdvance, FinAdvanceClearItem, FinAdvanceLog
+from models.master_model import FormApprovalLog
 from models.user_model import User
-from schemas.finance_schema import AccountCreate, AccountUpdate, ClearIn, ConfirmIn, PayIn, RejectVoucherIn, SendBackIn, VoucherIn
+from schemas.finance_schema import (
+    AccountCreate, AccountUpdate, ClearIn, ConfirmIn, PayIn, RejectVoucherIn, ResubmitIn, ReturnIn, SendBackIn,
+    VoucherIn,
+)
 from services.finance import advance_logic as logic
 from services.finance import advance_repo as repo
+from services.finance import approval_logic as approval_rules
 from services.finance import approval_repo
 
 router = APIRouter(prefix="/finance", tags=["Finance - Advance"])
@@ -155,6 +160,7 @@ def advance_approvers(form_id: str, db: Session = Depends(get_db)):
 
 PAY_FIELDS = ("acc_code", "payment_doc_no", "purpose", "amount_paid", "transfer_date", "clear_due_date")
 VOUCHER_FIELDS = ("voucher_no", "voucher_date")
+RETURN_FIELDS = ("fin_status", "voucher_no", "voucher_date")
 CLEAR_FIELDS = ("clear_date", "amount_actual", "settle_amount", "settle_date", "remark")
 
 _ALREADY_SAVED = "รายการนี้ถูกบันทึกไปแล้ว กรุณารีเฟรชหน้าจอ"
@@ -212,8 +218,10 @@ def voucher_advance(form_id: str, body: VoucherIn, db: Session = Depends(get_db)
     if adv is None:
         adv = FinAdvance(submission_id=sub.id, form_id=sub.form_id, fin_status=logic.FIN_VOUCHERED)
         db.add(adv)
-    elif adv.fin_status == logic.FIN_VOUCHER_REJECTED and status == logic.AWAITING_VOUCHER:
-        # first save after a reject: reuse the row (voucher fields kept) and go back to รอจ่าย
+    elif (adv.fin_status in (logic.FIN_VOUCHER_REJECTED, logic.FIN_RESUBMITTED)
+          and status == logic.AWAITING_VOUCHER):
+        # first save after a legacy reject (voucher fields kept) or a re-approved resubmit (fields cleared at
+        # return): reuse the row and go to รอจ่าย
         adv.fin_status = logic.FIN_VOUCHERED
         action = "VOUCHER"
     for field, value in values.items():
@@ -225,6 +233,68 @@ def voucher_advance(form_id: str, body: VoucherIn, db: Session = Depends(get_db)
         raise HTTPException(status_code=409, detail=_ALREADY_SAVED)
     db.add(FinAdvanceLog(advance_id=adv.id, action=action, changes=logic.diff_fields(before, values),
                          action_by=body.action_by))
+    return _commit_and_return(db, form_id)
+
+
+@router.put("/advances/{form_id}/return")
+def return_advance(form_id: str, body: ReturnIn, db: Session = Depends(get_db)):
+    """ตีกลับให้ผู้เบิกแก้ไข (v3 §6) from รอตั้งเบิกทำจ่าย / รอจ่าย, reason required. The fin row goes to RETURNED
+    (created when the request was not vouchered yet) with its voucher fields cleared; a RETURN fin log and a
+    RETURNED approval-log marker (level_no 0, the Finance user's users.id) record it."""
+    finance_user = require_finance(db, body.action_by)
+    sub, adv, status = _load_for_update(db, form_id)
+    try:
+        logic.check_return(status, remark=body.remark)
+    except logic.AdvanceRuleError as exc:
+        raise _rule_error(exc)
+    remark = body.remark.strip()
+    values = {"fin_status": logic.FIN_RETURNED, "voucher_no": None, "voucher_date": None}
+    before = _snapshot(adv, RETURN_FIELDS)
+    if adv is None:  # approved, not vouchered yet: the fin row starts here (pay columns stay NULL)
+        adv = FinAdvance(submission_id=sub.id, form_id=sub.form_id, fin_status=logic.FIN_RETURNED)
+        db.add(adv)
+    for field, value in values.items():
+        setattr(adv, field, value)
+    try:
+        db.flush()
+    except IntegrityError:  # a concurrent first voucher/return created the row
+        db.rollback()
+        raise HTTPException(status_code=409, detail=_ALREADY_SAVED)
+    db.add(FinAdvanceLog(advance_id=adv.id, action="RETURN", changes=logic.diff_fields(before, values),
+                         remark=remark, action_by=body.action_by))
+    db.add(FormApprovalLog(submission_id=sub.id, level_no=0, action=approval_rules.MARKER_RETURNED,
+                           action_by=finance_user.id, remark=remark))
+    return _commit_and_return(db, form_id)
+
+
+@router.put("/advances/{form_id}/resubmit")
+def resubmit_advance(form_id: str, body: ResubmitIn, db: Session = Depends(get_db)):
+    """แก้ไขและส่งใหม่ (v3 §6): the requester only, at RETURNED only. Back to approval from step 1; the
+    RESUBMITTED marker (level_no 0, the requester's users.id) starts a new approval round, so earlier approvals
+    no longer count. fin_status RESUBMITTED maps to รอตั้งเบิกทำจ่าย once the request is approved again."""
+    sub, adv, status = _load_for_update(db, form_id)
+    try:
+        logic.check_resubmit(status, is_owner=(body.action_by == sub.created_by))
+    except logic.AdvanceRuleError as exc:
+        raise _rule_error(exc)
+    requester = db.query(User).filter(User.employee_id == sub.created_by).first()
+    if requester is None:
+        raise HTTPException(status_code=403, detail="ไม่พบข้อมูลผู้ขอเบิกในระบบ")
+    try:  # same guard as submit: the (possibly edited) amount must still have an eligible approver
+        approval_repo.describe(db, sub.created_by,
+                               (repo.request_values_by_submission(db, [sub.id]).get(sub.id) or {}).get("amount"))
+    except logic.AdvanceRuleError as exc:
+        raise _rule_error(exc)
+    before = {"fin_status": adv.fin_status, "status_approve": sub.status_approve,
+              "current_approval_level": sub.current_approval_level}
+    values = {"fin_status": logic.FIN_RESUBMITTED, "status_approve": "In Progress", "current_approval_level": 1}
+    adv.fin_status = logic.FIN_RESUBMITTED
+    sub.status_approve = "In Progress"
+    sub.current_approval_level = 1
+    db.add(FinAdvanceLog(advance_id=adv.id, action="RESUBMIT", changes=logic.diff_fields(before, values),
+                         action_by=body.action_by))
+    db.add(FormApprovalLog(submission_id=sub.id, level_no=0, action=approval_rules.MARKER_RESUBMITTED,
+                           action_by=requester.id))
     return _commit_and_return(db, form_id)
 
 
