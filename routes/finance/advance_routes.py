@@ -7,7 +7,7 @@ import os
 from datetime import date
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -24,6 +24,7 @@ from services.finance import advance_logic as logic
 from services.finance import advance_repo as repo
 from services.finance import approval_logic as approval_rules
 from services.finance import approval_repo
+from services.finance import finance_mail as mail
 
 router = APIRouter(prefix="/finance", tags=["Finance - Advance"])
 
@@ -237,7 +238,8 @@ def voucher_advance(form_id: str, body: VoucherIn, db: Session = Depends(get_db)
 
 
 @router.put("/advances/{form_id}/return")
-def return_advance(form_id: str, body: ReturnIn, db: Session = Depends(get_db)):
+def return_advance(form_id: str, body: ReturnIn, background_tasks: BackgroundTasks,
+                   db: Session = Depends(get_db)):
     """ตีกลับให้ผู้เบิกแก้ไข (v3 §6) from รอตั้งเบิกทำจ่าย / รอจ่าย, reason required. The fin row goes to RETURNED
     (created when the request was not vouchered yet) with its voucher fields cleared; a RETURN fin log and a
     RETURNED approval-log marker (level_no 0, the Finance user's users.id) record it."""
@@ -264,11 +266,14 @@ def return_advance(form_id: str, body: ReturnIn, db: Session = Depends(get_db)):
                          remark=remark, action_by=body.action_by))
     db.add(FormApprovalLog(submission_id=sub.id, level_no=0, action=approval_rules.MARKER_RETURNED,
                            action_by=finance_user.id, remark=remark))
-    return _commit_and_return(db, form_id)
+    detail = _commit_and_return(db, form_id)
+    mail.queue_event(background_tasks, db, mail.RETURNED, sub, remark=remark)
+    return detail
 
 
 @router.put("/advances/{form_id}/resubmit")
-def resubmit_advance(form_id: str, body: ResubmitIn, db: Session = Depends(get_db)):
+def resubmit_advance(form_id: str, body: ResubmitIn, background_tasks: BackgroundTasks,
+                     db: Session = Depends(get_db)):
     """แก้ไขและส่งใหม่ (v3 §6): the requester only, at RETURNED only. Back to approval from step 1; the
     RESUBMITTED marker (level_no 0, the requester's users.id) starts a new approval round, so earlier approvals
     no longer count. fin_status RESUBMITTED maps to รอตั้งเบิกทำจ่าย once the request is approved again."""
@@ -295,7 +300,9 @@ def resubmit_advance(form_id: str, body: ResubmitIn, db: Session = Depends(get_d
                          action_by=body.action_by))
     db.add(FormApprovalLog(submission_id=sub.id, level_no=0, action=approval_rules.MARKER_RESUBMITTED,
                            action_by=requester.id))
-    return _commit_and_return(db, form_id)
+    detail = _commit_and_return(db, form_id)
+    mail.queue_event(background_tasks, db, mail.RESUBMITTED, sub)
+    return detail
 
 
 @router.put("/advances/{form_id}/reject-voucher")
@@ -313,7 +320,8 @@ def reject_voucher(form_id: str, body: RejectVoucherIn, db: Session = Depends(ge
 
 
 @router.put("/advances/{form_id}/pay")
-def pay_advance(form_id: str, body: PayIn, db: Session = Depends(get_db)):
+def pay_advance(form_id: str, body: PayIn, background_tasks: BackgroundTasks,
+                db: Session = Depends(get_db)):
     require_finance(db, body.action_by)
     sub, adv, status = _load_for_update(db, form_id)
     account = db.get(FinAccount, body.acc_code) if body.acc_code else None
@@ -345,7 +353,11 @@ def pay_advance(form_id: str, body: PayIn, db: Session = Depends(get_db)):
         raise HTTPException(status_code=409, detail=_ALREADY_SAVED)
     db.add(FinAdvanceLog(advance_id=adv.id, action=action, changes=logic.diff_fields(before, values),
                          action_by=body.action_by))
-    return _commit_and_return(db, form_id)
+    detail = _commit_and_return(db, form_id)
+    if action == "PAY":  # the first payment only, not an edit of the payment
+        mail.queue_event(background_tasks, db, mail.PAID, sub, amount_paid=adv.amount_paid,
+                         transfer_date=adv.transfer_date, clear_due_date=adv.clear_due_date)
+    return detail
 
 
 @router.put("/advances/{form_id}/clear")
@@ -381,9 +393,10 @@ def clear_advance(form_id: str, body: ClearIn, db: Session = Depends(get_db)):
 
 
 @router.put("/advances/{form_id}/send-back")
-def send_back_advance(form_id: str, body: SendBackIn, db: Session = Depends(get_db)):
+def send_back_advance(form_id: str, body: SendBackIn, background_tasks: BackgroundTasks,
+                      db: Session = Depends(get_db)):
     require_finance(db, body.action_by)
-    _, adv, status = _load_for_update(db, form_id)
+    sub, adv, status = _load_for_update(db, form_id)
     try:
         logic.check_fresh(body.expected_clear_submitted_at, adv.clear_submitted_at if adv is not None else None)
         logic.check_send_back(status, review_remark=body.review_remark)
@@ -393,13 +406,16 @@ def send_back_advance(form_id: str, body: SendBackIn, db: Session = Depends(get_
     adv.review_remark = body.review_remark
     db.add(FinAdvanceLog(advance_id=adv.id, action="SEND_BACK", remark=body.review_remark,
                          action_by=body.action_by))
-    return _commit_and_return(db, form_id)
+    detail = _commit_and_return(db, form_id)
+    mail.queue_event(background_tasks, db, mail.SENT_BACK, sub, remark=body.review_remark)
+    return detail
 
 
 @router.put("/advances/{form_id}/confirm")
-def confirm_advance(form_id: str, body: ConfirmIn, db: Session = Depends(get_db)):
+def confirm_advance(form_id: str, body: ConfirmIn, background_tasks: BackgroundTasks,
+                    db: Session = Depends(get_db)):
     require_finance(db, body.action_by)
-    _, adv, status = _load_for_update(db, form_id)
+    sub, adv, status = _load_for_update(db, form_id)
     try:
         logic.check_fresh(body.expected_clear_submitted_at, adv.clear_submitted_at if adv is not None else None)
         extra_paid_on = logic.check_confirm(status, settle_amount=adv.settle_amount if adv is not None else None,
@@ -418,4 +434,6 @@ def confirm_advance(form_id: str, body: ConfirmIn, db: Session = Depends(get_db)
     adv.closed_by = body.action_by
     adv.closed_at = func.now()
     db.add(FinAdvanceLog(advance_id=adv.id, action="CONFIRM", changes=changes or None, action_by=body.action_by))
-    return _commit_and_return(db, form_id)
+    detail = _commit_and_return(db, form_id)
+    mail.queue_event(background_tasks, db, mail.CLOSED, sub)
+    return detail

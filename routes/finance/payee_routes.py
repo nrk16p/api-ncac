@@ -18,7 +18,7 @@ from models.user_model import User
 from routes.finance.advance_routes import require_finance
 from schemas.finance_schema import (PayeeAccountCreate, PayeeAccountUpdate, PayeeActionIn, PayeeRejectIn,
                                     PayeeRequestCreate)
-from services.email_service import send_email
+from services.finance.finance_mail import send_finance_email
 from services.finance import advance_logic as logic
 from services.finance import payee_logic as pl
 from services.finance import payee_repo as repo
@@ -167,7 +167,7 @@ def _send_request_email(ctx: dict):
     try:
         subject, html = render_payee_request_email(ctx)
         to = os.getenv("FINANCE_ACCOUNT_EMAIL") or "accountbkk@menatransport.co.th"
-        send_email(to, subject, html)
+        send_finance_email(to, subject, html)
     except Exception:  # noqa: BLE001 - email failure must not affect the saved request
         log.exception("payee request email failed (request %s)", ctx.get("request_id"))
 

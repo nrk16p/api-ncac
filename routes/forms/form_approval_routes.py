@@ -5,6 +5,7 @@ from fastapi import BackgroundTasks
 from services.email_service import render_form_rejected_th ,  send_email , render_form_approved_th
 from services.notify_guard import ADVANCE_FORM_TYPE, notifications_enabled
 from services.finance import approval_repo
+from services.finance import finance_mail as fin_mail
 
 from models.master_model import (
     FormSubmission,
@@ -531,6 +532,13 @@ def approve_submission(
             submission.status_approve = "Approved"
 
     db.commit()
+    if advance:  # finance email (off unless FINANCE_EMAIL_ENABLED): next-step approvers, or the requester
+        fin_mail.queue_event(
+            background_tasks,
+            db,
+            fin_mail.APPROVED if submission.status_approve == "Approved" else fin_mail.STEP_PENDING,
+            submission,
+        )
     if submission.status_approve == "Approved" and notifications_enabled(submission.form):
 
         creator = db.query(User).filter(
@@ -638,6 +646,8 @@ def reject_submission(
 
     submission.status_approve = "Rejected"
     db.commit()
+    if advance:
+        fin_mail.queue_event(background_tasks, db, fin_mail.REJECTED, submission, remark=remark)
     creator = db.query(User).filter(
         User.employee_id == submission.created_by
     ).first()

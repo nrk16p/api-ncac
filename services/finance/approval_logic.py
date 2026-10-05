@@ -199,6 +199,12 @@ def _eligible(people: Iterable[Mapping], requester: Mapping, required: int,
             if can_approve(p, requester, required, mappings.get(p["employee_id"], ()), excluded)]
 
 
+def eligible_approvers(people: Iterable[Mapping], requester: Mapping, required: int,
+                       mappings: Mapping[str, Iterable[int]], excluded: Iterable[int] = ()) -> list:
+    """Every person who may approve a step of `required` level (not only the lowest level)."""
+    return _eligible(people, requester, required, mappings, excluded)
+
+
 def direct_level(people: Iterable[Mapping], requester: Mapping, required: int,
                  mappings: Mapping[str, Iterable[int]], excluded: Iterable[int] = ()) -> Optional[int]:
     levels = [p["level"] for p in _eligible(people, requester, required, mappings, excluded)]

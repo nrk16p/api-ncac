@@ -10,7 +10,7 @@ from types import SimpleNamespace as NS
 os.environ.setdefault("DATABASE_URL", "postgresql://u:p@localhost:5432/x")
 
 import pytest  # noqa: E402
-from fastapi import HTTPException  # noqa: E402
+from fastapi import BackgroundTasks, HTTPException  # noqa: E402
 from pydantic import ValidationError  # noqa: E402
 from sqlalchemy.dialects import postgresql  # noqa: E402
 from sqlalchemy.exc import IntegrityError  # noqa: E402
@@ -365,7 +365,7 @@ def test_routes_registered():
 
 def test_return_without_fin_row_creates_returned_row(wired):
     db = _Db(adv=None)
-    out = ar.return_advance("ADV-2610-001", ReturnIn(action_by="F1", remark=" บัญชีผิด "), db)
+    out = ar.return_advance("ADV-2610-001", ReturnIn(action_by="F1", remark=" บัญชีผิด "), BackgroundTasks(), db)
     assert out == {"form_id": "ADV-2610-001", "detail": True} and db.committed
     (adv,) = db.of(FinAdvance)
     assert (adv.submission_id, adv.form_id, adv.fin_status) == (5, "ADV-2610-001", "RETURNED")
@@ -381,7 +381,7 @@ def test_return_without_fin_row_creates_returned_row(wired):
 def test_return_at_awaiting_payment_clears_voucher(wired):
     adv = _adv("VOUCHERED", voucher_no="SADV-1", voucher_date=date(2026, 10, 1))
     db = _Db(adv=adv)
-    ar.return_advance("ADV-2610-001", ReturnIn(action_by="F1", remark="ผิด"), db)
+    ar.return_advance("ADV-2610-001", ReturnIn(action_by="F1", remark="ผิด"), BackgroundTasks(), db)
     assert (adv.fin_status, adv.voucher_no, adv.voucher_date) == ("RETURNED", None, None)
     assert db.of(FinAdvance) == []  # the existing row is reused
     (log,) = db.of(FinAdvanceLog)
@@ -393,7 +393,7 @@ def test_return_at_awaiting_payment_clears_voucher(wired):
 def test_return_after_legacy_voucher_reject(wired):
     adv = _adv("VOUCHER_REJECTED", voucher_no="SADV-1", voucher_date=date(2026, 10, 1))
     db = _Db(adv=adv)
-    ar.return_advance("ADV-2610-001", ReturnIn(action_by="F1", remark="ผิด"), db)
+    ar.return_advance("ADV-2610-001", ReturnIn(action_by="F1", remark="ผิด"), BackgroundTasks(), db)
     assert (adv.fin_status, adv.voucher_no) == ("RETURNED", None)
 
 
@@ -401,7 +401,7 @@ def test_return_after_legacy_voucher_reject(wired):
 def test_return_409_after_payment_or_when_already_returned(wired, fin_status):
     db = _Db(adv=_adv(fin_status))
     with pytest.raises(HTTPException) as ei:
-        ar.return_advance("ADV-2610-001", ReturnIn(action_by="F1", remark="x"), db)
+        ar.return_advance("ADV-2610-001", ReturnIn(action_by="F1", remark="x"), BackgroundTasks(), db)
     assert ei.value.status_code == 409 and db.added == [] and not db.committed
 
 
@@ -410,14 +410,14 @@ def test_return_409_before_approval(wired, status_approve):
     wired["sub"] = _sub(status_approve)
     db = _Db(adv=None)
     with pytest.raises(HTTPException) as ei:
-        ar.return_advance("ADV-2610-001", ReturnIn(action_by="F1", remark="x"), db)
+        ar.return_advance("ADV-2610-001", ReturnIn(action_by="F1", remark="x"), BackgroundTasks(), db)
     assert ei.value.status_code == 409 and db.added == []
 
 
 def test_return_requires_remark(wired):
     db = _Db(adv=None)
     with pytest.raises(HTTPException) as ei:
-        ar.return_advance("ADV-2610-001", ReturnIn(action_by="F1", remark="  "), db)
+        ar.return_advance("ADV-2610-001", ReturnIn(action_by="F1", remark="  "), BackgroundTasks(), db)
     assert (ei.value.status_code, ei.value.detail) == (400, "กรุณาระบุเหตุผลที่ตีกลับ") and db.added == []
 
 
@@ -428,21 +428,21 @@ def test_return_requires_finance(wired, monkeypatch):
     monkeypatch.setattr(ar, "require_finance", deny)
     db = _Db(adv=None)
     with pytest.raises(HTTPException) as ei:
-        ar.return_advance("ADV-2610-001", ReturnIn(action_by="E1", remark="x"), db)
+        ar.return_advance("ADV-2610-001", ReturnIn(action_by="E1", remark="x"), BackgroundTasks(), db)
     assert ei.value.status_code == 403 and db.added == []
 
 
 def test_return_concurrent_insert_is_409(wired):
     db = _Db(adv=None, flush_error=True)
     with pytest.raises(HTTPException) as ei:
-        ar.return_advance("ADV-2610-001", ReturnIn(action_by="F1", remark="x"), db)
+        ar.return_advance("ADV-2610-001", ReturnIn(action_by="F1", remark="x"), BackgroundTasks(), db)
     assert ei.value.status_code == 409 and db.rolled_back and not db.committed
 
 
 def test_resubmit_restarts_approval(wired):
     adv = _adv("RETURNED")
     db = _Db(adv=adv, requester=REQUESTER)
-    out = ar.resubmit_advance("ADV-2610-001", ResubmitIn(action_by="E1"), db)
+    out = ar.resubmit_advance("ADV-2610-001", ResubmitIn(action_by="E1"), BackgroundTasks(), db)
     sub = wired["sub"]
     assert out["detail"] and db.committed
     assert (adv.fin_status, sub.status_approve, sub.current_approval_level) == ("RESUBMITTED", "In Progress", 1)
@@ -460,7 +460,7 @@ def test_resubmit_restarts_approval(wired):
 def test_resubmit_not_owner_is_403(wired):
     db = _Db(adv=_adv("RETURNED"), requester=REQUESTER)
     with pytest.raises(HTTPException) as ei:
-        ar.resubmit_advance("ADV-2610-001", ResubmitIn(action_by="F1"), db)
+        ar.resubmit_advance("ADV-2610-001", ResubmitIn(action_by="F1"), BackgroundTasks(), db)
     assert ei.value.status_code == 403 and db.added == [] and wired["sub"].status_approve == "Approved"
 
 
@@ -468,7 +468,7 @@ def test_resubmit_not_owner_is_403(wired):
 def test_resubmit_409_unless_returned(wired, fin_status):
     db = _Db(adv=_adv(fin_status) if fin_status else None, requester=REQUESTER)
     with pytest.raises(HTTPException) as ei:
-        ar.resubmit_advance("ADV-2610-001", ResubmitIn(action_by="E1"), db)
+        ar.resubmit_advance("ADV-2610-001", ResubmitIn(action_by="E1"), BackgroundTasks(), db)
     assert ei.value.status_code == 409 and db.added == []
 
 
@@ -476,7 +476,7 @@ def test_resubmit_409_while_in_approval(wired):
     wired["sub"] = _sub("In Progress", 1)
     db = _Db(adv=_adv("RESUBMITTED"), requester=REQUESTER)
     with pytest.raises(HTTPException) as ei:
-        ar.resubmit_advance("ADV-2610-001", ResubmitIn(action_by="E1"), db)
+        ar.resubmit_advance("ADV-2610-001", ResubmitIn(action_by="E1"), BackgroundTasks(), db)
     assert ei.value.status_code == 409
 
 
@@ -488,7 +488,7 @@ def test_resubmit_without_eligible_approver_is_400(wired, monkeypatch):
     adv = _adv("RETURNED")
     db = _Db(adv=adv, requester=REQUESTER)
     with pytest.raises(HTTPException) as ei:
-        ar.resubmit_advance("ADV-2610-001", ResubmitIn(action_by="E1"), db)
+        ar.resubmit_advance("ADV-2610-001", ResubmitIn(action_by="E1"), BackgroundTasks(), db)
     assert (ei.value.status_code, ei.value.detail) == (400, rules.MSG_NO_APPROVER)
     assert adv.fin_status == "RETURNED" and db.added == []
 
@@ -496,7 +496,7 @@ def test_resubmit_without_eligible_approver_is_400(wired, monkeypatch):
 def test_resubmit_unknown_requester_user(wired):
     db = _Db(adv=_adv("RETURNED"), requester=None)
     with pytest.raises(HTTPException) as ei:
-        ar.resubmit_advance("ADV-2610-001", ResubmitIn(action_by="E1"), db)
+        ar.resubmit_advance("ADV-2610-001", ResubmitIn(action_by="E1"), BackgroundTasks(), db)
     assert ei.value.status_code == 403 and db.added == []
 
 
@@ -504,8 +504,8 @@ def test_markers_written_by_routes_start_a_new_round(wired):
     """Review Focus #2: the markers the routes write make round-1 approvals invisible to round 2."""
     adv = _adv("VOUCHERED")
     db = _Db(adv=adv, requester=REQUESTER)
-    ar.return_advance("ADV-2610-001", ReturnIn(action_by="F1", remark="x"), db)
-    ar.resubmit_advance("ADV-2610-001", ResubmitIn(action_by="E1"), db)
+    ar.return_advance("ADV-2610-001", ReturnIn(action_by="F1", remark="x"), BackgroundTasks(), db)
+    ar.resubmit_advance("ADV-2610-001", ResubmitIn(action_by="E1"), BackgroundTasks(), db)
     markers = [_log(10 + n, m.level_no, m.action, m.action_by) for n, m in enumerate(db.of(FormApprovalLog))]
     assert [(m["action"], m["level_no"]) for m in markers] == [("RETURNED", 0), ("RESUBMITTED", 0)]
     current = rules.current_round(ROUND_1[:2] + markers)
@@ -533,7 +533,8 @@ def test_finance_cannot_continue_while_returned(wired, route, body):
     schema = VoucherIn if route == "voucher_advance" else PayIn
     db = _Db(adv=_adv("RETURNED"))
     with pytest.raises(HTTPException) as ei:
-        getattr(ar, route)("ADV-2610-001", schema(action_by="F1", **body), db)
+        args = ("ADV-2610-001", schema(action_by="F1", **body))
+        getattr(ar, route)(*args, db) if route == "voucher_advance" else getattr(ar, route)(*args, BackgroundTasks(), db)
     assert ei.value.status_code == 409
 
 

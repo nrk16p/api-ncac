@@ -9,6 +9,7 @@ from services.email_service import send_email, render_form_submit_th, render_for
 from services.line_service import send_line_message
 from services.notify_guard import ADVANCE_FORM_TYPE, notifications_enabled
 from services.finance import advance_logic, approval_logic, approval_repo, payee_logic
+from services.finance import finance_mail as fin_mail
 from models.finance_model import FinAdvance, FinPayeeAccount
 from database import get_db
 from models.master_model import (
@@ -381,6 +382,9 @@ def submit_form(
 
         db.commit()
         db.refresh(submission)
+
+        if form.form_type == ADVANCE_FORM_TYPE:  # finance email (off unless FINANCE_EMAIL_ENABLED)
+            fin_mail.queue_event(background_tasks, db, fin_mail.SUBMITTED, submission)
 
         if not notifications_enabled(form):
             return _submit_response(submission, form)
