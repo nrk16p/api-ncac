@@ -79,3 +79,46 @@ def test_fin_advance_clear_items_matches_sql():
                      "net_amount >= 0", "BEGIN;", "COMMIT;"):
         assert fragment in sql, fragment
     assert "DO $$" not in sql
+
+
+def test_payee_tables_match_sql():
+    import models  # noqa: F401
+    from database import Base
+    from pathlib import Path
+    from sqlalchemy.schema import CreateIndex
+    from models.finance_model import FinPayeeAccount, FinPayeeAccountLog, FinPayeeAccountRequest
+    for name in ("fin_payee_accounts", "fin_payee_account_requests", "fin_payee_account_logs"):
+        assert name in Base.metadata.tables
+    sql = (Path(__file__).resolve().parents[2] / "scripts/migrations/2026-10-05_finance_payee_accounts.sql").read_text()
+    d = postgresql.dialect()
+    acc = str(CreateTable(FinPayeeAccount.__table__).compile(dialect=d))
+    for f in ("employee_id VARCHAR(50) NOT NULL", "bank VARCHAR(20) DEFAULT 'KBANK' NOT NULL",
+              "account_no VARCHAR(20) NOT NULL", "account_name VARCHAR(150) NOT NULL",
+              "status VARCHAR(10) DEFAULT 'ACTIVE' NOT NULL", "UNIQUE (employee_id)", "bank = 'KBANK'",
+              "status IN ('ACTIVE','INACTIVE')", "ON DELETE SET NULL"):
+        assert f in acc, f
+    req = str(CreateTable(FinPayeeAccountRequest.__table__).compile(dialect=d))
+    for f in ("status VARCHAR(10) DEFAULT 'PENDING' NOT NULL", "remark TEXT", "review_remark TEXT",
+              "reviewed_at TIMESTAMP WITH TIME ZONE", "bank = 'KBANK'",
+              "status IN ('PENDING','APPROVED','REJECTED','CANCELLED')"):
+        assert f in req, f
+    log = str(CreateTable(FinPayeeAccountLog.__table__).compile(dialect=d))
+    for f in ("action VARCHAR(30) NOT NULL", "changes JSONB", "action_by VARCHAR(50)"):
+        assert f in log, f
+    idx = {i.name: i for i in FinPayeeAccountRequest.__table__.indexes}["uq_fin_payee_requests_one_pending"]
+    ddl = str(CreateIndex(idx).compile(dialect=d))
+    assert "UNIQUE INDEX" in ddl and "(employee_id)" in ddl and "WHERE status = 'PENDING'" in ddl
+    assert "ix_fin_payee_account_logs_employee_id" in {i.name for i in FinPayeeAccountLog.__table__.indexes}
+    for f in ("CREATE TABLE IF NOT EXISTS fin_payee_accounts", "CREATE TABLE IF NOT EXISTS fin_payee_account_requests",
+              "CREATE TABLE IF NOT EXISTS fin_payee_account_logs", "employee_id       varchar(50)  NOT NULL UNIQUE",
+              "REFERENCES fin_payee_account_requests(id) ON DELETE SET NULL",
+              "CREATE UNIQUE INDEX IF NOT EXISTS uq_fin_payee_requests_one_pending",
+              "ON fin_payee_account_requests (employee_id) WHERE status = 'PENDING'",
+              "CREATE INDEX IF NOT EXISTS ix_fin_payee_account_logs_employee_id",
+              "CHECK (bank = 'KBANK')", "CHECK (status IN ('ACTIVE','INACTIVE'))",
+              "CHECK (status IN ('PENDING','APPROVED','REJECTED','CANCELLED'))",
+              "'adv_payee_type', 'บัญชีรับเงิน', 'dropdown', true, 5", "'SELF',     'บัญชีตัวเอง',     1",
+              "'SUPPLIER', 'บัญชี Supplier', 2", "('adv_bank', 6), ('adv_account_no', 7), ('adv_account_name', 8)",
+              "BEGIN;", "COMMIT;"):
+        assert f in sql, f
+    assert "DO $$" not in sql
