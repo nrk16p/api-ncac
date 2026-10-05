@@ -227,6 +227,8 @@ def get_payee_request(request_id: int, db: Session = Depends(get_db)):
 def approve_payee_request(request_id: int, body: PayeeActionIn, db: Session = Depends(get_db)):
     require_finance(db, body.action_by)
     req = _load_request(db, request_id, for_update=True)
+    if body.action_by == req.employee_id:
+        raise HTTPException(status_code=403, detail="ไม่สามารถอนุมัติคำขอบัญชีของตนเองได้")
     try:
         pl.check_request_open(req.status)
     except logic.AdvanceRuleError as exc:
