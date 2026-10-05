@@ -118,7 +118,7 @@ def approval_preview(employee_id: str, amount: str, db: Session = Depends(get_db
     except logic.AdvanceRuleError as exc:
         raise _rule_error(exc)
     return {"clause": result["clause"], "approver_label": result["approver_label"],
-            "required_level": result["required_level"]}
+            "required_level": result["required_level"], "steps": result["steps"]}
 
 
 @router.get("/approvals/pending")
@@ -132,9 +132,9 @@ def get_advance(form_id: str, db: Session = Depends(get_db)):
     if detail is None:
         raise HTTPException(status_code=404, detail="ไม่พบรายการเบิกเงิน")
     try:
-        result = approval_repo.describe(db, detail["requester"]["employee_id"], detail["request"]["amount"])
-        detail["approval"] = {"clause": result["clause"], "approver_label": result["approver_label"],
-                              "required_level": result["required_level"]}
+        # clause, approver_label, required_level (final step), steps, current_step, step_approvals (current round)
+        detail["approval"] = approval_repo.detail_approval(
+            db, repo.get_advance_submission(db, form_id), detail["request"]["amount"])
     except logic.AdvanceRuleError:
         detail["approval"] = None
     return detail

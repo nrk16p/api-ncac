@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 
 from models.finance_model import FinApprovalTier
 from models.form_approver_department import FormApproverDepartment
-from models.master_model import FormMaster, FormSubmission
+from models.master_model import FormApprovalLog, FormMaster, FormSubmission
 from models.user_model import Position, User
 from services.finance import advance_repo
 from services.finance import approval_logic as rules
@@ -55,6 +55,7 @@ def load_context(db) -> ApprovalContext:
 
 
 def describe(db, requester_employee_id, amount, ctx: ApprovalContext | None = None):
+    """v2 keys (clause, approver_label, min_level, required_level = final step, direct_level) + steps."""
     ctx = ctx or load_context(db)
     return rules.evaluate(ctx.tiers, ctx.people, ctx.mappings, requester_employee_id, amount)
 
@@ -63,12 +64,108 @@ def _amount_of(db, submission_id):
     return (advance_repo.request_values_by_submission(db, [submission_id]).get(submission_id) or {}).get("amount")
 
 
+# ---------------------------- approval rounds ----------------------------
+
+def _log_dict(log):
+    return {"id": log.id, "level_no": log.level_no, "action": log.action, "action_by": log.action_by,
+            "action_at": log.action_at, "remark": log.remark}
+
+
+def round_logs_by_submission(db, submission_ids) -> dict:
+    """{submission_id: current-round logs} in one query."""
+    ids = [i for i in submission_ids if i is not None]
+    if not ids:
+        return {}
+    grouped = {}
+    rows = (db.query(FormApprovalLog).filter(FormApprovalLog.submission_id.in_(ids))
+            .order_by(FormApprovalLog.id.asc()).all())
+    for row in rows:
+        grouped.setdefault(row.submission_id, []).append(_log_dict(row))
+    return {sid: rules.current_round(logs) for sid, logs in grouped.items()}
+
+
+def current_round_logs(db, submission_id) -> list:
+    """form_approval_logs after the latest RESUBMITTED marker, or all of them when there is none."""
+    return round_logs_by_submission(db, [submission_id]).get(submission_id, [])
+
+
+# ---------------------------- current step ----------------------------
+
+def approval_decision(db, submission, approver_employee_id) -> dict:
+    """Eligibility for the submission's current step + what an approval would do (see rules.decide)."""
+    ctx = load_context(db)
+    try:
+        info = describe(db, submission.created_by, _amount_of(db, submission.id), ctx)
+    except AdvanceRuleError:
+        return {"allowed": False}
+    return rules.decide(info, ctx.people, ctx.mappings, submission.created_by, approver_employee_id,
+                        submission.current_approval_level, current_round_logs(db, submission.id))
+
+
+def can_approve_submission(db, submission, approver_employee_id) -> bool:
+    return approval_decision(db, submission, approver_employee_id)["allowed"]
+
+
+def record_approval(db, submission, approver_user_id, decision, remark=None):
+    """Log the current step (level_no = step); a dynamic skip also logs each step it satisfied.
+    Then finish (Approved) or move to the next step (stays In Progress)."""
+    step = decision["step"]
+    submission.current_approval_level = step
+    db.add(FormApprovalLog(submission_id=submission.id, level_no=step, action=rules.ACTION_APPROVED,
+                           action_by=approver_user_id, remark=remark))
+    by_step = {s["step"]: s for s in decision["steps"]}
+    for skipped in decision["skipped"]:
+        db.add(FormApprovalLog(
+            submission_id=submission.id, level_no=skipped, action=rules.ACTION_APPROVED,
+            action_by=approver_user_id,
+            remark=rules.skip_remark(skipped, step, decision["approver_level"], by_step[skipped]["required_level"])))
+    if decision["outcome"] == rules.OUTCOME_APPROVED:
+        submission.status_approve = "Approved"
+    else:
+        submission.current_approval_level = decision["next_step"]
+        submission.status_approve = "In Progress"
+
+
+def _users_by_id(db, user_ids):
+    ids = {i for i in user_ids if i is not None}
+    if not ids:
+        return {}
+    return {u.id: u for u in db.query(User).filter(User.id.in_(ids)).all()}
+
+
+def detail_approval(db, submission, amount) -> dict:
+    """The detail `approval` block: v2 keys + steps, current_step, step_approvals (current round)."""
+    ctx = load_context(db)
+    info = describe(db, submission.created_by, amount, ctx)
+    logs = current_round_logs(db, submission.id)
+    state = rules.evaluate_step(info, ctx.people, ctx.mappings, submission.created_by,
+                                submission.current_approval_level, logs)
+    approvals = rules.step_approvals(logs)
+    users = _users_by_id(db, [a["action_by"] for a in approvals])
+    step_approvals = []
+    for approval in approvals:
+        user = users.get(approval["action_by"])
+        step_approvals.append({
+            "step": approval["step"],
+            "employee_id": user.employee_id if user is not None else None,
+            "name": advance_repo._full_name(user),
+            "action_at": advance_repo._iso(approval["action_at"]),
+        })
+    return {"clause": info["clause"], "approver_label": info["approver_label"],
+            "required_level": info["required_level"], "steps": info["steps"],
+            "current_step": state["step"], "step_approvals": step_approvals}
+
+
 def suggested_approvers(db, submission) -> dict:
+    """The lowest eligible approvers of the submission's current step (share link)."""
     ctx = load_context(db)
     requester_id = submission.created_by
     info = describe(db, requester_id, _amount_of(db, submission.id), ctx)
     requester = ctx.people[requester_id]
-    direct = rules.direct_approvers(ctx.people.values(), requester, info["required_level"], ctx.mappings)
+    state = rules.evaluate_step(info, ctx.people, ctx.mappings, requester_id, submission.current_approval_level,
+                                current_round_logs(db, submission.id))
+    direct = rules.direct_approvers(ctx.people.values(), requester, state["required_level"], ctx.mappings,
+                                    state["excluded"])
     details = advance_repo.people_by_employee_id(db, [p["employee_id"] for p in direct])
     approvers = []
     for p in direct:
@@ -78,29 +175,13 @@ def suggested_approvers(db, submission) -> dict:
     approvers.sort(key=lambda a: (a["name"] or "", a["employee_id"]))
     return {"requester_employee_id": requester_id, "clause": info["clause"],
             "approver_label": info["approver_label"], "required_level": info["required_level"],
+            "steps": info["steps"], "step": state["step"], "total_steps": state["total_steps"],
+            "step_required_level": state["required_level"], "step_label": state["label"],
             "approvers": approvers}
 
 
-def can_approve_submission(db, submission, approver_employee_id) -> bool:
-    ctx = load_context(db)
-    try:
-        result = describe(db, submission.created_by, _amount_of(db, submission.id), ctx)
-    except AdvanceRuleError:
-        return False
-    approver = ctx.people.get(approver_employee_id)
-    requester = ctx.people.get(submission.created_by)
-    if approver is None or requester is None:
-        return False
-    return rules.can_approve(approver, requester, result["required_level"],
-                             ctx.mappings.get(approver_employee_id, ()))
-
-
-def pending_for(db, employee_id):
-    ctx = load_context(db)
-    approver = ctx.people.get(employee_id)
-    if approver is None or approver["level"] is None:
-        return []
-    subs = (
+def _in_progress_advances(db):
+    return (
         db.query(FormSubmission)
         .join(FormMaster, FormMaster.id == FormSubmission.form_master_id)
         .filter(FormMaster.form_type == advance_repo.ADVANCE_FORM_TYPE,
@@ -108,7 +189,18 @@ def pending_for(db, employee_id):
         .order_by(FormSubmission.id.desc())
         .all()
     )
-    requests = advance_repo.request_values_by_submission(db, [s.id for s in subs])
+
+
+def pending_for(db, employee_id):
+    """ADV In Progress items whose *current* step this user can approve; tab per step."""
+    ctx = load_context(db)
+    approver = ctx.people.get(employee_id)
+    if approver is None or approver["level"] is None:
+        return []
+    subs = _in_progress_advances(db)
+    ids = [s.id for s in subs]
+    requests = advance_repo.request_values_by_submission(db, ids)
+    rounds = round_logs_by_submission(db, ids)
     people_info = advance_repo.people_by_employee_id(db, [s.created_by for s in subs])
     items = []
     for sub in subs:
@@ -120,7 +212,10 @@ def pending_for(db, employee_id):
             result = describe(db, sub.created_by, request.get("amount"), ctx)
         except AdvanceRuleError:
             continue
-        if not rules.can_approve(approver, requester, result["required_level"], ctx.mappings.get(employee_id, ())):
+        state = rules.evaluate_step(result, ctx.people, ctx.mappings, sub.created_by, sub.current_approval_level,
+                                    rounds.get(sub.id, []))
+        if not rules.can_approve(approver, requester, state["required_level"], ctx.mappings.get(employee_id, ()),
+                                 state["excluded"]):
             continue
         items.append({
             "form_id": sub.form_id,
@@ -132,6 +227,10 @@ def pending_for(db, employee_id):
             "request": advance_repo.serialize_request(request),
             "tier": {"clause": result["clause"], "approver_label": result["approver_label"],
                      "required_level": result["required_level"]},
-            "tab": rules.approval_tab(approver["level"], result["direct_level"]),
+            "step": state["step"],
+            "total_steps": state["total_steps"],
+            "step_required_level": state["required_level"],
+            "step_label": state["label"],
+            "tab": rules.approval_tab(approver["level"], state["direct_level"]),
         })
     return items

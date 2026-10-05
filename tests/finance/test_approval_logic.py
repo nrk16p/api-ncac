@@ -121,7 +121,8 @@ class TestEvaluate:
     def test_manager_asks_1500(self):
         res = A.evaluate(TIERS, self.PEOPLE, self.MAP, "R", "1500")
         assert res == {"clause": "6.7", "approver_label": "Asst. Sup (ระดับ 2)", "min_level": 2,
-                       "required_level": 6, "direct_level": 6}
+                       "required_level": 6, "direct_level": 6,
+                       "steps": [{"step": 1, "required_level": 6, "label": "หัวหน้าระดับ 6 ขึ้นไป"}]}
 
     def test_150k_goes_to_level_9(self):
         res = A.evaluate(TIERS, self.PEOPLE, self.MAP, "R", "150000")

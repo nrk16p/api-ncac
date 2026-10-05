@@ -470,7 +470,12 @@ def approve_submission(
 
     advance = is_advance_submission(submission)
     if advance:
-        if not approval_repo.can_approve_submission(db, submission, employee_id):
+        # two-step chain (v3 §5): lock the row so concurrent approvals of the same step serialize
+        db.refresh(submission, with_for_update=True)
+        if submission.status_approve != "In Progress":
+            raise HTTPException(400, "Submission not in approvable state")
+        decision = approval_repo.approval_decision(db, submission, employee_id)
+        if not decision["allowed"]:
             raise HTTPException(403, "Not authorized to approve")
     else:
         approver_level = get_employee_position_level(db, employee_id)
@@ -502,17 +507,17 @@ def approve_submission(
         ):
             raise HTTPException(403, "Not authorized to approve")
 
-    db.add(FormApprovalLog(
-        submission_id=submission.id,
-        level_no=submission.current_approval_level,
-        action="APPROVED",
-        action_by=approver.id,
-        remark=remark,
-    ))
-
     if advance:
-        submission.status_approve = "Approved"
+        # log level_no = current step; finish (Approved) or move to step 2 (stays In Progress)
+        approval_repo.record_approval(db, submission, approver.id, decision, remark)
     else:
+        db.add(FormApprovalLog(
+            submission_id=submission.id,
+            level_no=submission.current_approval_level,
+            action="APPROVED",
+            action_by=approver.id,
+            remark=remark,
+        ))
         next_rule = get_applicable_rule(
             db=db,
             form_master_id=submission.form_master_id,
@@ -583,9 +588,16 @@ def reject_submission(
         raise HTTPException(404, "User not found")
 
     advance = is_advance_submission(submission)
+    level_no = submission.current_approval_level
     if advance:
-        if not approval_repo.can_approve_submission(db, submission, employee_id):
+        # same eligibility as approve, at the current step (v3 §5): a reject at any step → Rejected
+        db.refresh(submission, with_for_update=True)
+        if submission.status_approve != "In Progress":
+            raise HTTPException(400, "Submission not in approvable state")
+        decision = approval_repo.approval_decision(db, submission, employee_id)
+        if not decision["allowed"]:
             raise HTTPException(403, "Not authorized to reject")
+        level_no = decision["step"]
     else:
         approver_level = get_employee_position_level(db, employee_id)
         if not approver_level:
@@ -618,7 +630,7 @@ def reject_submission(
 
     db.add(FormApprovalLog(
         submission_id=submission.id,
-        level_no=submission.current_approval_level,
+        level_no=level_no,
         action="REJECTED",
         action_by=approver.id,
         remark=remark,

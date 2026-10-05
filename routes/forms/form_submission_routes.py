@@ -60,8 +60,17 @@ def log_status_change(
 # ----------------------------
 # Helpers
 # ----------------------------
+ADVANCE_FORM_CODE = "ADV"
+
+
+def _now_bkk() -> datetime:
+    return datetime.now(ZoneInfo("Asia/Bangkok"))
+
+
 def generate_form_id(db: Session, form_code: str) -> str:
-    year = datetime.utcnow().year
+    """{code}-{year}-{0000}; ADV (v3 §4) is ADV-YYMM-NNN, its sequence keyed by year = YYMM (Bangkok)."""
+    advance = form_code == ADVANCE_FORM_CODE
+    year = int(_now_bkk().strftime("%y%m")) if advance else datetime.utcnow().year
     seq = (
         db.query(FormSequence)
         .filter(FormSequence.form_code == form_code, FormSequence.year == year)
@@ -74,6 +83,8 @@ def generate_form_id(db: Session, form_code: str) -> str:
         db.flush()
 
     seq.last_number += 1
+    if advance:
+        return f"{ADVANCE_FORM_CODE}-{year:04d}-{seq.last_number:03d}"  # > 999 simply grows to 4 digits
     return f"{form_code}-{year}-{str(seq.last_number).zfill(4)}"
 
 def parse_dt(val):
@@ -275,7 +286,7 @@ def submit_form(
         )
 
         if form.form_type == ADVANCE_FORM_TYPE:
-            # approval by amount (spec v2 §3): always one step, eligibility is computed on the fly
+            # approval by amount: starts at step 1 of a 1–2 step chain (v3 §5), computed on the fly
             status_approve, current_level = "In Progress", 1
         elif not form.need_approval:
             status_approve, current_level = "Approved", None

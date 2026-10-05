@@ -31,7 +31,16 @@ def test_update_locks_advance():
 def test_approve_reject_branch_on_advance():
     for fn in (approval_routes.approve_submission, approval_routes.reject_submission):
         src = inspect.getsource(fn)
-        assert "approval_repo.can_approve_submission" in src
+        assert "approval_repo.approval_decision" in src
+        assert 'decision["allowed"]' in src
+        assert "with_for_update=True" in src  # concurrent approvals of one ADV serialize on the row
+
+
+def test_approve_advance_uses_step_transition():
+    src = inspect.getsource(approval_routes.approve_submission)
+    assert "approval_repo.record_approval(db, submission, approver.id, decision, remark)" in src
+    reject = inspect.getsource(approval_routes.reject_submission)
+    assert 'level_no = decision["step"]' in reject and 'submission.status_approve = "Rejected"' in reject
 
 
 def test_generic_pending_skips_advance():
