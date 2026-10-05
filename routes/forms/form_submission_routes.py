@@ -180,6 +180,9 @@ def get_current_approver_emails(db: Session, submission: FormSubmission) -> list
 _SELF_PAYEE_INCOMPLETE = "ข้อมูลบัญชีรับเงินไม่ครบ (ธนาคาร/เลขที่บัญชี/ชื่อบัญชี) — กรุณาโหลดหน้าใหม่แล้วส่งอีกครั้ง"
 
 
+_DUPLICATE_VALUES = "ข้อมูลในฟอร์มซ้ำ กรุณาโหลดหน้าใหม่แล้วส่งอีกครั้ง"
+
+
 def _guard_advance_values(db: Session, form, values, created_by):
     """ADV submit/edit guard (spec v2): use-date, bank, account number (normalized digits written back
     into `values`) and the approval tier for the amount. `values` are objects with question_id /
@@ -188,6 +191,7 @@ def _guard_advance_values(db: Session, form, values, created_by):
                  for q in form.questions]
     raw_values = [{"question_id": v.question_id, "value_text": v.value_text, "value_number": v.value_number,
                    "value_date": v.value_date} for v in values]
+    overwritten = set()
     try:
         use_date = advance_logic.find_use_date(questions, raw_values)
         advance_logic.check_use_date(use_date, datetime.now(ZoneInfo("Asia/Bangkok")).date())
@@ -204,10 +208,12 @@ def _guard_advance_values(db: Session, form, values, created_by):
             for name, key in (("adv_bank", "bank"), ("adv_account_no", "account_no"),
                               ("adv_account_name", "account_name")):
                 question = next((q for q in form.questions if q.question_name == name), None)
-                value = next((v for v in values if question is not None and v.question_id == question.id), None)
-                if value is None:
+                matches = [v for v in values if question is not None and v.question_id == question.id]
+                if not matches:
                     raise advance_logic.AdvanceRuleError(_SELF_PAYEE_INCOMPLETE)
-                value.value_text = payee[key]
+                for value in matches:  # every matching row, not just the first
+                    value.value_text = payee[key]
+                overwritten.add(question.id)
         else:
             bank_q = next((q for q in form.questions if q.question_name == "adv_bank"), None)
             bank = advance_logic.submitted_value(questions, raw_values, "adv_bank", (), "value_text")
@@ -223,6 +229,13 @@ def _guard_advance_values(db: Session, form, values, created_by):
         approval_repo.describe(db, created_by, amount)
     except advance_logic.AdvanceRuleError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    return overwritten
+
+
+def _reject_duplicate_values(values):
+    """ADV: one value per question (no unique constraint in the DB, so a duplicate row could win on read)."""
+    if len({v.question_id for v in values}) != len(values):
+        raise HTTPException(status_code=400, detail=_DUPLICATE_VALUES)
 
 
 # ----------------------------
@@ -249,6 +262,7 @@ def submit_form(
         raise HTTPException(status_code=404, detail="Active form not found")
 
     if form.form_type == ADVANCE_FORM_TYPE:
+        _reject_duplicate_values(payload.values)
         _guard_advance_values(db, form, payload.values, payload.created_by)
 
     try:
@@ -801,9 +815,25 @@ def update_form_details(
         for v in payload.values:
             merged[v.question_id] = SimpleNamespace(question_id=v.question_id, value_text=v.value_text,
                                                     value_number=v.value_number, value_date=v.value_date)
-        _guard_advance_values(db, submission.form, list(merged.values()), submission.created_by)
+        _reject_duplicate_values(payload.values)
+        overwritten = _guard_advance_values(db, submission.form, list(merged.values()), submission.created_by)
         for v in payload.values:  # persist the normalized account number
             v.value_text = merged[v.question_id].value_text
+        # values the guard forced (SELF master snapshot) that are not in the payload must be stored too
+        payload_qids = {v.question_id for v in payload.values}
+        for qid in overwritten - payload_qids:
+            stored = [r for r in submission.values if r.question_id == qid]
+            if stored:
+                for rec in stored:
+                    rec.value_text = merged[qid].value_text
+            else:
+                db.add(FormSubmissionValue(submission_id=submission.id, question_id=qid,
+                                           value_text=merged[qid].value_text))
+        # a stored duplicate row of a payload question must not keep a stale/forged value
+        for qid in overwritten & payload_qids:
+            for rec in submission.values:
+                if rec.question_id == qid:
+                    rec.value_text = merged[qid].value_text
 
     try:
         submission.updated_by = payload.updated_by

@@ -158,3 +158,77 @@ def test_routes_registered():
     paths = {r.path for r in main.finance_payee_router.routes}
     assert {"/finance/payee-accounts/me", "/finance/payee-requests/{request_id}/approve",
             "/finance/people/{employee_id}"} <= paths
+
+
+# ---- fix round 1: duplicate rows / edit paths ----
+def test_self_overwrites_every_duplicate_row():
+    vals = _vals("SELF") + [_v(4, text="9999999999")]
+    sr._guard_advance_values(_Db(MASTER), _form(), vals, "E1")
+    assert [v.value_text for v in vals if v.question_id == 4] == ["1112223334", "1112223334"]
+
+
+def test_duplicate_values_rejected():
+    with pytest.raises(HTTPException) as ei:
+        sr._reject_duplicate_values(_vals("SELF") + [_v(4, text="x")])
+    assert ei.value.status_code == 400 and ei.value.detail == "ข้อมูลในฟอร์มซ้ำ กรุณาโหลดหน้าใหม่แล้วส่งอีกครั้ง"
+    sr._reject_duplicate_values(_vals("SELF"))
+
+
+def test_submit_and_update_call_duplicate_check():
+    import inspect
+    assert "_reject_duplicate_values" in inspect.getsource(sr.submit_form)
+    assert "_reject_duplicate_values" in inspect.getsource(sr.update_form_details)
+
+
+def test_update_to_self_persists_master_snapshot():
+    from datetime import date as _d
+    form = _form()
+    form.form_type = sr.ADVANCE_FORM_TYPE
+    form.version = 1
+    stored = [NS(question_id=1, value_text=None, value_number=100, value_date=None, value_boolean=None),
+              NS(question_id=2, value_text="SUPPLIER", value_number=None, value_date=None, value_boolean=None),
+              NS(question_id=3, value_text="SCB", value_number=None, value_date=None, value_boolean=None),
+              NS(question_id=4, value_text="9999999999", value_number=None, value_date=None, value_boolean=None),
+              NS(question_id=5, value_text="Attacker", value_number=None, value_date=None, value_boolean=None),
+              NS(question_id=6, value_text=None, value_number=None, value_boolean=None,
+                 value_date=_d.today() + timedelta(days=5))]
+    for q in form.questions:
+        q.is_required = False
+    sub = NS(status="Open", status_approve="In Progress", created_by="E1", form=form, values=stored, id=9,
+             form_id="F-1", form_master_id=1, updated_by=None)
+
+    class Q:
+        def __init__(self, result):
+            self.result = result
+
+        def options(self, *a):
+            return self
+
+        def filter(self, *a):
+            return self
+
+        def first(self):
+            return self.result
+
+    class Db:
+        added = []
+
+        def query(self, model):
+            return Q(sub if model is sr.FormSubmission else MASTER)
+
+        def add(self, o):
+            self.added.append(o)
+
+        def commit(self):
+            pass
+
+        def rollback(self):
+            pass
+
+    payload = NS(updated_by="E1", values=[NS(question_id=2, value_text="SELF", value_number=None,
+                                              value_date=None, value_boolean=None)])
+    db = Db()
+    sr.update_form_details("F-1", payload, db)
+    got = {r.question_id: r.value_text for r in stored}
+    assert (got[2], got[3], got[4], got[5]) == ("SELF", "KBANK", "1112223334", "สมชาย")
+    assert stored[0].value_number == 100 and stored[5].value_date is not None

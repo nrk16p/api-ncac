@@ -195,8 +195,10 @@ def create_payee_request(body: PayeeRequestCreate, background_tasks: BackgroundT
     try:
         db.flush()  # id for the log/email; the partial unique index fires here on a double click
         _log(db, body.employee_id, "REQUEST",
-             pl.diff_pairs(_account_values(repo.get_master(db, body.employee_id)),
-                           {"account_no": account_no, "account_name": account_name, "status": "PENDING"}),
+             {**pl.diff_pairs({k: v for k, v in _account_values(repo.get_master(db, body.employee_id)).items()
+                              if k != "status"},
+                              {"account_no": account_no, "account_name": account_name}),
+              "request_status": [None, "PENDING"]},
              remark=body.remark, action_by=body.employee_id)
         db.commit()
     except IntegrityError:

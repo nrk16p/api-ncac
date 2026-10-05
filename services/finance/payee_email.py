@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from html import escape
 
-_ORIGIN = re.compile(r"^https?://[A-Za-z0-9.-]+(:\d+)?$")
+_ORIGIN = re.compile(r"^https?://[A-Za-z0-9.-]+(:[0-9]+)?$")
 
 
 def format_kbank_account(account_no) -> str:

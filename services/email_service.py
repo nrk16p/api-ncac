@@ -40,7 +40,7 @@ def send_email(to_email: str, subject: str, body: str, cc: list[str] | None = No
 
     recipients = [to_email] + (cc if cc else [])
 
-    server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
+    server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=30)
     server.starttls()
     server.login(SMTP_USER, SMTP_PASSWORD)
     server.sendmail(SMTP_USER, recipients, msg.as_string())
