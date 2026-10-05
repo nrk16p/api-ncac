@@ -4,9 +4,10 @@
   (case-insensitive) and it never falls back to the IT SMTP_USER credentials.
 * Render functions are pure: every value is HTML-escaped, and a link is built only when FE_BASE_URL is a bare
   http(s) origin.
-* `queue_event` is what routes call. It does nothing (no query, no render) while the switch is off, never raises,
-  and hands the actual send to FastAPI BackgroundTasks (the request session is closed by then, so every value is
-  resolved before the task is queued).
+* `queue_event` is what routes call (after their commit). It does nothing (no query, no render) while the switch
+  is off, never raises (a failed lookup rolls the session back so the request can keep using it), and hands the
+  actual send to FastAPI BackgroundTasks (the request session is closed by then, so every value is resolved
+  before the task is queued).
 """
 from __future__ import annotations
 
@@ -235,6 +236,15 @@ def requester_email(db, submission) -> list:
 
 # ---------------------------- queueing (called by routes) ----------------------------
 
+def _rollback(db) -> None:
+    """A failed lookup leaves the session in a failed transaction. The business action is already committed, so
+    end it here, or the request's next DB use raises PendingRollbackError (500)."""
+    try:
+        db.rollback()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def queue_event(background_tasks, db, event: str, submission, **extra) -> None:
     """Resolve recipients and content now, send in the background. A no-op while the switch is off."""
     if not email_enabled():
@@ -254,7 +264,7 @@ def queue_event(background_tasks, db, event: str, submission, **extra) -> None:
                                             submission.current_approval_level)
                 ctx.update(step=state["step"], total_steps=state["total_steps"], step_label=state["label"])
             except Exception:  # noqa: BLE001 - the step line is optional
-                pass
+                _rollback(db)
             to = step_approver_emails(db, submission)
         else:
             to = requester_email(db, submission)
@@ -264,4 +274,5 @@ def queue_event(background_tasks, db, event: str, submission, **extra) -> None:
         subject, html = render_event_email(event, ctx)
         background_tasks.add_task(send_finance_email, to, subject, html)
     except Exception:  # noqa: BLE001 - never break the request
+        _rollback(db)
         log.exception("finance email %s could not be queued", event)

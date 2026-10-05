@@ -209,6 +209,54 @@ def test_queue_event_never_raises(monkeypatch):
     fm.queue_event(BackgroundTasks(), Boom(), fm.PAID, NS(id=1, form_id="F", created_by="E1"))
 
 
+class _FailingDb:
+    """A session whose lookups fail (as a broken query leaves it); rollback() records the call."""
+    def __init__(self, rollback_raises=False):
+        self.rollbacks, self.rollback_raises = 0, rollback_raises
+
+    def query(self, *a, **k):
+        raise RuntimeError("relation does not exist")
+
+    def rollback(self):
+        self.rollbacks += 1
+        if self.rollback_raises:
+            raise RuntimeError("connection gone")
+
+
+def _enable(monkeypatch):
+    monkeypatch.setenv("FINANCE_EMAIL_ENABLED", "true")
+    monkeypatch.setenv("FINANCE_SMTP_USER", "fin@x.com")
+    monkeypatch.setenv("FINANCE_SMTP_PASSWORD", "pw")
+
+
+@pytest.mark.parametrize("event", [fm.PAID, fm.SUBMITTED])
+@pytest.mark.parametrize("rollback_raises", [False, True])
+def test_queue_event_failed_lookup_rolls_back(monkeypatch, event, rollback_raises):
+    """The route already committed; a failed recipient lookup must end the failed transaction, or the request's
+    next DB use raises PendingRollbackError (500)."""
+    _enable(monkeypatch)
+    db = _FailingDb(rollback_raises)
+    bg = BackgroundTasks()
+    fm.queue_event(bg, db, event, NS(id=1, form_id="F", created_by="E1", current_approval_level=1))  # no raise
+    assert db.rollbacks >= 1 and bg.tasks == []
+
+
+def test_queue_event_failed_step_line_rolls_back_and_still_queues(monkeypatch):
+    _enable(monkeypatch)
+    monkeypatch.setattr(fm.advance_repo, "request_values_by_submission", lambda db, ids: {1: {"amount": 1500}})
+    monkeypatch.setattr(fm.advance_repo, "people_by_employee_id", lambda db, ids: {})
+
+    def broken(db):
+        raise RuntimeError("statement failed")
+
+    monkeypatch.setattr(approval_repo, "load_context", broken)
+    monkeypatch.setattr(fm, "step_approver_emails", lambda db, sub: ["a@x.com"])
+    db = _FailingDb()
+    bg = BackgroundTasks()
+    fm.queue_event(bg, db, fm.STEP_PENDING, NS(id=1, form_id="F", created_by="E1", current_approval_level=2))
+    assert db.rollbacks == 1 and len(bg.tasks) == 1
+
+
 # ---------------------------- renders ----------------------------
 
 CTX = {"form_id": "ADV-2610-001", "requester_name": '<b>สมชาย</b> & "ก"', "amount": 15000, "remark": "<script>x</script>",
