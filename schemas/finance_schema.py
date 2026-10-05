@@ -84,3 +84,34 @@ class ConfirmIn(_Body):
     clear_doc_no: Optional[str] = Field(default=None, max_length=100)
     settle_date: Optional[date] = None
     expected_clear_submitted_at: Optional[datetime] = None
+
+
+class PayeeAccountCreate(_Body):
+    employee_id: str = Field(max_length=50)
+    account_no: str = Field(max_length=20)
+    account_name: str = Field(max_length=150)
+    action_by: str
+
+
+class PayeeAccountUpdate(_Body):
+    account_no: Optional[str] = Field(default=None, max_length=20)
+    account_name: Optional[str] = Field(default=None, max_length=150)
+    status: Optional[str] = Field(default=None, max_length=10)
+    action_by: str
+
+
+class PayeeRequestCreate(_Body):
+    employee_id: str = Field(max_length=50)
+    account_no: str = Field(max_length=20)
+    account_name: str = Field(max_length=150)
+    remark: Optional[str] = Field(default=None, max_length=500)
+    app_origin: Optional[str] = Field(default=None, max_length=200)
+
+
+class PayeeActionIn(_Body):
+    action_by: str
+
+
+class PayeeRejectIn(_Body):
+    action_by: str
+    review_remark: Optional[str] = Field(default=None, max_length=500)  # blank -> 400 via check_reject_remark

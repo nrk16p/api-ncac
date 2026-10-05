@@ -108,6 +108,7 @@ from routes.newyear_survey import router as newyear_survey_router
 from routes.campaign_forms import router as campaign_forms_router, public_router as campaign_forms_public_router
 from routes.incident_analytics import router as incident_analytics_router
 from routes.finance.advance_routes import router as finance_router
+from routes.finance.payee_routes import router as finance_payee_router
 
 
 # ------------------------------
@@ -173,6 +174,7 @@ app.include_router(atms_openjob_router)
 
 # Finance — เบิกเงิน Advance
 app.include_router(finance_router)
+app.include_router(finance_payee_router)
 
 # ------------------------------
 # 🚨 Forms Order (สำคัญ) 

@@ -8,7 +8,8 @@ from models.user_model import User ,Position
 from services.email_service import send_email, render_form_submit_th, render_form_done_th
 from services.line_service import send_line_message
 from services.notify_guard import ADVANCE_FORM_TYPE, notifications_enabled
-from services.finance import advance_logic, approval_repo
+from services.finance import advance_logic, approval_repo, payee_logic
+from models.finance_model import FinPayeeAccount
 from database import get_db
 from models.master_model import (
     FormMaster, FormQuestion, FormSubmission,
@@ -176,6 +177,9 @@ def get_current_approver_emails(db: Session, submission: FormSubmission) -> list
 
     return list(set(result))
     
+_SELF_PAYEE_INCOMPLETE = "ข้อมูลบัญชีรับเงินไม่ครบ (ธนาคาร/เลขที่บัญชี/ชื่อบัญชี) — กรุณาโหลดหน้าใหม่แล้วส่งอีกครั้ง"
+
+
 def _guard_advance_values(db: Session, form, values, created_by):
     """ADV submit/edit guard (spec v2): use-date, bank, account number (normalized digits written back
     into `values`) and the approval tier for the amount. `values` are objects with question_id /
@@ -187,16 +191,34 @@ def _guard_advance_values(db: Session, form, values, created_by):
     try:
         use_date = advance_logic.find_use_date(questions, raw_values)
         advance_logic.check_use_date(use_date, datetime.now(ZoneInfo("Asia/Bangkok")).date())
-        bank_q = next((q for q in form.questions if q.question_name == "adv_bank"), None)
-        bank = advance_logic.submitted_value(questions, raw_values, "adv_bank", (), "value_text")
-        if bank_q is not None:
-            advance_logic.check_bank(bank)
-        account_q = next((q for q in form.questions if q.question_name == "adv_account_no"), None)
-        if account_q is not None:
-            account_value = next((v for v in values if v.question_id == account_q.id), None)
-            if account_value is None:
-                raise advance_logic.account_error(bank)
-            account_value.value_text = advance_logic.check_account_no(bank, account_value.value_text)
+        payee = None
+        if any(q.question_name == "adv_payee_type" for q in form.questions):
+            payee_type = advance_logic.submitted_value(questions, raw_values, "adv_payee_type", (), "value_text")
+            master = None
+            if payee_type == payee_logic.PAYEE_SELF:
+                master = (db.query(FinPayeeAccount)
+                          .filter(FinPayeeAccount.employee_id == created_by).first())
+            payee = payee_logic.resolve_payee(payee_type, master)
+        if payee is not None:
+            # SELF: the master is the only source of truth — overwrite whatever the client sent
+            for name, key in (("adv_bank", "bank"), ("adv_account_no", "account_no"),
+                              ("adv_account_name", "account_name")):
+                question = next((q for q in form.questions if q.question_name == name), None)
+                value = next((v for v in values if question is not None and v.question_id == question.id), None)
+                if value is None:
+                    raise advance_logic.AdvanceRuleError(_SELF_PAYEE_INCOMPLETE)
+                value.value_text = payee[key]
+        else:
+            bank_q = next((q for q in form.questions if q.question_name == "adv_bank"), None)
+            bank = advance_logic.submitted_value(questions, raw_values, "adv_bank", (), "value_text")
+            if bank_q is not None:
+                advance_logic.check_bank(bank)
+            account_q = next((q for q in form.questions if q.question_name == "adv_account_no"), None)
+            if account_q is not None:
+                account_value = next((v for v in values if v.question_id == account_q.id), None)
+                if account_value is None:
+                    raise advance_logic.account_error(bank)
+                account_value.value_text = advance_logic.check_account_no(bank, account_value.value_text)
         amount = advance_logic.submitted_value(questions, raw_values, "adv_amount", ("number",), "value_number")
         approval_repo.describe(db, created_by, amount)
     except advance_logic.AdvanceRuleError as exc:
