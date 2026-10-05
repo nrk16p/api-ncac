@@ -397,7 +397,9 @@ def get_approval_history(
                 FormApprovalLog.action_at < end + timedelta(days=1),
             )
 
-    rows = query.order_by(FormApprovalLog.action_at.desc()).all()
+    # newest first; on a tie (an ADV dynamic skip writes the approver's own step log and then a system step-2 log in
+    # one transaction, so both share action_at) the earlier log — the approver's own — comes first and is kept below
+    rows = query.order_by(FormApprovalLog.action_at.desc(), FormApprovalLog.id.asc()).all()
 
     cache = _get_request_cache(db)
     departments = _load_departments(db, cache)

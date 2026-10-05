@@ -137,3 +137,63 @@ def test_detail_approval_none_on_rule_error(monkeypatch):
 
     monkeypatch.setattr(ar.approval_repo, "detail_approval", boom)
     assert ar.get_advance("ADV-2610-001", None)["approval"] is None
+
+
+# ---------------------------- /forms/approval-history: one row per submission ----------------------------
+
+from datetime import datetime as _dt  # noqa: E402
+
+from sqlalchemy.sql import operators  # noqa: E402
+
+from routes.forms import form_approval_routes as fa  # noqa: E402
+
+
+class _HistoryQuery:
+    """Returns the rows ordered the way the database would by the recorded ORDER BY (a stable multi-key sort);
+    ties nobody ordered keep the given order, which is arbitrary in Postgres."""
+    def __init__(self, rows):
+        self.rows, self.clauses = rows, []
+
+    def join(self, *a, **k):
+        return self
+
+    def options(self, *a):
+        return self
+
+    def filter(self, *a):
+        return self
+
+    def order_by(self, *clauses):
+        self.clauses.extend(clauses)
+        return self
+
+    def all(self):
+        rows = list(self.rows)
+        for clause in reversed(self.clauses):
+            key = clause.element.key
+            rows = sorted(rows, key=lambda r: getattr(r[0], key), reverse=clause.modifier is operators.desc_op)
+        return rows
+
+
+def test_approval_history_keeps_the_approvers_own_log_on_a_skip(monkeypatch):
+    """A dynamic skip writes the approver's step-1 log and a system step-2 log in one transaction: same action_at.
+    The history row for that submission must be the approver's own (step 1, their remark)."""
+    approver = NS(id=101, firstname="ก", lastname="ข")
+    monkeypatch.setattr(fa, "get_user_by_employee_id", lambda db, eid: approver if eid == "A1" else None)
+    monkeypatch.setattr(fa, "_get_request_cache", lambda db: {})
+    monkeypatch.setattr(fa, "_load_departments", lambda db, cache: {})
+    sub = NS(id=5, form_id="ADV-2610-001", form=NS(form_code="ADV", form_name="เบิกเงิน"), current_approval_level=1,
+             status="Open", status_approve="Approved", created_by="R1", created_at=None)
+    older = NS(id=7, form_id="ADV-2610-000", form=NS(form_code="ADV", form_name="เบิกเงิน"), current_approval_level=1,
+               status="Open", status_approve="Approved", created_by="R1", created_at=None)
+    at = _dt(2026, 10, 5, 9, 0)
+    own = NS(id=11, level_no=1, action="APPROVED", action_at=at, remark="อนุมัติครับ")
+    skip = NS(id=12, level_no=2, action="APPROVED", action_at=at, remark="ผ่านขั้น 2 พร้อมการอนุมัติขั้น 1: …")
+    earlier = NS(id=3, level_no=1, action="APPROVED", action_at=_dt(2026, 10, 1), remark="ok")
+    query = _HistoryQuery([(skip, sub), (own, sub), (earlier, older)])  # the tie arrives skip-first
+    db = NS(query=lambda *entities: query)
+    out = fa.get_approval_history(employee_id="A1", start_date=None, end_date=None, db=db)
+    assert [(r["form_id"], r["level_no"], r["remark"]) for r in out] == [
+        ("ADV-2610-001", 1, "อนุมัติครับ"), ("ADV-2610-000", 1, "ok")]
+    assert [(c.element.key, c.modifier) for c in query.clauses] == [("action_at", operators.desc_op),
+                                                                     ("id", operators.asc_op)]
