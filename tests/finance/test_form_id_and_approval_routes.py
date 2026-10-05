@@ -8,6 +8,7 @@ from types import SimpleNamespace as NS  # noqa: E402
 from zoneinfo import ZoneInfo  # noqa: E402
 
 import pytest  # noqa: E402
+from sqlalchemy.dialects import postgresql  # noqa: E402
 
 from routes.finance import advance_routes as ar  # noqa: E402
 from routes.forms import form_submission_routes as sr  # noqa: E402
@@ -31,11 +32,15 @@ class _SeqQuery:
 
 
 class _SeqDb:
-    def __init__(self, seq=None):
-        self.seq = seq
+    """`seq`: the row a SELECT … FOR UPDATE finds. The INSERT … ON CONFLICT DO NOTHING creates the row from its
+    values, unless `winner` is set: then a concurrent submit already created it (the insert is a no-op) and the
+    re-select finds the winner's row. `vanish`: the row is still missing after the insert."""
+    def __init__(self, seq=None, winner=None, vanish=False):
+        self.seq, self.winner, self.vanish = seq, winner, vanish
         self.filters = []
         self.locked = False
         self.added = []
+        self.executed = []
 
     def query(self, *a):
         return _SeqQuery(self)
@@ -46,10 +51,21 @@ class _SeqDb:
     def flush(self):
         pass
 
+    def execute(self, stmt):
+        self.executed.append(stmt)
+        if self.vanish:
+            return
+        if self.winner is not None:
+            self.seq = self.winner
+            return
+        params = stmt.compile(dialect=postgresql.dialect()).params
+        self.seq = NS(form_code=params["form_code"], year=params["year"], last_number=params["last_number"])
+
 
 def _year_key(db):
-    (code_cond, year_cond), = db.filters
-    return code_cond.right.value, year_cond.right.value
+    keys = {(code.right.value, year.right.value) for code, year in db.filters}
+    assert len(keys) == 1  # every lookup is for the same (form_code, year)
+    return keys.pop()
 
 
 @pytest.fixture
@@ -61,7 +77,36 @@ def test_adv_first_of_month_creates_yymm_sequence(october_2026):
     db = _SeqDb()
     assert sr.generate_form_id(db, "ADV") == "ADV-2610-001"
     assert _year_key(db) == ("ADV", 2610) and db.locked
-    assert (db.added[0].form_code, db.added[0].year, db.added[0].last_number) == ("ADV", 2610, 1)
+    (insert,) = db.executed
+    assert insert.compile(dialect=postgresql.dialect()).params == {"form_code": "ADV", "year": 2610, "last_number": 0}
+    assert (db.seq.form_code, db.seq.year, db.seq.last_number) == ("ADV", 2610, 1) and db.added == []
+
+
+def test_sequence_insert_is_on_conflict_do_nothing():
+    sql = str(sr._insert_sequence_if_missing("ADV", 2610).compile(dialect=postgresql.dialect()))
+    assert sql.startswith("INSERT INTO form_sequences (form_code, year, last_number) VALUES")
+    assert ") ON CONFLICT DO NOTHING" in sql  # any unique conflict, incl. uq_form_code_year (form_code, year)
+
+
+def test_adv_first_of_month_race_continues_from_the_winner(october_2026):
+    """Two submits open October at once: the loser's insert is a no-op (no UNIQUE violation → no 500) and it
+    continues from the number the winner took."""
+    winner = NS(form_code="ADV", year=2610, last_number=1)
+    db = _SeqDb(winner=winner)
+    assert sr.generate_form_id(db, "ADV") == "ADV-2610-002"
+    assert winner.last_number == 2 and len(db.executed) == 1 and db.added == []
+    assert len(db.filters) == 2 and db.locked  # re-selected FOR UPDATE after the insert
+
+
+def test_existing_sequence_runs_no_insert(october_2026):
+    db = _SeqDb(NS(form_code="ADV", year=2610, last_number=7))
+    assert sr.generate_form_id(db, "ADV") == "ADV-2610-008"
+    assert db.executed == [] and len(db.filters) == 1
+
+
+def test_sequence_still_missing_after_insert_fails_loudly(october_2026):
+    with pytest.raises(RuntimeError):
+        sr.generate_form_id(_SeqDb(vanish=True), "ADV")
 
 
 def test_adv_continues_existing_sequence(october_2026):

@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException ,Query,BackgroundTasks
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from datetime import datetime, timedelta
 from typing import List, Optional
 from models.user_model import User ,Position
@@ -67,20 +68,42 @@ def _now_bkk() -> datetime:
     return datetime.now(ZoneInfo("Asia/Bangkok"))
 
 
-def generate_form_id(db: Session, form_code: str) -> str:
-    """{code}-{year}-{0000}; ADV (v3 §4) is ADV-YYMM-NNN, its sequence keyed by year = YYMM (Bangkok)."""
-    advance = form_code == ADVANCE_FORM_CODE
-    year = int(_now_bkk().strftime("%y%m")) if advance else datetime.utcnow().year
-    seq = (
+def _sequence_for_update(db: Session, form_code: str, year: int):
+    return (
         db.query(FormSequence)
         .filter(FormSequence.form_code == form_code, FormSequence.year == year)
         .with_for_update()
         .first()
     )
-    if not seq:
-        seq = FormSequence(form_code=form_code, year=year, last_number=0)
-        db.add(seq)
-        db.flush()
+
+
+def _insert_sequence_if_missing(form_code: str, year: int):
+    """INSERT … ON CONFLICT DO NOTHING. With no conflict target it also works if uq_form_code_year differs in shape
+    from the model; on (form_code, year) it behaves exactly like ON CONFLICT (form_code, year)."""
+    return (pg_insert(FormSequence)
+            .values(form_code=form_code, year=year, last_number=0)
+            .on_conflict_do_nothing())
+
+
+def _locked_sequence(db: Session, form_code: str, year: int):
+    """The (form_code, year) counter row, locked FOR UPDATE, created first when missing. Two submits that open a
+    new period at once used to both INSERT, and uq_form_code_year rejected the loser (500). Now the loser's
+    INSERT … ON CONFLICT DO NOTHING waits for the winner and becomes a no-op, and its SELECT … FOR UPDATE then
+    waits on the winner's row lock and continues from the winner's number."""
+    seq = _sequence_for_update(db, form_code, year)
+    if seq is None:
+        db.execute(_insert_sequence_if_missing(form_code, year))
+        seq = _sequence_for_update(db, form_code, year)
+        if seq is None:  # the insert hit some other conflict: fail loudly rather than reuse a number
+            raise RuntimeError(f"form sequence {form_code}/{year} could not be created")
+    return seq
+
+
+def generate_form_id(db: Session, form_code: str) -> str:
+    """{code}-{year}-{0000}; ADV (v3 §4) is ADV-YYMM-NNN, its sequence keyed by year = YYMM (Bangkok)."""
+    advance = form_code == ADVANCE_FORM_CODE
+    year = int(_now_bkk().strftime("%y%m")) if advance else datetime.utcnow().year
+    seq = _locked_sequence(db, form_code, year)
 
     seq.last_number += 1
     if advance:
