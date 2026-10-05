@@ -20,6 +20,7 @@ from schemas.finance_schema import (
     AccountCreate, AccountUpdate, ClearIn, ConfirmIn, PayIn, RejectVoucherIn, ResubmitIn, ReturnIn, SendBackIn,
     VoucherIn,
 )
+from services.finance import advance_guard
 from services.finance import advance_logic as logic
 from services.finance import advance_repo as repo
 from services.finance import approval_logic as approval_rules
@@ -276,7 +277,9 @@ def resubmit_advance(form_id: str, body: ResubmitIn, background_tasks: Backgroun
                      db: Session = Depends(get_db)):
     """แก้ไขและส่งใหม่ (v3 §6): the requester only, at RETURNED only. Back to approval from step 1; the
     RESUBMITTED marker (level_no 0, the requester's users.id) starts a new approval round, so earlier approvals
-    no longer count. fin_status RESUBMITTED maps to รอตั้งเบิกทำจ่าย once the request is approved again."""
+    no longer count. fin_status RESUBMITTED maps to รอตั้งเบิกทำจ่าย once the request is approved again.
+    The stored values go through the full submit/edit guard first: use-date ≥ today, SELF payee re-snapshotted
+    from the requester's current master into the stored rows, an eligible approver for the amount (400 if not)."""
     sub, adv, status = _load_for_update(db, form_id)
     try:
         logic.check_resubmit(status, is_owner=(body.action_by == sub.created_by))
@@ -285,11 +288,11 @@ def resubmit_advance(form_id: str, body: ResubmitIn, background_tasks: Backgroun
     requester = db.query(User).filter(User.employee_id == sub.created_by).first()
     if requester is None:
         raise HTTPException(status_code=403, detail="ไม่พบข้อมูลผู้ขอเบิกในระบบ")
-    try:  # same guard as submit: the (possibly edited) amount must still have an eligible approver
-        approval_repo.describe(db, sub.created_by,
-                               (repo.request_values_by_submission(db, [sub.id]).get(sub.id) or {}).get("amount"))
+    sub = repo.lock_submission_with_values(db, sub.id)  # the edit path's row lock, then fresh values
+    try:
+        advance_guard.apply(db, sub, [])
     except logic.AdvanceRuleError as exc:
-        raise _rule_error(exc)
+        raise HTTPException(status_code=400, detail=str(exc))
     before = {"fin_status": adv.fin_status, "status_approve": sub.status_approve,
               "current_approval_level": sub.current_approval_level}
     values = {"fin_status": logic.FIN_RESUBMITTED, "status_approve": "In Progress", "current_approval_level": 1}

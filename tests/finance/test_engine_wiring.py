@@ -11,7 +11,9 @@ def test_submit_has_advance_guards():
     src = inspect.getsource(submission_routes.submit_form)
     assert "_guard_advance_values" in src
     assert 'status_approve, current_level = "In Progress", 1' in src
-    guard = inspect.getsource(submission_routes._guard_advance_values)
+    assert "advance_guard.check_values" in inspect.getsource(submission_routes._guard_advance_values)
+    from services.finance import advance_guard
+    guard = inspect.getsource(advance_guard.check_values)
     assert "check_account_no" in guard
     assert "check_bank" in guard
     assert "approval_repo.describe" in guard
@@ -19,7 +21,17 @@ def test_submit_has_advance_guards():
 
 def test_update_runs_advance_guard():
     src = inspect.getsource(submission_routes.update_form_details)
-    assert "_guard_advance_values" in src
+    assert "advance_guard.apply(db, submission, payload.values)" in src
+    from services.finance import advance_guard
+    assert "check_values" in inspect.getsource(advance_guard.apply)
+
+
+def test_resubmit_runs_advance_guard():
+    from routes.finance import advance_routes
+    src = inspect.getsource(advance_routes.resubmit_advance)
+    assert "repo.lock_submission_with_values(db, sub.id)" in src
+    assert "advance_guard.apply(db, sub, [])" in src
+    assert src.index("lock_submission_with_values") < src.index("advance_guard.apply")
 
 
 def test_update_locks_advance():

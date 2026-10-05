@@ -4,6 +4,8 @@ from __future__ import annotations
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+from sqlalchemy.orm import joinedload
+
 from models.finance_model import FinAccount, FinAdvance, FinAdvanceClearItem, FinAdvanceLog
 from models.master_model import FormApprovalLog, FormMaster, FormQuestion, FormSubmission, FormSubmissionValue
 from models.user_model import Department, Position, Site, User
@@ -47,6 +49,25 @@ def get_advance_submission(db, form_id):
         .join(FormMaster, FormMaster.id == FormSubmission.form_master_id)
         .filter(FormMaster.form_type == ADVANCE_FORM_TYPE, FormSubmission.form_id == form_id)
         .first()
+    )
+
+
+def lock_submission_with_values(db, submission_id):
+    """SELECT … FOR UPDATE on the form_submissions row — the column-only lock the ADV edit path takes
+    (`_advance_edit_state`; approve/reject lock the same row), so no eager outer joins run under FOR UPDATE — then
+    the submission with its values and form questions, reloaded after the lock so an edit committed meanwhile is
+    what gets guarded."""
+    (db.query(FormSubmission.status_approve, FormSubmission.current_approval_level)
+     .filter(FormSubmission.id == submission_id)
+     .with_for_update()
+     .one())
+    return (
+        db.query(FormSubmission)
+        .options(joinedload(FormSubmission.values),
+                 joinedload(FormSubmission.form).joinedload(FormMaster.questions))
+        .filter(FormSubmission.id == submission_id)
+        .populate_existing()
+        .one()
     )
 
 

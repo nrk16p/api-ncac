@@ -3,14 +3,13 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime, timedelta
 from typing import List, Optional
-from types import SimpleNamespace
 from models.user_model import User ,Position
 from services.email_service import send_email, render_form_submit_th, render_form_done_th
 from services.line_service import send_line_message
 from services.notify_guard import ADVANCE_FORM_TYPE, notifications_enabled
-from services.finance import advance_logic, approval_logic, approval_repo, payee_logic
+from services.finance import advance_guard, advance_logic, approval_logic, approval_repo
 from services.finance import finance_mail as fin_mail
-from models.finance_model import FinAdvance, FinPayeeAccount
+from models.finance_model import FinAdvance
 from database import get_db
 from models.master_model import (
     FormMaster, FormQuestion, FormSubmission,
@@ -189,59 +188,19 @@ def get_current_approver_emails(db: Session, submission: FormSubmission) -> list
 
     return list(set(result))
     
-_SELF_PAYEE_INCOMPLETE = "ข้อมูลบัญชีรับเงินไม่ครบ (ธนาคาร/เลขที่บัญชี/ชื่อบัญชี) — กรุณาโหลดหน้าใหม่แล้วส่งอีกครั้ง"
+_SELF_PAYEE_INCOMPLETE = advance_guard.SELF_PAYEE_INCOMPLETE
 
 
 _DUPLICATE_VALUES = "ข้อมูลในฟอร์มซ้ำ กรุณาโหลดหน้าใหม่แล้วส่งอีกครั้ง"
 
 
 def _guard_advance_values(db: Session, form, values, created_by):
-    """ADV submit/edit guard (spec v2): use-date, bank, account number (normalized digits written back
-    into `values`) and the approval tier for the amount. `values` are objects with question_id /
-    value_text / value_number / value_date. Raises HTTPException(400) on a rule error."""
-    questions = [{"id": q.id, "name": q.question_name, "type": q.question_type, "sort_order": q.sort_order}
-                 for q in form.questions]
-    raw_values = [{"question_id": v.question_id, "value_text": v.value_text, "value_number": v.value_number,
-                   "value_date": v.value_date} for v in values]
-    overwritten = set()
+    """ADV submit guard (spec v2): `advance_guard.check_values` (use-date, payee, bank, account number written
+    back normalized into `values`, approval tier for the amount). Raises HTTPException(400) on a rule error."""
     try:
-        use_date = advance_logic.find_use_date(questions, raw_values)
-        advance_logic.check_use_date(use_date, datetime.now(ZoneInfo("Asia/Bangkok")).date())
-        payee = None
-        if any(q.question_name == "adv_payee_type" for q in form.questions):
-            payee_type = advance_logic.submitted_value(questions, raw_values, "adv_payee_type", (), "value_text")
-            master = None
-            if payee_type == payee_logic.PAYEE_SELF:
-                master = (db.query(FinPayeeAccount)
-                          .filter(FinPayeeAccount.employee_id == created_by).first())
-            payee = payee_logic.resolve_payee(payee_type, master)
-        if payee is not None:
-            # SELF: the master is the only source of truth — overwrite whatever the client sent
-            for name, key in (("adv_bank", "bank"), ("adv_account_no", "account_no"),
-                              ("adv_account_name", "account_name")):
-                question = next((q for q in form.questions if q.question_name == name), None)
-                matches = [v for v in values if question is not None and v.question_id == question.id]
-                if not matches:
-                    raise advance_logic.AdvanceRuleError(_SELF_PAYEE_INCOMPLETE)
-                for value in matches:  # every matching row, not just the first
-                    value.value_text = payee[key]
-                overwritten.add(question.id)
-        else:
-            bank_q = next((q for q in form.questions if q.question_name == "adv_bank"), None)
-            bank = advance_logic.submitted_value(questions, raw_values, "adv_bank", (), "value_text")
-            if bank_q is not None:
-                advance_logic.check_bank(bank)
-            account_q = next((q for q in form.questions if q.question_name == "adv_account_no"), None)
-            if account_q is not None:
-                account_value = next((v for v in values if v.question_id == account_q.id), None)
-                if account_value is None:
-                    raise advance_logic.account_error(bank)
-                account_value.value_text = advance_logic.check_account_no(bank, account_value.value_text)
-        amount = advance_logic.submitted_value(questions, raw_values, "adv_amount", ("number",), "value_number")
-        approval_repo.describe(db, created_by, amount)
+        return advance_guard.check_values(db, form, values, created_by)
     except advance_logic.AdvanceRuleError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return overwritten
 
 
 def _advance_edit_state(db: Session, submission):
@@ -848,34 +807,11 @@ def update_form_details(
 
     if submission.form is not None and submission.form.form_type == ADVANCE_FORM_TYPE:
         _check_advance_edit(db, submission, payload.updated_by)
-        # validate the edit as a whole: edited values merged over the stored ones
-        merged = {
-            v.question_id: SimpleNamespace(question_id=v.question_id, value_text=v.value_text,
-                                           value_number=v.value_number, value_date=v.value_date)
-            for v in submission.values
-        }
-        for v in payload.values:
-            merged[v.question_id] = SimpleNamespace(question_id=v.question_id, value_text=v.value_text,
-                                                    value_number=v.value_number, value_date=v.value_date)
         _reject_duplicate_values(payload.values)
-        overwritten = _guard_advance_values(db, submission.form, list(merged.values()), submission.created_by)
-        for v in payload.values:  # persist the normalized account number
-            v.value_text = merged[v.question_id].value_text
-        # values the guard forced (SELF master snapshot) that are not in the payload must be stored too
-        payload_qids = {v.question_id for v in payload.values}
-        for qid in overwritten - payload_qids:
-            stored = [r for r in submission.values if r.question_id == qid]
-            if stored:
-                for rec in stored:
-                    rec.value_text = merged[qid].value_text
-            else:
-                db.add(FormSubmissionValue(submission_id=submission.id, question_id=qid,
-                                           value_text=merged[qid].value_text))
-        # a stored duplicate row of a payload question must not keep a stale/forged value
-        for qid in overwritten & payload_qids:
-            for rec in submission.values:
-                if rec.question_id == qid:
-                    rec.value_text = merged[qid].value_text
+        try:  # the edit validated as a whole (merged over the stored values); normalized/forced values written back
+            advance_guard.apply(db, submission, payload.values)
+        except advance_logic.AdvanceRuleError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
 
     try:
         submission.updated_by = payload.updated_by

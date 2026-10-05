@@ -16,8 +16,8 @@ from sqlalchemy.dialects import postgresql  # noqa: E402
 from sqlalchemy.exc import IntegrityError  # noqa: E402
 from sqlalchemy.schema import CreateTable  # noqa: E402
 
-from models.finance_model import FinAdvance, FinAdvanceLog  # noqa: E402
-from models.master_model import FormApprovalLog, FormSubmission  # noqa: E402
+from models.finance_model import FinAdvance, FinAdvanceLog, FinPayeeAccount  # noqa: E402
+from models.master_model import FormApprovalLog, FormSubmission, FormSubmissionValue  # noqa: E402
 from models.user_model import User  # noqa: E402
 from routes.finance import advance_routes as ar  # noqa: E402
 from routes.forms import form_submission_routes as sr  # noqa: E402
@@ -299,8 +299,8 @@ class _Q:
 
 
 class _Db:
-    def __init__(self, adv=None, requester=None, flush_error=False):
-        self.adv, self.requester, self.flush_error = adv, requester, flush_error
+    def __init__(self, adv=None, requester=None, flush_error=False, master=None):
+        self.adv, self.requester, self.flush_error, self.master = adv, requester, flush_error, master
         self.added, self.committed, self.rolled_back = [], False, False
 
     def query(self, entity, *a):
@@ -308,6 +308,8 @@ class _Db:
             return _Q(self.adv)
         if entity is User:
             return _Q(self.requester)
+        if entity is FinPayeeAccount:  # the resubmit guard's SELF master lookup
+            return _Q(self.master)
         raise AssertionError(f"unexpected query {entity}")
 
     def add(self, obj):
@@ -334,9 +336,25 @@ FINANCE = NS(id=77, employee_id="F1", department_id=4)
 REQUESTER = NS(id=55, employee_id="E1")
 
 
-def _sub(status_approve="Approved", level=2):
+_ADV_QUESTIONS = ["adv_amount", "adv_payee_type", "adv_bank", "adv_account_no", "adv_account_name", "adv_use_date"]
+_ADV_TYPES = ["number", "dropdown", "select", "text", "text", "date"]
+
+
+def _stored(qid, text=None, number=None, d=None):
+    return NS(question_id=qid, value_text=text, value_number=number, value_date=d, value_boolean=None)
+
+
+def _supplier_values(use_date=TODAY + timedelta(days=5)):
+    """Stored ADV values (questions: 1 amount, 2 payee type, 3 bank, 4 account no, 5 account name, 6 use date)."""
+    return [_stored(1, number=Decimal("15000")), _stored(2, "SUPPLIER"), _stored(3, "SCB"),
+            _stored(4, "1234567890"), _stored(5, "Supplier Co"), _stored(6, d=use_date)]
+
+
+def _sub(status_approve="Approved", level=2, values=None):
+    form = NS(questions=[NS(id=i + 1, question_name=n, question_type=t, sort_order=i + 1)
+                         for i, (n, t) in enumerate(zip(_ADV_QUESTIONS, _ADV_TYPES))])
     return NS(id=5, form_id="ADV-2610-001", status_approve=status_approve, current_approval_level=level,
-              created_by="E1")
+              created_by="E1", form=form, values=_supplier_values() if values is None else values)
 
 
 def _adv(fin_status, **kw):
@@ -354,6 +372,14 @@ def wired(monkeypatch):
                         lambda db, ids: {5: {"amount": Decimal("15000")}})
     monkeypatch.setattr(ar.approval_repo, "describe",
                         lambda db, eid, amount: state["describe"].append((eid, amount)))
+    monkeypatch.setattr(ar.advance_guard, "today_bkk", lambda: TODAY)
+    state["locked"] = []
+
+    def lock_submission_with_values(db, submission_id):
+        state["locked"].append(submission_id)
+        return state["sub"]
+
+    monkeypatch.setattr(ar.repo, "lock_submission_with_values", lock_submission_with_values)
     return state
 
 
@@ -446,7 +472,7 @@ def test_resubmit_restarts_approval(wired):
     sub = wired["sub"]
     assert out["detail"] and db.committed
     assert (adv.fin_status, sub.status_approve, sub.current_approval_level) == ("RESUBMITTED", "In Progress", 1)
-    assert wired["describe"] == [("E1", Decimal("15000"))]
+    assert wired["describe"] == [("E1", Decimal("15000"))] and wired["locked"] == [5]
     (log,) = db.of(FinAdvanceLog)
     assert (log.advance_id, log.action, log.action_by) == (10, "RESUBMIT", "E1")
     assert log.changes == {"fin_status": ["RETURNED", "RESUBMITTED"], "status_approve": ["Approved", "In Progress"],
@@ -491,6 +517,128 @@ def test_resubmit_without_eligible_approver_is_400(wired, monkeypatch):
         ar.resubmit_advance("ADV-2610-001", ResubmitIn(action_by="E1"), BackgroundTasks(), db)
     assert (ei.value.status_code, ei.value.detail) == (400, rules.MSG_NO_APPROVER)
     assert adv.fin_status == "RETURNED" and db.added == []
+
+
+# ---- resubmit re-runs the full value guard (fix batch #1) ----
+
+@pytest.mark.parametrize("use_date,ok", [(TODAY - timedelta(days=1), False), (TODAY - timedelta(days=40), False),
+                                         (TODAY, True)])
+def test_resubmit_checks_stored_use_date(wired, use_date, ok):
+    wired["sub"] = _sub(values=_supplier_values(use_date=use_date))
+    adv = _adv("RETURNED")
+    db = _Db(adv=adv, requester=REQUESTER)
+    if ok:
+        ar.resubmit_advance("ADV-2610-001", ResubmitIn(action_by="E1"), BackgroundTasks(), db)
+        assert db.committed and adv.fin_status == "RESUBMITTED"
+        return
+    with pytest.raises(HTTPException) as ei:
+        ar.resubmit_advance("ADV-2610-001", ResubmitIn(action_by="E1"), BackgroundTasks(), db)
+    assert (ei.value.status_code, ei.value.detail) == (400, L.USE_DATE_MESSAGE)
+    assert (adv.fin_status, wired["sub"].status_approve, wired["sub"].current_approval_level) == ("RETURNED",
+                                                                                                  "Approved", 2)
+    assert L.derive_status(wired["sub"].status_approve, adv.fin_status, None, TODAY)[0] == L.RETURNED
+    assert db.added == [] and not db.committed and wired["describe"] == []
+
+
+def _self_values(account_no="1112223334", account_name="สมชาย เก่า", extra=()):
+    return [_stored(1, number=Decimal("15000")), _stored(2, "SELF"), _stored(3, "KBANK"),
+            _stored(4, account_no), _stored(5, account_name), _stored(6, d=TODAY + timedelta(days=5)), *extra]
+
+
+def test_resubmit_persists_the_current_self_master(wired):
+    """Finance returned the request (wrong account) and approved the requester's new master since: the resubmit
+    re-snapshots the master into every stored row, so the old account is never paid."""
+    stored = _self_values(extra=(_stored(4, "9999999999"),))  # a duplicate stored row must not keep a stale value
+    wired["sub"] = _sub(values=stored)
+    adv = _adv("RETURNED")
+    master = NS(account_no="5556667778", account_name="สมชาย ใหม่", status="ACTIVE")
+    db = _Db(adv=adv, requester=REQUESTER, master=master)
+    ar.resubmit_advance("ADV-2610-001", ResubmitIn(action_by="E1"), BackgroundTasks(), db)
+    assert db.committed and adv.fin_status == "RESUBMITTED"
+    got = [(r.question_id, r.value_text) for r in stored if r.question_id in (3, 4, 5)]
+    assert got == [(3, "KBANK"), (4, "5556667778"), (5, "สมชาย ใหม่"), (4, "5556667778")]
+    assert db.of(FormSubmissionValue) == []  # the stored rows are rewritten, none added
+    assert wired["describe"] == [("E1", Decimal("15000"))]
+
+
+@pytest.mark.parametrize("master", [None, NS(account_no="5556667778", account_name="ก", status="INACTIVE")])
+def test_resubmit_self_without_active_master_is_400(wired, master):
+    stored = _self_values()
+    wired["sub"] = _sub(values=stored)
+    adv = _adv("RETURNED")
+    db = _Db(adv=adv, requester=REQUESTER, master=master)
+    with pytest.raises(HTTPException) as ei:
+        ar.resubmit_advance("ADV-2610-001", ResubmitIn(action_by="E1"), BackgroundTasks(), db)
+    assert (ei.value.status_code, ei.value.detail) == (400, "ยังไม่มีบัญชีรับเงินที่บัญชีอนุมัติ — กรุณาขอเพิ่มบัญชีรับเงิน")
+    assert adv.fin_status == "RETURNED" and db.added == [] and not db.committed
+    assert [r.value_text for r in stored if r.question_id == 4] == ["1112223334"]
+
+
+def test_resubmit_leaves_supplier_values_untouched(wired):
+    stored = _supplier_values()
+    stored[3].value_text = "123-456-7890"  # even a not-yet-normalized stored account is left as stored
+    wired["sub"] = _sub(values=stored)
+    before = [(r.question_id, r.value_text, r.value_number, r.value_date) for r in stored]
+    adv = _adv("RETURNED")
+    db = _Db(adv=adv, requester=REQUESTER, master=NS(account_no="5556667778", account_name="x", status="ACTIVE"))
+    ar.resubmit_advance("ADV-2610-001", ResubmitIn(action_by="E1"), BackgroundTasks(), db)
+    assert db.committed and adv.fin_status == "RESUBMITTED"
+    assert [(r.question_id, r.value_text, r.value_number, r.value_date) for r in stored] == before
+    assert db.of(FormSubmissionValue) == []
+
+
+def test_resubmit_bad_stored_supplier_bank_is_400(wired):
+    stored = _supplier_values()
+    stored[2].value_text = "NOPE"
+    wired["sub"] = _sub(values=stored)
+    adv = _adv("RETURNED")
+    db = _Db(adv=adv, requester=REQUESTER)
+    with pytest.raises(HTTPException) as ei:
+        ar.resubmit_advance("ADV-2610-001", ResubmitIn(action_by="E1"), BackgroundTasks(), db)
+    assert ei.value.status_code == 400 and "กรุณาเลือกธนาคารจากรายการ" in ei.value.detail
+    assert adv.fin_status == "RETURNED" and not db.committed
+
+
+def test_resubmit_refusals_happen_before_the_lock(wired):
+    db = _Db(adv=_adv("RETURNED"), requester=REQUESTER)
+    with pytest.raises(HTTPException):
+        ar.resubmit_advance("ADV-2610-001", ResubmitIn(action_by="F1"), BackgroundTasks(), db)
+    assert wired["locked"] == []
+
+
+class _LockQ:
+    def __init__(self, db, entities):
+        self.db, self.call = db, {"entities": entities, "steps": []}
+        db.calls.append(self.call)
+
+    def __getattr__(self, name):
+        def step(*a):
+            self.call["steps"].append(name)
+            return self.db.result if name == "one" else self
+
+        return step
+
+
+class _LockDb:
+    def __init__(self, result):
+        self.result, self.calls = result, []
+
+    def query(self, *entities):
+        return _LockQ(self, entities)
+
+
+def test_lock_submission_with_values_locks_then_reloads():
+    from services.finance import advance_repo
+    loaded = NS(id=5)
+    db = _LockDb(loaded)
+    assert advance_repo.lock_submission_with_values(db, 5) is loaded
+    lock, load = db.calls
+    # the edit path's column-only FOR UPDATE first (no eager outer joins under FOR UPDATE) …
+    assert lock["entities"] == (FormSubmission.status_approve, FormSubmission.current_approval_level)
+    assert lock["steps"] == ["filter", "with_for_update", "one"]
+    # … then the full row with values + form questions, refreshed from the DB, not locked again
+    assert load["entities"] == (FormSubmission,)
+    assert load["steps"] == ["options", "filter", "populate_existing", "one"]
 
 
 def test_resubmit_unknown_requester_user(wired):
