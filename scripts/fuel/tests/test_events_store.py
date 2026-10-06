@@ -46,7 +46,8 @@ def test_history_counts_previous_30_days():
     plates, drivers = history_counts(db, "2026-10-05")
     assert plates == {"A": 2, "B": 1} and drivers == {"x": 2}
     _, query = db[EVENTS].calls[0]
-    assert query == {"decision": "real_loss", "date_key": {"$gte": "2026-09-05", "$lt": "2026-10-05"}}
+    # status bounds the read with the (date_key, status) index prefix — decision has no index
+    assert query == {"date_key": {"$gte": "2026-09-05", "$lt": "2026-10-05"}, "status": "decided", "decision": "real_loss"}
 
 
 def test_write_events_never_deletes_decided():

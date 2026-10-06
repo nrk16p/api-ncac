@@ -69,8 +69,8 @@ def load_places(db) -> list[dict]:
 def history_counts(db, date_key: str, days: int = 30) -> tuple[Counter, Counter]:
     """Confirmed real losses per plate and per driver in the `days` before `date_key`."""
     day = date.fromisoformat(date_key)
-    query = {"decision": "real_loss",
-             "date_key": {"$gte": (day - timedelta(days=days)).isoformat(), "$lt": date_key}}
+    query = {"date_key": {"$gte": (day - timedelta(days=days)).isoformat(), "$lt": date_key},
+             "status": "decided", "decision": "real_loss"}   # date_key + status = the date_status_score prefix
     plates, drivers = Counter(), Counter()
     for e in db[EVENTS].find(query, {"plate": 1, "driver": 1}):
         plates[e["plate"]] += 1
