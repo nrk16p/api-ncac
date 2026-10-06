@@ -4,11 +4,16 @@ plant vs not-plant minutes).
 
 Default range: yesterday (Bangkok). Override via env START_DATE / END_DATE (dd/mm/YYYY),
 MAX_DISTANCE (meters, default 200) — passed through POST /pipeline/run/engineon body.
+ENGINE_LOGIC=v2 (manual runs only; the nightly stays "current"): boxes whose firmware reports no
+voltage ("v1") count every parked reading as engine-on, and every record gets engine_logic +
+confirmed_by_voltage. ENGINEON_RAW_COLLECTION / ENGINEON_SUMMARY_COLLECTION redirect the writes
+(smoke tests only).
 
 Ported from api-engineon app/etl_engineon.py (low-mem streaming version).
 """
 import gc
 import os
+import re
 import warnings
 from datetime import datetime, timedelta
 
@@ -43,12 +48,31 @@ def _classify_voltage_type(v):
         return None
 
 
-def _classify_engine_state(v, status):
+ENGINE_LOGICS = ("current", "v2")
+
+
+def _classify_engine_state(v, status, version_type=None, logic="current"):
     if status != "จอดรถ":
         return "Other"
+    if logic == "v2" and version_type == "v1":
+        return "Parking - Engine On"   # v1 firmware reports no voltage — every parked reading counts
     if pd.isna(v):
         return "Unknown"
     return "Parking - Engine On" if v >= 25.0 else "Parking - Engine Off"
+
+
+def logic_fields(logic: str, version_type: str | None) -> dict:
+    """Extra fields on raw/summary records: none for the nightly logic, provenance for v2 runs."""
+    if logic != "v2":
+        return {}
+    return {"engine_logic": "v2", "confirmed_by_voltage": version_type == "v2"}
+
+
+def target_collection(env, name: str, default: str) -> str:
+    value = env.get(name) or default
+    if not re.match(rf"^{default}(_[a-z0-9_]+)?$", value):
+        raise ValueError(f"{name} must be {default!r} or start with '{default}_', got {value!r}")
+    return value
 
 
 def _split_latlng(series: pd.Series):
@@ -76,13 +100,18 @@ def process_engineon_data_optimized(
     debug_vehicle: str | None = None,
     mongo_batch_size: int = 1000,
     write_batch_size: int = 1000,
+    engine_logic: str = "current",
+    raw_collection: str = "raw_engineon",
+    summary_collection: str = "summary_engineon",
 ):
+    if engine_logic not in ENGINE_LOGICS:
+        raise ValueError(f"ENGINE_LOGIC must be one of {ENGINE_LOGICS}, got {engine_logic!r}")
     client = MongoClient(mongo_uri)
 
     col_log = client[db_terminus]["driving_log"]
     col_plants = client[db_atms]["plants"]
-    col_raw = client[db_analytics]["raw_engineon"]
-    col_sum = client[db_analytics]["summary_engineon"]
+    col_raw = client[db_analytics][raw_collection]
+    col_sum = client[db_analytics][summary_collection]
 
     # -------- Plants --------
     plants = pd.DataFrame(list(col_plants.find({}, {"_id": 0})))
@@ -175,7 +204,7 @@ def process_engineon_data_optimized(
         # engine state
         vnum = pd.to_numeric(dfp["Voltage"], errors="coerce")
         dfp["engine_state"] = [
-            _classify_engine_state(v, s)
+            _classify_engine_state(v, s, version_type, engine_logic)
             for v, s in zip(vnum, dfp["สถานะ"].astype(str))
         ]
 
@@ -247,6 +276,7 @@ def process_engineon_data_optimized(
                             "ทะเบียนพาหนะ": plate,
                             "date": target_date,
                             "version_type": version_type,
+                            **logic_fields(engine_logic, version_type),
                             **rec,
                         },
                         upsert=True,
@@ -276,6 +306,7 @@ def process_engineon_data_optimized(
                             "total_engine_on_min_not_plant": not_plant_min,
                             "total_engine_on_hr_not_plant": not_plant_min / 60.0,
                             "version_type": version_type,
+                            **logic_fields(engine_logic, version_type),
                         },
                         upsert=True,
                     )
@@ -337,15 +368,19 @@ def main():
     start_date = os.getenv("START_DATE", y)
     end_date = os.getenv("END_DATE", y)
     max_distance = int(os.getenv("MAX_DISTANCE", "200"))
+    engine_logic = (os.getenv("ENGINE_LOGIC") or "current").strip().lower()
 
     job = JobLog("engineon", "engineon",
-                 {"start_date": start_date, "end_date": end_date})
+                 {"start_date": start_date, "end_date": end_date, "engine_logic": engine_logic})
     try:
         process_engineon_data_optimized(
             mongo_uri=MONGODB_URI,
             start_date=start_date,
             end_date=end_date,
             max_distance=max_distance,
+            engine_logic=engine_logic,
+            raw_collection=target_collection(os.environ, "ENGINEON_RAW_COLLECTION", "raw_engineon"),
+            summary_collection=target_collection(os.environ, "ENGINEON_SUMMARY_COLLECTION", "summary_engineon"),
         )
         job.finish("success")
     except Exception as e:
