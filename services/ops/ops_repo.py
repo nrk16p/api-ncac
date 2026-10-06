@@ -191,6 +191,22 @@ def update_project_status(project_id: str, status: str, remark: Optional[str], c
         raise mongo_error(exc) from exc
 
 
+def update_project_fields(project_id: str, fields: Dict[str, Any]) -> Optional[dict]:
+    """Request fields edited after filing (title, objective, requirement, …).
+    A new title is copied onto the project's tasks, which keep it denormalised for their cards."""
+    try:
+        doc = _col(PROJECTS).find_one_and_update(
+            {"_id": project_id},
+            {"$set": {**fields, "updated_at": _now()}},
+            return_document=ReturnDocument.AFTER,
+        )
+        if doc is not None and "title" in fields:
+            _col(TASKS).update_many({"project_id": project_id}, {"$set": {"project_title": fields["title"]}})
+        return doc
+    except PyMongoError as exc:
+        raise mongo_error(exc) from exc
+
+
 def update_project_plan(project_id: str, fields: Dict[str, Any]) -> Optional[dict]:
     try:
         return _col(PROJECTS).find_one_and_update(

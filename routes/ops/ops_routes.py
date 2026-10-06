@@ -121,10 +121,15 @@ def _attachments_out(attachments: List[dict]) -> List[dict]:
     return out
 
 
-def _project_out(doc: dict, issue_count: int) -> dict:
+def _can_edit(doc: dict, caller: Caller) -> bool:
+    return ops_logic.can_edit_project(doc, caller.employee_id, caller.username, caller.person.get("department"))
+
+
+def _project_out(doc: dict, issue_count: int, caller: Caller) -> dict:
     out = {k: v for k, v in doc.items() if k not in ("_id", "attachments")}
     out["attachments"] = _attachments_out(doc.get("attachments", []))
     out["issue_count"] = issue_count
+    out["can_edit"] = _can_edit(doc, caller)
     return out
 
 
@@ -208,7 +213,7 @@ def list_projects(
     mine_id = caller.employee_id if scope == "mine" else None
     docs = ops_repo.list_projects(mine_employee_id=mine_id, status=status)
     counts = ops_repo.bulk_issue_counts([d["_id"] for d in docs])
-    return [_project_out(d, counts.get(d["_id"], 0)) for d in docs]
+    return [_project_out(d, counts.get(d["_id"], 0), caller) for d in docs]
 
 
 @router.post("/projects", status_code=201)
@@ -235,7 +240,27 @@ def create_project(
 def get_project(project_id: str, caller: Caller = Depends(get_caller)):
     doc = _require_project(project_id)
     count = ops_repo.bulk_issue_counts([project_id]).get(project_id, 0)
-    return _project_out(doc, count)
+    return _project_out(doc, count, caller)
+
+
+@router.patch("/projects/{project_id}", response_model=schemas.Project)
+def update_project(
+    project_id: str,
+    body: schemas.ProjectEditInput,
+    caller: Caller = Depends(get_caller),
+):
+    doc = _require_project(project_id)
+    ops_logic.require_project_editable(doc, caller.employee_id, caller.username, caller.person.get("department"))
+    changes = body.model_dump(exclude_unset=True)
+    if "requirement" in changes:
+        changes["requirement"] = ops_logic.sanitize_requirement_html(changes["requirement"])
+    if "target_date" in changes:
+        changes["target_date"] = _date_str(changes["target_date"])
+    if "user_groups" in changes:
+        changes["user_groups"] = (changes["user_groups"] or "").strip() or None
+    updated = ops_repo.update_project_fields(project_id, changes)
+    count = ops_repo.bulk_issue_counts([project_id]).get(project_id, 0)
+    return _project_out(updated, count, caller)
 
 
 @router.patch("/projects/{project_id}/status", response_model=schemas.Project)
@@ -249,7 +274,7 @@ def update_project_status(
     remark = ops_logic.validate_status_input(body.status, body.remark)
     updated = ops_repo.update_project_status(project_id, body.status, remark, caller.person)
     count = ops_repo.bulk_issue_counts([project_id]).get(project_id, 0)
-    return _project_out(updated, count)
+    return _project_out(updated, count, caller)
 
 
 @router.patch("/projects/{project_id}/plan", response_model=schemas.Project)
@@ -264,7 +289,7 @@ def update_project_plan(
     changes = _plan_fields(body.model_dump(exclude_unset=True))
     updated = ops_repo.update_project_plan(project_id, changes)
     count = ops_repo.bulk_issue_counts([project_id]).get(project_id, 0)
-    return _project_out(updated, count)
+    return _project_out(updated, count, caller)
 
 
 @router.patch("/projects/{project_id}/assignees", response_model=schemas.Project)
@@ -281,7 +306,7 @@ def update_project_assignees(
     people = people_repo.resolve_people(db, usernames)
     updated = ops_repo.update_project_assignees(project_id, people)
     count = ops_repo.bulk_issue_counts([project_id]).get(project_id, 0)
-    return _project_out(updated, count)
+    return _project_out(updated, count, caller)
 
 
 @router.post("/projects/{project_id}/review", response_model=schemas.Project)
@@ -297,7 +322,7 @@ def submit_project_review(
     review = {"result": body.result, "by": caller.person, "at": ops_repo.utc_now(), "note": note}
     updated = ops_repo.update_project_review(project_id, review)
     count = ops_repo.bulk_issue_counts([project_id]).get(project_id, 0)
-    return _project_out(updated, count)
+    return _project_out(updated, count, caller)
 
 
 @router.get("/projects/{project_id}/comments", response_model=List[schemas.Comment])

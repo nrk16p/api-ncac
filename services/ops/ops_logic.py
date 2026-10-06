@@ -55,6 +55,8 @@ MSG_COMMENT_OWN_ONLY = "แก้ไขได้เฉพาะความค�
 MSG_REVIEW_ITEM_NOT_FOUND = "ไม่พบรายการ"
 MSG_PROJECT_CLOSED_ASSIGNEES = "โปรเจกต์นี้ปิดแล้ว แก้ไขผู้รับผิดชอบไม่ได้"
 MSG_PROJECT_CLOSED_PLAN = "โปรเจกต์นี้ปิดแล้ว แก้ไขแผนงานไม่ได้"
+MSG_PROJECT_CLOSED_EDIT = "โปรเจกต์นี้ปิดแล้ว แก้ไขคำขอไม่ได้"
+MSG_PROJECT_EDIT_FORBIDDEN = "แก้ไขคำขอได้เฉพาะผู้รับผิดชอบ (คำขอจากระบบ) หรือคนในแผนกเดียวกับผู้ยื่น"
 MSG_PROJECT_REJECTED_TASK_CREATE = "โปรเจกต์นี้ไม่อนุมัติ สร้าง Task ไม่ได้"
 MSG_PROJECT_REJECTED_TASK_MOVE = "โปรเจกต์นี้ไม่อนุมัติ ย้าย Task เข้าไม่ได้"
 MSG_TASK_NOT_OPEN = "แก้ไขชื่อและโปรเจกต์ได้เฉพาะ Task ที่ยัง Open"
@@ -121,6 +123,40 @@ def is_manager(username: Optional[str], department_id: Optional[int], employee_i
 def require_manager(is_mgr: bool) -> None:
     if not is_mgr:
         raise OpsForbidden(MSG_MANAGER_ONLY)
+
+
+# ---------------------------------------------------------------------------
+# Editing a project request
+# ---------------------------------------------------------------------------
+
+# requested_by.employee_id of projects imported by the system (not filed by a user)
+SYSTEM_EMPLOYEE_ID = "system"
+
+
+def _norm(s: Optional[str]) -> str:
+    return (s or "").strip().lower()
+
+
+def can_edit_project(project: dict, caller_employee_id: str, caller_username: Optional[str], caller_department: Optional[str]) -> bool:
+    """System-imported → the project's named assignees; filed by a user → anyone in the
+    requester's department (requester included). Not once the project is Done/Reject."""
+    if project.get("status") in CLOSED_STATUSES:
+        return False
+    requester = project.get("requested_by") or {}
+    if requester.get("employee_id") == SYSTEM_EMPLOYEE_ID:
+        me = _norm(caller_username)
+        return bool(me) and any(_norm(a.get("username")) == me for a in project.get("assignees") or [])
+    if requester.get("employee_id") == caller_employee_id:
+        return True
+    dept = _norm(caller_department)
+    return bool(dept) and dept == _norm(requester.get("department"))
+
+
+def require_project_editable(project: dict, caller_employee_id: str, caller_username: Optional[str], caller_department: Optional[str]) -> None:
+    if project.get("status") in CLOSED_STATUSES:
+        raise OpsConflict(MSG_PROJECT_CLOSED_EDIT)
+    if not can_edit_project(project, caller_employee_id, caller_username, caller_department):
+        raise OpsForbidden(MSG_PROJECT_EDIT_FORBIDDEN)
 
 
 # ---------------------------------------------------------------------------
