@@ -95,12 +95,15 @@ def main() -> None:
                     log.error("besttech catch-up failed: %s", e)
                     result["besttech_error"] = str(e)
 
+        failed = [s for s, bad in (("besttech", "besttech_error" in result or "besttech_catchup_skipped" in result),
+                                   ("terminus", "terminus_error" in result or result.get("terminus_partial")))
+                  if bad]   # shown on the morning card as missing even when some docs exist
         rerun: dict = {}
         errors: dict = {}
         for back in range(EVENT_DAYS):   # yesterday first, then re-runs that pick up late drivers
             d = day - timedelta(days=back)
             try:
-                count = run_day(client, d)["events"]
+                count = run_day(client, d, sources_failed=failed if back == 0 else None)["events"]
             except Exception as e:  # one day's failure must not stop the others; the run fails at the end
                 log.error("fuel_events %s failed: %s", d, e)
                 errors[d.isoformat()] = str(e)

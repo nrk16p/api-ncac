@@ -49,6 +49,7 @@ def wire_nightly(monkeypatch, calls, terminus=None, events_fail_day=None):
     client = FakeClient()
     client["terminus"]["driving_log"].replace_one({}, {"_id": 1, "ทะเบียนพาหนะ": "71-0001", "วันที่": "05/10/2026"})
     FakeJob.finished = []
+    FakeJob.sources_failed = {}
 
     def ingest(*args, **kwargs):
         calls.append("terminus")
@@ -62,8 +63,9 @@ def wire_nightly(monkeypatch, calls, terminus=None, events_fail_day=None):
     monkeypatch.setattr(nightly, "ingest_terminus_day", ingest)
     monkeypatch.setattr(nightly, "make_client", lambda: object())
     monkeypatch.setattr(nightly, "run_days", lambda *args, **kwargs: calls.append("besttech") or 130)
-    def run_day(c, day):
+    def run_day(c, day, sources_failed=None):
         calls.append(f"events:{day.isoformat()}")
+        FakeJob.sources_failed[day.isoformat()] = sources_failed
         if day.isoformat() == events_fail_day:
             raise RuntimeError("boom")
         return {"events": 7}
@@ -101,3 +103,18 @@ def test_a_failed_rerun_day_does_not_stop_the_others_and_fails_the_run(monkeypat
     status, extra = FakeJob.finished[-1]
     assert status == "failed" and extra["events"] == 7 and extra["events_error"] == {"2026-10-04": "boom"}
     assert extra["events_rerun"] == {"2026-10-03": 7}
+
+
+def test_failed_terminus_is_passed_to_yesterdays_events_only(monkeypatch):
+    calls: list = []
+    wire_nightly(monkeypatch, calls, terminus=RuntimeError("driving_log timeout"))
+    with pytest.raises(RuntimeError):
+        nightly.main()
+    assert FakeJob.sources_failed == {"2026-10-05": ["terminus"], "2026-10-04": None, "2026-10-03": None}
+
+
+def test_clean_night_passes_no_failed_sources(monkeypatch):
+    calls: list = []
+    wire_nightly(monkeypatch, calls)
+    nightly.main()
+    assert FakeJob.sources_failed["2026-10-05"] == []

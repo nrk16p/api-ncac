@@ -121,3 +121,11 @@ def test_place_drop_stays_open_with_a_noise_suggestion():
     assert e["score"] == 95 and e["p_real_loss"] == 0.95 and e["reasons"][0] == "อยู่ที่ ACON A109"
     calm = score_event(raw(at_place=True, place_name="ACON A109"), DEFAULTS, toy_model(engine_off_share=-6.0), None, NOW)
     assert calm["suggestion"] == "noise" and calm["confidence"] >= 0.95 and calm["status"] == "open"   # never auto-closed
+
+
+def test_failed_source_reaches_the_summary_even_with_docs():
+    docs = [series_doc("A", "terminus", "ok"), series_doc("A", "besttech", "ok")]
+    s = daily_summary(KEY, docs, [], DEFAULTS, NOW, sources_failed=["terminus"])
+    assert s["sources_missing"] == ["terminus"] and s["sources_failed"] == ["terminus"]
+    clean = daily_summary(KEY, docs, [], DEFAULTS, NOW)
+    assert clean["sources_missing"] == [] and clean["sources_failed"] == []

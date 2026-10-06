@@ -66,3 +66,14 @@ def test_run_day_seeds_the_settings_doc():
     run_day(client, DAY, now=NOW)
     settings = client["analytics"]["fuel_settings"].find_one({"_id": "default"})
     assert settings is not None and settings["price_per_litre"] is None
+
+
+def test_failed_sources_are_kept_by_reruns_until_set_again():
+    client = client_with_trucks()
+    summary = client["analytics"]["fuel_daily_summary"]
+    run_day(client, DAY, now=NOW, sources_failed=["terminus"])
+    assert summary.find_one({"_id": "2026-10-05"})["sources_missing"] == ["besttech", "terminus"]
+    run_day(client, DAY, now=NOW)                         # a re-run that knows nothing keeps the flag
+    assert summary.find_one({"_id": "2026-10-05"})["sources_missing"] == ["besttech", "terminus"]
+    run_day(client, DAY, now=NOW, sources_failed=[])      # an explicit empty list clears it
+    assert summary.find_one({"_id": "2026-10-05"})["sources_missing"] == ["besttech"]

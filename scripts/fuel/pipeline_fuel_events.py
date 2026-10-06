@@ -1,5 +1,7 @@
 """fuel_events — detect, score and store one day's fuel events (spec §4). Runs as the last step of
 fuel_nightly; registered on its own for re-runs: START_DATE / END_DATE (dd/mm/YYYY), default yesterday.
+A re-run keeps the day's failed-source flag (sources_failed); SOURCES_FAILED="" clears it once the data
+was re-ingested, SOURCES_FAILED=terminus,besttech sets it.
 
 Pass 1: every truck-day with enough valid fuel minutes → burn-rate observations (fuel_day_stats).
 Baselines: median of the truck's last `baseline_days` of observations (today included), fleet median
@@ -20,7 +22,7 @@ from baseline import day_rates, fleet_baseline, truck_baseline  # noqa: E402
 from dates import parse_days  # noqa: E402
 from detect import day_series, find_candidates, prepare  # noqa: E402
 from events import daily_summary, merge_sources, plan_rerun, raw_event, score_event  # noqa: E402
-from events_store import (GPS_DB, drivers_for, ensure_event_indexes, history_counts,  # noqa: E402
+from events_store import (GPS_DB, SUMMARY, drivers_for, ensure_event_indexes, history_counts,  # noqa: E402
                           load_active_model, load_day_stats, load_existing_events, load_places,
                           save_day_stats, save_summary, vehicles_for, write_events)
 from features import day_evidence, evidence  # noqa: E402
@@ -28,7 +30,9 @@ from fuel_settings import ensure_settings  # noqa: E402
 from series_store import SERIES  # noqa: E402
 
 
-def run_day(client, day: date, now: datetime | None = None) -> dict:
+def run_day(client, day: date, now: datetime | None = None, sources_failed: list[str] | None = None) -> dict:
+    """sources_failed: sources whose nightly step failed or was partial for this day; None keeps what the
+    day's summary already records (re-runs that do not know), [] clears it."""
     db = client["analytics"]
     ensure_event_indexes(db)
     settings = ensure_settings(db)
@@ -79,7 +83,9 @@ def run_day(client, day: date, now: datetime | None = None) -> dict:
     write_events(db, upserts, stale, delete, now)
     save_day_stats(db, stats_today)
     kept = upserts + [e for e in existing if e["_id"] in set(stale)]
-    summary = daily_summary(key, docs, kept, settings, now)
+    if sources_failed is None:
+        sources_failed = (db[SUMMARY].find_one({"_id": key}, {"sources_failed": 1}) or {}).get("sources_failed", [])
+    summary = daily_summary(key, docs, kept, settings, now, sources_failed)
     save_summary(db, summary)
     log.info("fuel_events %s: %d events (%d open, %d auto-closed, %d audit), %d stale, %d deleted",
              key, len(upserts), summary["open"], summary["auto_closed"], summary["audit"], len(stale), len(delete))
@@ -95,8 +101,10 @@ def main() -> None:
     try:
         client = MongoClient(MONGODB_URI)
         totals: dict = defaultdict(int)
+        failed_env = os.getenv("SOURCES_FAILED")
+        failed = None if failed_env is None else [x.strip() for x in failed_env.split(",") if x.strip()]
         for day in parse_days(start, end):
-            for k, v in run_day(client, day).items():
+            for k, v in run_day(client, day, sources_failed=failed).items():
                 if isinstance(v, int):
                     totals[k] += v
         job.finish("success", records=totals["events"], **{k: v for k, v in totals.items() if k != "events"})

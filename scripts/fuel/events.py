@@ -149,7 +149,11 @@ def plate_statuses(series_docs: list[dict], sparse_share: float) -> dict[str, st
     return out
 
 
-def daily_summary(date_key: str, series_docs: list[dict], events: list[dict], settings: dict, now: datetime) -> dict:
+def daily_summary(date_key: str, series_docs: list[dict], events: list[dict], settings: dict, now: datetime,
+                  sources_failed=()) -> dict:
+    """sources_failed: sources whose nightly step errored or was partial — they count as missing even
+    when some of their docs exist."""
+    failed = set(sources_failed)
     statuses = plate_statuses(series_docs, settings["sparse_share"])
     by_status = {s: 0 for s in STATUS_ORDER + ["sparse"]}
     for status in statuses.values():
@@ -169,7 +173,8 @@ def daily_summary(date_key: str, series_docs: list[dict], events: list[dict], se
         "decided": sum(1 for e in events if e["status"] == "decided"),
         "likely_litres": round(sum(e["p_real_loss"] * e["litres"] for e in open_loss), 1),
         "check_first": [e["_id"] for e in ranked[:3]],
-        "sources_missing": [s for s in ("besttech", "terminus") if s not in sources],
+        "sources_missing": [s for s in ("besttech", "terminus") if s not in sources or s in failed],
+        "sources_failed": sorted(failed),
         "ai_text": None,
         "updated_at": now,
     }
