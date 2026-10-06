@@ -48,6 +48,11 @@ def _lat_lng(value) -> tuple[float | None, float | None]:
     return lat, lng
 
 
+def day_plates(values) -> list[str]:
+    """Distinct driving_log plates for a day without vendor nulls/blanks, sorted (values kept as stored)."""
+    return sorted({v for v in values if isinstance(v, str) and v.strip()})
+
+
 def row_reading(row: dict) -> Reading | None:
     sec = _seconds(row.get("เวลา"))
     if sec is None:
@@ -90,7 +95,7 @@ def ingest_terminus_day(terminus_db, db, day: date, plates: list[str] | None = N
         raw_plates = sorted({terminus_plate(p) for p in plates})
         expected: set[str] = set()
     else:
-        raw_plates = sorted(driving_log.distinct("ทะเบียนพาหนะ", {"วันที่": key}))
+        raw_plates = day_plates(driving_log.distinct("ทะเบียนพาหนะ", {"วันที่": key}))
         expected = recent_plates(db, SOURCE, day.isoformat())
     tanks = load_tanks(db) if tanks is None else tanks
     seen: set[str] = set()

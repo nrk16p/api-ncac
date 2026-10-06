@@ -24,7 +24,7 @@ from series_store import SERIES, count_series, ensure_indexes  # noqa: E402
 from series_terminus import ingest_terminus_day  # noqa: E402
 
 READY_RATIO = 0.5
-BESTTECH_RUN_MAX_HOURS = 3
+BESTTECH_RUN_MAX_HOURS = 2.5   # 01:30 + 2.5 h < 04:15, so a hard-killed run never blocks the catch-up
 
 
 def terminus_ready(plates_today: int, plates_recent: list[int], ratio: float = READY_RATIO) -> bool:

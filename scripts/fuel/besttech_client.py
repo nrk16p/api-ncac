@@ -19,7 +19,7 @@ import requests
 
 DEFAULT_BASE_URL = "https://besttransportservice.bestgeosystem.com/apiservices"
 THROTTLE_WAITS = (15, 30, 45, 60, 60, 60)
-NETWORK_RETRIES = 3
+NETWORK_WAITS = (10, 30, 60, 120)   # waits between attempts — 5 attempts in total
 TH_TZ = timezone(timedelta(hours=7))
 TIME_FMT = "%Y-%m-%d %H:%M:%S"
 
@@ -72,9 +72,9 @@ class BesttechClient:
             except (requests.RequestException, ValueError) as exc:
                 self._last_call = self.monotonic()
                 failures += 1
-                if failures >= NETWORK_RETRIES:
+                if failures > len(NETWORK_WAITS):
                     raise BesttechError(f"{path} failed after {failures} attempts: {exc}") from exc
-                self.sleep(2 ** failures)
+                self.sleep(NETWORK_WAITS[failures - 1])
                 continue
             if payload.get("what") != "error":
                 return payload

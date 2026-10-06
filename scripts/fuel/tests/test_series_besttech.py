@@ -1,6 +1,9 @@
 from datetime import date, datetime
 
-from series_besttech import besttech_day_docs, fetch_day
+import pytest
+
+from besttech_client import BesttechError
+from series_besttech import besttech_day_docs, fetch_day, run_days
 from series_codec import decode_columns
 
 DAY = date(2026, 10, 5)
@@ -84,6 +87,44 @@ def test_fetch_day_calls_history_once_per_live_vehicle():
     assert docs["สบ.71-8635"]["n"] == 1
     assert docs["สบ.70-6294"]["coverage"]["status"] == "no_data"
     assert docs["สบ.71-8623"]["coverage"]["status"] == "offline"
+
+
+class FlakyClient(FakeClient):
+    def __init__(self, bad):
+        super().__init__()
+        self.bad = set(bad)
+
+    def history(self, vehicle_no, start, end):
+        if vehicle_no in self.bad:
+            self.calls.append((vehicle_no, start, end))
+            raise BesttechError("history returned error.VehicleNotFound: gone")
+        return super().history(vehicle_no, start, end)
+
+
+TRACK5 = TRACK + [{"vehicle_no": f"ME20{i} (71-000{i} สบ.)", "state": "OFF", "gps_time": "2026-10-06 08:00:00"}
+                  for i in range(3)]
+
+
+def test_one_failing_vehicle_does_not_lose_the_day():
+    windows = fetch_day(FlakyClient({"70-6294 สบ."}), DAY, TRACK5)
+    docs = by_plate(besttech_day_docs(DAY, TRACK5, windows, {}))
+    assert docs["สบ.71-8635"]["n"] == 1
+    assert docs["สบ.70-6294"]["coverage"]["status"] == "no_data"
+
+
+def test_too_many_failing_vehicles_fail_the_day():
+    with pytest.raises(BesttechError, match="2/2"):
+        fetch_day(FlakyClient({"ME152 (71-8635 สบ.)", "70-6294 สบ."}), DAY, TRACK)
+
+
+class EmptyTrackClient:
+    def track(self):
+        return []
+
+
+def test_empty_track_is_an_error():
+    with pytest.raises(BesttechError, match="no vehicles"):
+        run_days(EmptyTrackClient(), None, [DAY])
 
 
 def test_string_numbers_are_accepted():

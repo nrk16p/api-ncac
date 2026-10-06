@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 import requests
 
-from besttech_client import THROTTLE_WAITS, BesttechClient, BesttechError
+from besttech_client import NETWORK_WAITS, THROTTLE_WAITS, BesttechClient, BesttechError
 
 TH = timezone(timedelta(hours=7))
 
@@ -95,7 +95,20 @@ def test_other_error_raises_immediately():
 def test_network_error_is_retried():
     client, _, clock = make([requests.ConnectionError("down"), OK_TRACK], spacing=0)
     assert len(client.track()) == 1
-    assert 2 in clock.sleeps
+    assert clock.sleeps == [NETWORK_WAITS[0]]
+
+
+def test_network_errors_back_off_longer():
+    client, _, clock = make([requests.ConnectionError("down")] * 4 + [OK_TRACK], spacing=0)
+    assert len(client.track()) == 1
+    assert clock.sleeps == list(NETWORK_WAITS)
+
+
+def test_network_errors_give_up_after_five_attempts():
+    client, session, _ = make([requests.ConnectionError("down")] * 5, spacing=0)
+    with pytest.raises(BesttechError, match="5 attempts"):
+        client.track()
+    assert len(session.calls) == 5
 
 
 def test_http_error_status_is_retried():

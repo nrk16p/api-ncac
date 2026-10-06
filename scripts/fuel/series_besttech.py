@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "engineon"))
 from common import MONGODB_URI, JobLog, log, yesterday_bkk  # noqa: E402
 from pymongo import MongoClient  # noqa: E402
 
-from besttech_client import DEFAULT_BASE_URL, BesttechClient  # noqa: E402
+from besttech_client import DEFAULT_BASE_URL, BesttechClient, BesttechError  # noqa: E402
 from dates import parse_days  # noqa: E402
 from plates import split_besttech_vehicle  # noqa: E402
 from series_build import Reading, build_series_doc, to_number  # noqa: E402
@@ -23,6 +23,7 @@ from series_store import count_series, ensure_indexes, load_tanks, tank_for, ups
 SOURCE = "besttech"
 UNIT = "cpct"
 COMPLETE_SHARE = 0.9
+MAX_FAILED_SHARE = 0.25   # more failed vehicles than this fails the day instead of writing gaps
 TIME_FMT = "%Y-%m-%d %H:%M:%S"
 
 
@@ -94,18 +95,29 @@ def fetch_day(client: BesttechClient, day: date, track_vehicles: list[dict]) -> 
     start = datetime.combine(day, time(0, 0, 0))
     end = datetime.combine(day, time(23, 59, 59))
     windows = []
+    failed: list[str] = []
     for vehicle in track_vehicles:
         vehicle_no = vehicle.get("vehicle_no")
         last = _parse_time(vehicle.get("gps_time"))
         if not vehicle_no or last is None or last < start:
             continue
-        windows.append([{"vehicle_no": vehicle_no, "points": client.history(vehicle_no, start, end)}])
+        try:
+            points = client.history(vehicle_no, start, end)
+        except BesttechError as e:   # one bad vehicle must not cost the other ~130 their day
+            log.warning("besttech %s %s failed: %s", day.isoformat(), vehicle_no, e)
+            failed.append(vehicle_no)
+            points = []
+        windows.append([{"vehicle_no": vehicle_no, "points": points}])
+    if windows and len(failed) > MAX_FAILED_SHARE * len(windows):
+        raise BesttechError(f"{len(failed)}/{len(windows)} vehicles failed on {day.isoformat()}: {failed[:5]}")
     return windows
 
 
 def run_days(client: BesttechClient, db, days: list[date], force: bool = False) -> int:
-    ensure_indexes(db)
     track = client.track()
+    if not track:   # an outage that answers "ok" with no vehicles must not log as success
+        raise BesttechError("/track returned no vehicles")
+    ensure_indexes(db)
     tanks = load_tanks(db)
     written = 0
     for day in days:

@@ -1,7 +1,7 @@
 from datetime import date
 
 from series_codec import decode_columns
-from series_terminus import row_reading, terminus_day_docs
+from series_terminus import day_plates, row_reading, terminus_day_docs
 
 DAY = date(2026, 10, 5)
 
@@ -38,6 +38,10 @@ def test_docs_per_plate_in_litres():
     assert cols["speed"].tolist() == [20, 0]
     assert cols["engine"].tolist() == [1, 0]
     assert docs["กว4506"]["truck_code"] is None
+
+
+def test_day_plates_skips_nulls_and_blanks():
+    assert day_plates(["71-0002", None, float("nan"), "  ", "71-0001", 5]) == ["71-0001", "71-0002"]
 
 
 def test_silent_plates_get_no_data_docs():

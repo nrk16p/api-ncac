@@ -16,6 +16,12 @@ def test_ready_without_history():
     assert not terminus_ready(0, [0, 0])
 
 
+def test_crashed_0130_run_does_not_block_the_0415_catch_up():
+    at_0415 = datetime(2026, 10, 6, 21, 15)                                   # UTC
+    crashed = {"status": "running", "created_at": datetime(2026, 10, 6, 18, 35)}  # started 01:35 BKK
+    assert not besttech_run_in_progress(crashed, at_0415)
+
+
 def test_besttech_run_in_progress_only_when_recent_and_running():
     assert besttech_run_in_progress({"status": "running", "created_at": NOW - timedelta(hours=1)}, NOW)
     assert not besttech_run_in_progress({"status": "running", "created_at": NOW - timedelta(hours=5)}, NOW)
