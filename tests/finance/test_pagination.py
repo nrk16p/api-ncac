@@ -262,7 +262,8 @@ def _ents():
 def test_department_filter_is_exact_name_match():
     q = repo._scoped_query(_session(), _ents(), department="บัญชี")
     sql = _sql(q.statement)
-    assert "departments.department_name_th =" in sql and "users.department_id" in sql
+    # users/departments are aliased inside the EXISTS (so it never auto-correlates to an outer users join)
+    assert "department_name_th = " in sql and "department_id = users_" in sql and "EXISTS" in sql
 
 
 def test_q_matches_voucher_no():
@@ -380,3 +381,32 @@ def test_history_scope_all_adds_no_form_join(monkeypatch):
     assert not any("form_masters" in clause for _, clause in seen)
     import inspect
     assert inspect.signature(fa.get_approval_history).parameters["scope"].default.default == "all"
+
+
+def test_search_and_department_exists_survive_an_outer_users_join():
+    """Regression: the options/summary queries join users; an un-aliased EXISTS auto-correlated to it and lost
+    its FROM ("returned no FROM clauses due to auto-correlation")."""
+    from models.user_model import User
+    q = repo._scoped_query(_session(), _ents(), department="บัญชี", q="9002")
+    q = q.join(User, User.employee_id == FormSubmission_created_by())
+    _sql(q.statement)  # must compile
+
+
+def FormSubmission_created_by():
+    from models.master_model import FormSubmission
+    return FormSubmission.created_by
+
+
+def test_answer_exists_survives_an_outer_values_join():
+    """Regression: the cost-center options query joins form_submission_values/form_questions; the purpose and
+    cost-center EXISTS must not auto-correlate to them."""
+    from models.master_model import FormSubmissionValue, FormQuestion
+    q = repo._scoped_query(_session(), _ents(), cost_center="สกท", q="กาแฟ")
+    q = q.join(FormSubmissionValue, FormSubmissionValue.submission_id == FormSubmission_id()).join(
+        FormQuestion, FormQuestion.id == FormSubmissionValue.question_id)
+    _sql(q.statement)  # must compile
+
+
+def FormSubmission_id():
+    from models.master_model import FormSubmission
+    return FormSubmission.id

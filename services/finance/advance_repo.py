@@ -5,7 +5,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import and_, case, exists, false, func, not_, or_
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, aliased
 
 from models.finance_model import FinAccount, FinAdvance, FinAdvanceClearItem, FinAdvanceLog
 from models.master_model import FormApprovalLog, FormMaster, FormQuestion, FormSubmission, FormSubmissionValue
@@ -236,12 +236,15 @@ def _scoped_query(db, entities, *, employee_id=None, acc_code=None, date_from=No
     if date_to:
         query = query.filter(FormSubmission.created_at < bkk_day_start_utc(date_to + timedelta(days=1)))
     if cost_center:
-        query = query.filter(_has_answer("adv_cost_center", FormSubmissionValue.value_text == cost_center))
+        query = query.filter(_has_answer("adv_cost_center", lambda text: text == cost_center))
     if department:
+        # aliased: the options/summary queries also join users/departments, and an un-aliased EXISTS would
+        # auto-correlate to them and lose its FROM
+        u, d = aliased(User), aliased(Department)
         query = query.filter(exists().where(
-            User.employee_id == FormSubmission.created_by,
-            Department.department_id == User.department_id,
-            Department.department_name_th == department))
+            u.employee_id == FormSubmission.created_by,
+            d.department_id == u.department_id,
+            d.department_name_th == department))
     q = logic.clean_q(q)
     if q:
         query = query.filter(_search_condition(q))
@@ -249,11 +252,15 @@ def _scoped_query(db, entities, *, employee_id=None, acc_code=None, date_from=No
 
 
 def _has_answer(question_name, value_condition):
+    """EXISTS an answer to `question_name` whose value_text satisfies value_condition(text_column).
+    Aliased tables: the options query joins form_submission_values / form_questions, and an un-aliased EXISTS
+    would auto-correlate to them and lose its FROM."""
+    v, qn = aliased(FormSubmissionValue), aliased(FormQuestion)
     return exists().where(
-        FormSubmissionValue.submission_id == FormSubmission.id,
-        FormQuestion.id == FormSubmissionValue.question_id,
-        FormQuestion.question_name == question_name,
-        value_condition,
+        v.submission_id == FormSubmission.id,
+        qn.id == v.question_id,
+        qn.question_name == question_name,
+        value_condition(v.value_text),
     )
 
 
@@ -265,13 +272,14 @@ def _search_condition(q):
     def like(column):
         return column.ilike(pattern, escape="\\")
 
+    u = aliased(User)  # see the department filter: never correlate to an outer users join
     requester = exists().where(
-        User.employee_id == FormSubmission.created_by,
-        or_(like(User.employee_id), like(User.firstname), like(User.lastname),
-            like(func.concat_ws(" ", User.firstname, User.lastname))),
+        u.employee_id == FormSubmission.created_by,
+        or_(like(u.employee_id), like(u.firstname), like(u.lastname),
+            like(func.concat_ws(" ", u.firstname, u.lastname))),
     )
     return or_(like(FormSubmission.form_id), requester, like(FinAdvance.purpose), like(FinAdvance.voucher_no),
-               _has_answer("adv_purpose", like(FormSubmissionValue.value_text)))
+               _has_answer("adv_purpose", like))
 
 
 def status_clause(statuses):
