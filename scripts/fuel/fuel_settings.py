@@ -25,6 +25,7 @@ DEFAULTS = {
     "clear_consumption_l": 2.0,  # … and at or below this = clear (auto-close)
     "noisy_sensor_pct": 3.0,    # parked noise above this lowers the score
     "faulty_sensor_pct": 10.0,  # parked noise above this = sensor_fault
+    "noise_rise_factor": 1.5,   # a drop ≤ this × the sensor's unexplained rises that day = noise (starting rule)
     # burn baselines (spec §4.1)
     "baseline_days": 30,
     "baseline_min_days": 7,
