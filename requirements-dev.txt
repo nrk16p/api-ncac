@@ -1,1 +1,7 @@
-pytest
+# Local test/run env for scripts/fuel on macOS — Render installs requirements.txt only
+numpy
+pymongo
+requests
+python-dotenv
+urllib3
+pytest>=8
