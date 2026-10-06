@@ -241,6 +241,13 @@ async def startup_event():
     scheduler.add_job(_run, CronTrigger(hour=21, minute=0),  args=["engineon"], id="sched_engineon")                          # 04:00 BKK
     scheduler.add_job(_run, CronTrigger(hour=23, minute=10), args=["drivercost_ticket"], id="sched_drivercost_ticket")        # 06:10 BKK
     scheduler.add_job(_run, CronTrigger(hour=23, minute=30), args=["engineon_trip_summary"], id="sched_engineon_trip_summary")  # 06:30 BKK
+    # fuel series (fuel-control-center spec 2026-10-06) — BKK→UTC −7:
+    # Besttech per-vehicle /history for yesterday at 01:30 BKK → 18:30 UTC (~76 min at 35 s per call;
+    # /history_all is avoided — it locks the key out); fuel_nightly at 04:15 BKK → 21:15 UTC:
+    # Besttech catch-up only if the 01:30 run left nothing and is not still running, then Terminus
+    # once engine-on (21:00 UTC, ~1 min) has read the same day — done before stockmovement 22:00 UTC
+    scheduler.add_job(_run, CronTrigger(hour=18, minute=30), args=["fuel_series_besttech"], id="sched_fuel_series_besttech")  # 01:30 BKK
+    scheduler.add_job(_run, CronTrigger(hour=21, minute=15), args=["fuel_nightly"], id="sched_fuel_nightly")                  # 04:15 BKK
     # maintenance (MR sync → maint_* + repair-analysis) 02:00 BKK → 19:00 UTC —
     # ATMS โหลดต่ำ และก่อน ld/scco (09:00/09:20 BKK จริงตาม UTC)
     scheduler.add_job(_run, CronTrigger(hour=19, minute=0), args=["maintenance"], id="sched_maintenance")  # 02:00 BKK
