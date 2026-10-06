@@ -142,3 +142,12 @@ def test_history_all_is_not_offered():
 def test_missing_key_raises():
     with pytest.raises(BesttechError):
         BesttechClient("")
+
+
+def test_location_body_and_rows():
+    resp = FakeResp({"what": "ok", "info": [{"code": "L008", "name": "LAB"}]})
+    client, session, _ = make([resp, FakeResp({"what": "ok", "info": []})])
+    assert client.location() == [{"code": "L008", "name": "LAB"}]
+    assert session.calls[0]["url"].endswith("/apiservices/location") and session.calls[0]["json"] == {}
+    assert client.location("2026-06-01") == []
+    assert session.calls[1]["json"] == {"since_modified_date": "2026-06-01"}
