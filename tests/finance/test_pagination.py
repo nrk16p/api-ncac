@@ -121,7 +121,7 @@ def test_declared_param_bounds():
 
 def _call(**kw):
     base = dict(status=None, overdue=None, employee_id=None, acc_code=None, date_from=None, date_to=None,
-                cost_center=None, q=None, page=None, page_size=20, db=object())
+                cost_center=None, q=None, department=None, sort="desc", page=None, page_size=20, db=object())
     base.update(kw)
     return routes.list_advances(**base)
 
@@ -137,7 +137,8 @@ def test_paged_mode_passes_params(monkeypatch):
     seen = {}
     monkeypatch.setattr(repo, "list_advances_page", lambda db, **k: seen.update(k) or {"items": [], "total": 0})
     _call(page=2, page_size=50, status="SENT_BACK,CLOSED", overdue=True, q="ab", cost_center="CC1",
-          employee_id="E1", date_from=date(2026, 10, 1))
+          employee_id="E1", date_from=date(2026, 10, 1), department="บัญชี", sort="asc")
+    assert seen["department"] == "บัญชี" and seen["sort"] == "asc"
     assert seen["page"] == 2 and seen["page_size"] == 50 and seen["statuses"] == ["SENT_BACK", "CLOSED"]
     assert seen["overdue"] is True and seen["q"] == "ab" and seen["cost_center"] == "CC1"
     assert seen["date_from"] == date(2026, 10, 1) and seen["employee_id"] == "E1"
@@ -239,3 +240,143 @@ def test_history_page_unknown_approver():
     finally:
         m.users_by_employee_ids = orig
     assert out == {"items": [], "total": 0, "page": 1, "page_size": 20}
+
+
+# ---------------------------- FE contract additions ----------------------------
+
+def _sql(query_or_clause):
+    return str(query_or_clause.compile(dialect=postgresql.dialect()))
+
+
+def _session():
+    from sqlalchemy.orm import Session
+    return Session()
+
+
+def _ents():
+    from models.finance_model import FinAdvance
+    from models.master_model import FormSubmission
+    return (FormSubmission, FinAdvance)
+
+
+def test_department_filter_is_exact_name_match():
+    q = repo._scoped_query(_session(), _ents(), department="บัญชี")
+    sql = _sql(q.statement)
+    assert "departments.department_name_th =" in sql and "users.department_id" in sql
+
+
+def test_q_matches_voucher_no():
+    assert "fin_advances.voucher_no ILIKE" in _sql(repo._search_condition("SADV"))
+
+
+def test_sort_param_declared_and_order_applied(monkeypatch):
+    import inspect
+    assert inspect.signature(routes.list_advances).parameters["sort"].default.default == "desc"
+
+    class Q:
+        def __init__(self):
+            self.orders = []
+
+        def __getattr__(self, n):
+            def f(*a, **k):
+                if n == "order_by":
+                    self.orders.append(a)
+                return self
+            return f
+
+        def scalar(self):
+            return 0
+
+        def all(self):
+            return []
+
+    seen = []
+
+    def fake_scoped(db, ents, **kw):
+        q = Q()
+        seen.append(q)
+        return q
+    monkeypatch.setattr(repo, "_scoped_query", fake_scoped)
+    monkeypatch.setattr(repo, "_serialize_rows", lambda db, rows: [])
+    monkeypatch.setattr(repo, "_filter_options", lambda db, **k: {"cost_centers": [], "departments": []})
+    for direction in ("asc", "desc"):
+        seen.clear()
+        out = repo.list_advances_page(NS(), page=1, page_size=5, sort=direction)
+        page_q = [q for q in seen if any(len(o) == 2 for o in q.orders)][0]
+        modifiers = [str(c.modifier.__name__ if hasattr(c.modifier, "__name__") else c.modifier)
+                     for c in page_q.orders[-1]]
+        assert modifiers == [("asc_op" if direction == "asc" else "desc_op")] * 2
+        assert set(out) == {"items", "total", "page", "page_size", "summary", "options"}
+
+
+def test_filter_options_scope_excludes_status_cost_center_department(monkeypatch):
+    got = []
+
+    class Q:
+        def __getattr__(self, n):
+            return lambda *a, **k: self
+
+        def all(self):
+            return [("B",), ("A",), ("B",)]
+
+    monkeypatch.setattr(repo, "_scoped_query", lambda db, ents, **kw: got.append(kw) or Q())
+    out = repo._filter_options(NS(), employee_id="E", q="x")
+    assert out == {"cost_centers": ["A", "B"], "departments": ["A", "B"]}
+    assert all(set(kw) == {"employee_id", "q"} for kw in got)
+
+
+def test_paged_scope_excludes_filters_for_options(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(repo, "_filter_options", lambda db, **k: seen.update(k) or {})
+    monkeypatch.setattr(repo, "_scoped_query", lambda *a, **k: _EmptyQ())
+    monkeypatch.setattr(repo, "_serialize_rows", lambda db, rows: [])
+    repo.list_advances_page(NS(), page=1, page_size=5, employee_id="E", q="x", cost_center="C", department="D",
+                            acc_code=None, date_from=date(2026, 10, 1))
+    assert "cost_center" not in seen and "department" not in seen
+    assert seen["employee_id"] == "E" and seen["q"] == "x" and seen["date_from"] == date(2026, 10, 1)
+
+
+class _EmptyQ:
+    def __getattr__(self, n):
+        return lambda *a, **k: self
+
+    def all(self):
+        return []
+
+    def scalar(self):
+        return 0
+
+
+def _history_db(scope_seen):
+    class LQ:
+        def __getattr__(self, n):
+            def f(*a, **k):
+                scope_seen.append((n, " ".join(_sql(x) for x in a if hasattr(x, "compile"))))
+                return self
+            return f
+
+        def all(self):
+            return []
+    return NS(query=lambda *e: LQ())
+
+
+@pytest.mark.parametrize("scope,op", [("advance", "form_masters.form_type ="), ("it", "form_masters.form_type !=")])
+def test_history_scope_filters_in_sql_before_paging(monkeypatch, scope, op):
+    approver = NS(id=9, employee_id="A1", firstname="a", lastname="b")
+    monkeypatch.setattr(fa, "users_by_employee_ids", lambda db, ids: {"A1": approver})
+    seen = []
+    out = fa.get_approval_history(employee_id="A1", start_date=None, end_date=None, page=1, page_size=5,
+                                  scope=scope, db=_history_db(seen))
+    assert out["total"] == 0
+    assert any(op in clause for _, clause in seen), seen
+
+
+def test_history_scope_all_adds_no_form_join(monkeypatch):
+    approver = NS(id=9, employee_id="A1", firstname="a", lastname="b")
+    monkeypatch.setattr(fa, "users_by_employee_ids", lambda db, ids: {"A1": approver})
+    seen = []
+    fa.get_approval_history(employee_id="A1", start_date=None, end_date=None, page=1, page_size=5, scope="all",
+                            db=_history_db(seen))
+    assert not any("form_masters" in clause for _, clause in seen)
+    import inspect
+    assert inspect.signature(fa.get_approval_history).parameters["scope"].default.default == "all"

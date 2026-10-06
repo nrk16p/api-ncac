@@ -432,16 +432,21 @@ def users_by_employee_ids(db: Session, employee_ids) -> dict:
     return found
 
 
-def _approval_history_page(db, employee_id, start_date, end_date, page, page_size):
+def _approval_history_page(db, employee_id, start_date, end_date, page, page_size, scope="all"):
     approver = users_by_employee_ids(db, [employee_id]).get(employee_id)
     if not approver:
         return {"items": [], "total": 0, "page": page, "page_size": page_size}
 
     # light ordered scan (ids only) → dedupe → slice; only the page's rows are loaded in full
     order = (FormApprovalLog.action_at.desc(), FormApprovalLog.id.asc())
-    light = _history_filters(
-        db.query(FormApprovalLog.id, FormApprovalLog.submission_id), approver, start_date, end_date
-    ).order_by(*order).all()
+    light_q = _history_filters(
+        db.query(FormApprovalLog.id, FormApprovalLog.submission_id), approver, start_date, end_date)
+    if scope in ("advance", "it"):
+        light_q = (light_q.join(FormSubmission, FormApprovalLog.submission_id == FormSubmission.id)
+                   .join(FormMaster, FormMaster.id == FormSubmission.form_master_id))
+        light_q = light_q.filter(FormMaster.form_type == ADVANCE_FORM_TYPE if scope == "advance"
+                                 else FormMaster.form_type != ADVANCE_FORM_TYPE)
+    light = light_q.order_by(*order).all()
     kept = latest_log_per_submission((r[0], r[1]) for r in light)
     page_ids = kept[(page - 1) * page_size: page * page_size]
 
@@ -474,13 +479,16 @@ def get_approval_history(
     end_date: str | None = Query(None),
     page: int | None = Query(None, ge=1),
     page_size: int = Query(20, ge=1, le=200),
+    scope: str = Query("all", pattern="^(advance|it|all)$"),
     db: Session = Depends(get_db),
 ):
-    """Without `page`: the full array (IT and ADV, unchanged). With `page` (1-based): {items, total, page,
+    """`scope` (paged mode only): advance = form_type Advance (is_advance_submission), it = others, all; applied in
+    SQL before paging. Without `page`: the full array (IT and ADV, unchanged). With `page` (1-based): {items, total, page,
     page_size}; page < 1 or page_size outside 1..200 → 422."""
     if isinstance(page, int):  # (a direct call without the arg leaves the Query default object here)
         return _approval_history_page(db, employee_id, start_date, end_date, page,
-                                      page_size if isinstance(page_size, int) else 20)
+                                      page_size if isinstance(page_size, int) else 20,
+                                      scope if isinstance(scope, str) else "all")
 
     approver = get_user_by_employee_id(db, employee_id)
     if not approver:

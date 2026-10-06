@@ -108,13 +108,16 @@ def list_advances(
     date_to: Optional[date] = None,
     cost_center: Optional[str] = None,
     q: Optional[str] = None,
+    department: Optional[str] = None,
+    sort: str = Query("desc", pattern="^(asc|desc)$"),
     page: Optional[int] = Query(None, ge=1),
     page_size: int = Query(logic.PAGE_SIZE_DEFAULT, ge=1, le=logic.PAGE_SIZE_MAX),
     db: Session = Depends(get_db),
 ):
     """Without `page`: the full array (unchanged). With `page` (1-based): {items, total, page, page_size, summary}
     (v3 §9) — `status` is a comma list of derived statuses, `q` is capped at 100 chars and matched literally.
-    Invalid page / page_size (page < 1, page_size outside 1..200) or an unknown status → 422 (no clamping)."""
+    `department` = exact requester department name; `sort` = asc|desc on created_at (default desc);
+    `summary`/`options` ignore status, overdue, cost_center and department. Invalid page / page_size (page < 1, page_size outside 1..200) or an unknown status → 422 (no clamping)."""
     if page is None:
         return repo.list_advances(db, status=status, overdue=overdue, employee_id=employee_id,
                                   acc_code=acc_code, date_from=date_from, date_to=date_to)
@@ -123,7 +126,8 @@ def list_advances(
         raise HTTPException(status_code=422, detail=f"สถานะไม่ถูกต้อง: {', '.join(unknown)}")
     return repo.list_advances_page(
         db, page=page, page_size=page_size, statuses=statuses, overdue=overdue, employee_id=employee_id,
-        acc_code=acc_code, date_from=date_from, date_to=date_to, cost_center=cost_center, q=q)
+        acc_code=acc_code, date_from=date_from, date_to=date_to, cost_center=cost_center, q=q,
+        department=department, sort=sort)
 
 
 @router.get("/summary")

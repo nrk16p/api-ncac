@@ -217,7 +217,7 @@ def serialize_advance(sub, adv, request, people, acc_names, today, clear_items=N
 
 
 def _scoped_query(db, entities, *, employee_id=None, acc_code=None, date_from=None, date_to=None,
-                  cost_center=None, q=None):
+                  cost_center=None, q=None, department=None):
     """Advance submissions (+ optional fin row) in scope. date_from/date_to filter form_submissions.created_at by
     Bangkok calendar day — the same field the FE month filter uses (toBkkYM(item.created_at))."""
     query = (
@@ -237,6 +237,11 @@ def _scoped_query(db, entities, *, employee_id=None, acc_code=None, date_from=No
         query = query.filter(FormSubmission.created_at < bkk_day_start_utc(date_to + timedelta(days=1)))
     if cost_center:
         query = query.filter(_has_answer("adv_cost_center", FormSubmissionValue.value_text == cost_center))
+    if department:
+        query = query.filter(exists().where(
+            User.employee_id == FormSubmission.created_by,
+            Department.department_id == User.department_id,
+            Department.department_name_th == department))
     q = logic.clean_q(q)
     if q:
         query = query.filter(_search_condition(q))
@@ -265,7 +270,7 @@ def _search_condition(q):
         or_(like(User.employee_id), like(User.firstname), like(User.lastname),
             like(func.concat_ws(" ", User.firstname, User.lastname))),
     )
-    return or_(like(FormSubmission.form_id), requester, like(FinAdvance.purpose),
+    return or_(like(FormSubmission.form_id), requester, like(FinAdvance.purpose), like(FinAdvance.voucher_no),
                _has_answer("adv_purpose", like(FormSubmissionValue.value_text)))
 
 
@@ -309,6 +314,23 @@ def _serialize_rows(db, rows):
                               clear_items.get(adv.id) if adv is not None else None) for sub, adv in rows]
 
 
+def _filter_options(db, **scope):
+    """Distinct non-empty cost centers / requester department names in scope (no status, overdue, cost_center or
+    department filter), sorted — the FE fills its two dropdowns from this."""
+    centers = (_scoped_query(db, (FormSubmissionValue.value_text,), **scope)
+               .join(FormSubmissionValue, FormSubmissionValue.submission_id == FormSubmission.id)
+               .join(FormQuestion, FormQuestion.id == FormSubmissionValue.question_id)
+               .filter(FormQuestion.question_name == "adv_cost_center",
+                       FormSubmissionValue.value_text.isnot(None), FormSubmissionValue.value_text != "")
+               .distinct().all())
+    depts = (_scoped_query(db, (Department.department_name_th,), **scope)
+             .join(User, User.employee_id == FormSubmission.created_by)
+             .join(Department, Department.department_id == User.department_id)
+             .filter(Department.department_name_th.isnot(None), Department.department_name_th != "")
+             .distinct().all())
+    return {"cost_centers": sorted({r[0] for r in centers}), "departments": sorted({r[0] for r in depts})}
+
+
 def list_advances(db, *, status=None, overdue=None, employee_id=None, acc_code=None, date_from=None, date_to=None):
     """The full (unpaged) list, newest id first. `status` may be a comma list of derived statuses."""
     query = _scoped_query(db, (FormSubmission, FinAdvance), employee_id=employee_id, acc_code=acc_code,
@@ -324,11 +346,12 @@ def list_advances(db, *, status=None, overdue=None, employee_id=None, acc_code=N
 
 
 def list_advances_page(db, *, page, page_size, statuses=None, overdue=None, employee_id=None, acc_code=None,
-                       date_from=None, date_to=None, cost_center=None, q=None):
+                       date_from=None, date_to=None, cost_center=None, q=None, department=None,
+                       sort="desc"):
     """Server-side paging (v3 §9): status/overdue/search filtering and paging run in SQL. Queries: summary
     GROUP BY, total count, one page, then one batch each for values, people, accounts and clear items."""
     scope = dict(employee_id=employee_id, acc_code=acc_code, date_from=date_from, date_to=date_to,
-                 cost_center=cost_center, q=q)
+                 cost_center=cost_center, q=q, department=department)
     today = today_bkk()
     overdue_flag = case((overdue_clause(today), 1), else_=0)
     group_rows = (
@@ -346,10 +369,13 @@ def list_advances_page(db, *, page, page_size, statuses=None, overdue=None, empl
     elif overdue is False:
         filtered = filtered.filter(not_(func.coalesce(overdue_clause(today), false())))
     total = filtered.order_by(None).with_entities(func.count(FormSubmission.id)).scalar() or 0
-    rows = (filtered.order_by(FormSubmission.created_at.desc(), FormSubmission.id.desc())
+    direction = (lambda c: c.asc()) if sort == "asc" else (lambda c: c.desc())
+    rows = (filtered.order_by(direction(FormSubmission.created_at), direction(FormSubmission.id))
             .offset((page - 1) * page_size).limit(page_size).all())
     return {"items": _serialize_rows(db, rows), "total": int(total), "page": page, "page_size": page_size,
-            "summary": summary}
+            "summary": summary,
+            "options": _filter_options(db, **{k: v for k, v in scope.items()
+                                              if k not in ("cost_center", "department")})}
 
 
 def get_advance_detail(db, form_id):
