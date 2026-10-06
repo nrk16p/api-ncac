@@ -12,6 +12,7 @@ to a project/issue they created.
 from __future__ import annotations
 
 import re
+from urllib.parse import urlparse
 from typing import Iterable, List, Optional
 
 try:
@@ -55,6 +56,8 @@ MSG_COMMENT_OWN_ONLY = "แก้ไขได้เฉพาะความค�
 MSG_REVIEW_ITEM_NOT_FOUND = "ไม่พบรายการ"
 MSG_PROJECT_CLOSED_ASSIGNEES = "โปรเจกต์นี้ปิดแล้ว แก้ไขผู้รับผิดชอบไม่ได้"
 MSG_PROJECT_CLOSED_PLAN = "โปรเจกต์นี้ปิดแล้ว แก้ไขแผนงานไม่ได้"
+MSG_LINK_DONE_ONLY = "ใส่ลิงก์ได้เมื่อโปรเจกต์เป็น Done แล้ว"
+MSG_LINK_INVALID = "ลิงก์ต้องขึ้นต้นด้วย http:// หรือ https://"
 MSG_PROJECT_CLOSED_EDIT = "โปรเจกต์นี้ปิดแล้ว แก้ไขคำขอไม่ได้"
 MSG_PROJECT_EDIT_FORBIDDEN = "แก้ไขคำขอได้เฉพาะผู้รับผิดชอบ (คำขอจากระบบ) หรือคนในแผนกเดียวกับผู้ยื่น"
 MSG_PROJECT_REJECTED_TASK_CREATE = "โปรเจกต์นี้ไม่อนุมัติ สร้าง Task ไม่ได้"
@@ -150,6 +153,19 @@ def can_edit_project(project: dict, caller_employee_id: str, caller_username: Op
         return True
     dept = _norm(caller_department)
     return bool(dept) and dept == _norm(requester.get("department"))
+
+
+def validate_link_url(project_status: str, url: Optional[str]) -> Optional[str]:
+    """Done projects only; http(s) with a host, or empty/None to clear."""
+    if project_status != "Done":
+        raise OpsConflict(MSG_LINK_DONE_ONLY)
+    url = (url or "").strip()
+    if not url:
+        return None
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise OpsError(MSG_LINK_INVALID, {"url": MSG_LINK_INVALID})
+    return url
 
 
 def require_project_editable(project: dict, caller_employee_id: str, caller_username: Optional[str], caller_department: Optional[str]) -> None:

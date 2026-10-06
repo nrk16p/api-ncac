@@ -115,6 +115,12 @@ class ProjectEditInput(BaseModel):
         return self
 
 
+class LinkInput(BaseModel):
+    """PATCH /ops/projects/{id}/link — null clears it."""
+    model_config = ConfigDict(extra="forbid")
+    url: Optional[str] = Field(default=None, max_length=2000)
+
+
 class Project(BaseModel):
     project_id: str
     title: str
@@ -136,6 +142,8 @@ class Project(BaseModel):
     attachments: List[Attachment] = Field(default_factory=list)
     status_history: List[StatusChange] = Field(default_factory=list)
     review: Optional[Review] = None
+    # where the finished system is used — set by the OPS team once Done
+    link_url: Optional[str] = None
     issue_count: int = 0
     # whether the caller may PATCH /ops/projects/{id} (ops_logic.can_edit_project)
     can_edit: bool = False

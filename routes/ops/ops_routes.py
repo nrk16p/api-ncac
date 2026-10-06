@@ -263,6 +263,20 @@ def update_project(
     return _project_out(updated, count, caller)
 
 
+@router.patch("/projects/{project_id}/link", response_model=schemas.Project)
+def update_project_link(
+    project_id: str,
+    body: schemas.LinkInput,
+    caller: Caller = Depends(get_caller),
+):
+    ops_logic.require_manager(caller.is_manager)
+    doc = _require_project(project_id)
+    url = ops_logic.validate_link_url(doc["status"], body.url)
+    updated = ops_repo.update_project_fields(project_id, {"link_url": url})
+    count = ops_repo.bulk_issue_counts([project_id]).get(project_id, 0)
+    return _project_out(updated, count, caller)
+
+
 @router.patch("/projects/{project_id}/status", response_model=schemas.Project)
 def update_project_status(
     project_id: str,
