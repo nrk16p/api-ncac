@@ -43,7 +43,7 @@ def log(lid, level_no, action, action_by, at=None):
 
 @pytest.fixture
 def ctx(monkeypatch):
-    monkeypatch.setattr(R, "load_context", lambda db: CTX)
+    monkeypatch.setattr(R, "load_context", lambda db, fresh=False: CTX)
 
 
 # ---------------------------- rounds ----------------------------

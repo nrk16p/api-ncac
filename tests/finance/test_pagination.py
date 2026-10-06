@@ -110,13 +110,11 @@ def _bounds(func, name):
 
 
 def test_declared_param_bounds():
-    """FastAPI answers 422 outside these bounds (no clamping)."""
-    assert _bounds(routes.list_advances, "page") == {"ge": 1}
-    assert _bounds(routes.list_advances, "page_size") == {"ge": 1, "le": 200}
-    assert _bounds(fa.get_approval_history, "page") == {"ge": 1}
-    assert _bounds(fa.get_approval_history, "page_size") == {"ge": 1, "le": 200}
+    """FastAPI answers 422 outside the page bounds; page_size/sort/scope are validated by hand in paged mode only."""
+    assert _bounds(routes.list_advances, "page") == {"ge": 1, "le": 1_000_000}
+    assert _bounds(fa.get_approval_history, "page") == {"ge": 1, "le": 1_000_000}
     import inspect
-    assert inspect.signature(routes.list_advances).parameters["page_size"].default.default == 20
+    assert inspect.signature(routes.list_advances).parameters["page_size"].default.default == "20"
 
 
 def _call(**kw):
@@ -410,3 +408,122 @@ def test_answer_exists_survives_an_outer_values_join():
 def FormSubmission_id():
     from models.master_model import FormSubmission
     return FormSubmission.id
+
+
+# ---------------------------- fix round: cache freshness, NUL, unpaged tolerance ----------------------------
+
+def _ctx(people):
+    return AR.ApprovalContext(tiers=[], people=people, mappings={})
+
+
+def test_approval_decision_bypasses_cache(monkeypatch):
+    seen = []
+    monkeypatch.setattr(AR, "load_context", lambda db, fresh=False: seen.append(fresh) or _ctx({}))
+    monkeypatch.setattr(AR, "_amount_of", lambda db, sid: 1)
+    monkeypatch.setattr(AR, "describe", lambda *a, **k: (_ for _ in ()).throw(AR.AdvanceRuleError("x")))
+    assert AR.approval_decision(None, NS(id=1, created_by="R"), "A") == {"allowed": False}
+    assert seen == [True]
+
+
+def test_fresh_load_bypasses_and_refreshes_cache(monkeypatch):
+    AR.clear_context_cache()
+    calls = []
+    monkeypatch.setattr(AR, "load_tiers", lambda db: calls.append(1) or [])
+    monkeypatch.setattr(AR, "load_people", lambda db: {})
+    monkeypatch.setattr(AR, "load_mappings", lambda db: {})
+    first = AR.load_context(object())
+    fresh = AR.load_context(object(), fresh=True)
+    assert fresh is not first and len(calls) == 2
+    assert AR.load_context(object()) is fresh and len(calls) == 2
+    AR.clear_context_cache()
+
+
+def test_ensure_people_reloads_once_for_missing_id(monkeypatch):
+    seen = []
+    newer = _ctx({"NEW": {"level": 1}})
+    monkeypatch.setattr(AR, "load_context", lambda db, fresh=False: seen.append(fresh) or newer)
+    stale = _ctx({"OLD": {}})
+    assert AR.ensure_people(None, stale, "OLD", None) is stale and seen == []
+    assert AR.ensure_people(None, stale, "OLD", "NEW") is newer and seen == [True]
+
+
+def test_suggested_approvers_new_requester_no_keyerror(monkeypatch):
+    stale = _ctx({})
+    fresh = _ctx({"R": {"employee_id": "R", "level": 1, "department_id": 1, "active": True}})
+    monkeypatch.setattr(AR, "load_context", lambda db, fresh=False: fresh if fresh else stale)
+    monkeypatch.setattr(AR, "_amount_of", lambda db, sid: 1)
+    monkeypatch.setattr(AR, "describe", lambda db, rid, amt, ctx=None: pytest.fail("reached") if ctx is stale else
+                        (_ for _ in ()).throw(AR.AdvanceRuleError("stop")))
+    with pytest.raises(AR.AdvanceRuleError):  # got past ctx.people[...] on the fresh context, no KeyError
+        AR.suggested_approvers(None, NS(id=1, created_by="R", current_approval_level=1))
+
+
+def test_department_mapping_writers_clear_cache(monkeypatch):
+    cleared = []
+    monkeypatch.setattr(fa.approval_repo, "clear_context_cache", lambda: cleared.append(1))
+
+    class Q:
+        def filter(self, *a):
+            return self
+
+        def first(self):
+            return NS(is_active=False)
+
+    class Db:
+        def query(self, *a):
+            return Q()
+
+        def add(self, *a):
+            pass
+
+        def commit(self):
+            pass
+
+    fa.assign_departments(NS(employee_id="E", department_ids=[1, 2]), Db())
+    fa.remove_department("E", 1, Db())
+    assert cleared == [1, 1]
+
+
+def test_nul_stripped_from_free_text():
+    assert L.clean_q("a\x00b ") == "ab" and L.clean_q("\x00") is None
+    assert L.clean_text("x\x00y") == "xy" and L.clean_text("\x00") is None and L.clean_text(None) is None
+
+
+def test_paged_mode_cleans_nul(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(repo, "list_advances_page", lambda db, **k: seen.update(k) or {})
+    _call(page=1, q="a\x00b", cost_center="c\x00c", department="d\x00")
+    assert (seen["q"], seen["cost_center"], seen["department"]) == ("ab", "cc", "d")
+
+
+def test_page_upper_bound_declared():
+    assert _bounds(routes.list_advances, "page")["le"] == 1_000_000
+
+
+def test_unpaged_ignores_bad_page_size_and_sort(monkeypatch):
+    monkeypatch.setattr(repo, "list_advances", lambda db, **k: [])
+    assert _call(page_size="abc", sort="zzz") == []
+    assert _call(page_size="9999", sort="zzz") == []
+
+
+@pytest.mark.parametrize("kw", [dict(page_size="0"), dict(page_size="201"), dict(page_size="abc"), dict(sort="zzz")])
+def test_paged_validates_page_size_and_sort(monkeypatch, kw):
+    monkeypatch.setattr(repo, "list_advances_page", lambda *a, **k: pytest.fail("must not query"))
+    with pytest.raises(HTTPException) as e:
+        _call(page=1, **kw)
+    assert e.value.status_code == 422
+
+
+def test_history_unpaged_ignores_bad_params_and_paged_validates(monkeypatch):
+    monkeypatch.setattr(fa, "get_user_by_employee_id", lambda db, e: None)
+    assert fa.get_approval_history(employee_id="X", start_date=None, end_date=None, page=None, page_size="abc",
+                                   scope="zzz", db=object()) == []
+    for kw in (dict(page_size="0"), dict(scope="zzz")):
+        with pytest.raises(HTTPException) as e:
+            fa.get_approval_history(employee_id="X", start_date=None, end_date=None, page=1, db=object(), **kw)
+        assert e.value.status_code == 422
+
+
+def test_docstring_states_summary_applies_cost_center_department():
+    doc = " ".join(routes.list_advances.__doc__.split())
+    assert "only `options` also ignores cost_center and department" in doc

@@ -121,9 +121,25 @@ def parse_status_list(raw):
     return known, unknown
 
 
+def parse_page_size(raw):
+    """Paged mode only: int in 1..PAGE_SIZE_MAX (None/default → PAGE_SIZE_DEFAULT); otherwise None (→ 422)."""
+    if raw is None:
+        return PAGE_SIZE_DEFAULT
+    try:
+        n = int(str(raw).strip())
+    except ValueError:
+        return None
+    return n if 1 <= n <= PAGE_SIZE_MAX else None
+
+
+def clean_text(value):
+    """Free-text filter value: NUL removed (psycopg raises on \\x00 → 500); empty → None."""
+    return (value or "").replace("\x00", "") or None
+
+
 def clean_q(q):
-    """Search text: stripped, capped at Q_MAX_LEN characters; empty → None."""
-    q = (q or "").strip()[:Q_MAX_LEN].strip()
+    """Search text: NUL removed, stripped, capped at Q_MAX_LEN characters; empty → None."""
+    q = (q or "").replace("\x00", "").strip()[:Q_MAX_LEN].strip()
     return q or None
 
 

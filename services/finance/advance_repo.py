@@ -359,7 +359,7 @@ def list_advances_page(db, *, page, page_size, statuses=None, overdue=None, empl
     """Server-side paging (v3 §9): status/overdue/search filtering and paging run in SQL. Queries: summary
     GROUP BY, total count, one page, then one batch each for values, people, accounts and clear items."""
     scope = dict(employee_id=employee_id, acc_code=acc_code, date_from=date_from, date_to=date_to,
-                 cost_center=cost_center, q=q, department=department)
+                 cost_center=logic.clean_text(cost_center), q=q, department=logic.clean_text(department))
     today = today_bkk()
     overdue_flag = case((overdue_clause(today), 1), else_=0)
     group_rows = (

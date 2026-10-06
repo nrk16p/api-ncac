@@ -4,6 +4,7 @@ from database import get_db
 from fastapi import BackgroundTasks
 from services.email_service import render_form_rejected_th ,  send_email , render_form_approved_th
 from services.notify_guard import ADVANCE_FORM_TYPE, notifications_enabled
+from services.finance import advance_logic as fin_logic
 from services.finance import approval_repo
 from services.finance import finance_mail as fin_mail
 
@@ -477,18 +478,23 @@ def get_approval_history(
     employee_id: str = Query(...),
     start_date: str | None = Query(None),
     end_date: str | None = Query(None),
-    page: int | None = Query(None, ge=1),
-    page_size: int = Query(20, ge=1, le=200),
-    scope: str = Query("all", pattern="^(advance|it|all)$"),
+    page: int | None = Query(None, ge=1, le=1_000_000),
+    page_size: str | None = Query("20"),
+    scope: str | None = Query("all"),
     db: Session = Depends(get_db),
 ):
     """`scope` (paged mode only): advance = form_type Advance (is_advance_submission), it = others, all; applied in
     SQL before paging. Without `page`: the full array (IT and ADV, unchanged). With `page` (1-based): {items, total, page,
-    page_size}; page < 1 or page_size outside 1..200 → 422."""
+    page_size}; page < 1 or > 1,000,000, page_size outside 1..200 or scope not advance|it|all → 422. Without `page`,
+    `page_size` and `scope` are ignored (never a 422)."""
     if isinstance(page, int):  # (a direct call without the arg leaves the Query default object here)
-        return _approval_history_page(db, employee_id, start_date, end_date, page,
-                                      page_size if isinstance(page_size, int) else 20,
-                                      scope if isinstance(scope, str) else "all")
+        size = fin_logic.parse_page_size(page_size if isinstance(page_size, (int, str)) else None)
+        if size is None:
+            raise HTTPException(422, "page_size ต้องเป็นตัวเลข 1..200")
+        scope = scope if isinstance(scope, str) else "all"
+        if scope not in ("advance", "it", "all"):
+            raise HTTPException(422, "scope ต้องเป็น advance, it หรือ all")
+        return _approval_history_page(db, employee_id, start_date, end_date, page, size, scope)
 
     approver = get_user_by_employee_id(db, employee_id)
     if not approver:
@@ -785,6 +791,7 @@ def assign_departments(
             row.is_active = True
 
     db.commit()
+    approval_repo.clear_context_cache()  # approver-department mappings feed the cached approval context
 
     return {
         "message": "Departments assigned",
@@ -825,6 +832,7 @@ def remove_department(
 
     row.is_active = False
     db.commit()
+    approval_repo.clear_context_cache()
 
     return {
         "message": "Department removed",

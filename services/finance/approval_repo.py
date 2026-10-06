@@ -54,6 +54,9 @@ def load_mappings(db):
 
 # v3 §9: users/tiers/mappings change rarely, so the context is cached in-process for 60 s (level and department
 # changes apply within a minute). One global entry (no key); the lock guards the swap, loading happens outside it.
+# The cached ApprovalContext is SHARED and READ-ONLY: never mutate tiers/people/mappings (copy first).
+# Authorization decisions (approve/reject) must use load_context(db, fresh=True); writers of approver-department
+# mappings / approval tiers must call clear_context_cache(); readers that look up a person use ensure_people().
 CONTEXT_TTL_SECONDS = 60
 _clock = time.monotonic
 _ctx_lock = threading.Lock()
@@ -66,21 +69,30 @@ def clear_context_cache():
         _ctx_cache = None
 
 
-def load_context(db) -> ApprovalContext:
+def load_context(db, fresh=False) -> ApprovalContext:
+    """The (read-only, shared) approval context. fresh=True bypasses the cache and refreshes it."""
     global _ctx_cache
-    with _ctx_lock:
-        hit = _ctx_cache
-    if hit is not None and _clock() < hit[0]:
-        return hit[1]
+    if not fresh:
+        with _ctx_lock:
+            hit = _ctx_cache
+        if hit is not None and _clock() < hit[0]:
+            return hit[1]
     ctx = ApprovalContext(tiers=load_tiers(db), people=load_people(db), mappings=load_mappings(db))
     with _ctx_lock:
         _ctx_cache = (_clock() + CONTEXT_TTL_SECONDS, ctx)
     return ctx
 
 
+def ensure_people(db, ctx: ApprovalContext, *employee_ids) -> ApprovalContext:
+    """`ctx` when it knows every given id; otherwise (e.g. a user created within the cache TTL) one fresh reload."""
+    if all(i is None or i in ctx.people for i in employee_ids):
+        return ctx
+    return load_context(db, fresh=True)
+
+
 def describe(db, requester_employee_id, amount, ctx: ApprovalContext | None = None):
     """v2 keys (clause, approver_label, min_level, required_level = final step, direct_level) + steps."""
-    ctx = ctx or load_context(db)
+    ctx = ctx or ensure_people(db, load_context(db), requester_employee_id)
     return rules.evaluate(ctx.tiers, ctx.people, ctx.mappings, requester_employee_id, amount)
 
 
@@ -117,7 +129,7 @@ def current_round_logs(db, submission_id) -> list:
 
 def approval_decision(db, submission, approver_employee_id) -> dict:
     """Eligibility for the submission's current step + what an approval would do (see rules.decide)."""
-    ctx = load_context(db)
+    ctx = load_context(db, fresh=True)  # authorization: never decide on a stale level/active/department
     try:
         info = describe(db, submission.created_by, _amount_of(db, submission.id), ctx)
     except AdvanceRuleError:
@@ -159,7 +171,7 @@ def _users_by_id(db, user_ids):
 
 def detail_approval(db, submission, amount) -> dict:
     """The detail `approval` block: v2 keys + steps, current_step, step_approvals (current round)."""
-    ctx = load_context(db)
+    ctx = ensure_people(db, load_context(db), submission.created_by)
     info = describe(db, submission.created_by, amount, ctx)
     logs = current_round_logs(db, submission.id)
     state = rules.evaluate_step(info, ctx.people, ctx.mappings, submission.created_by,
@@ -182,8 +194,8 @@ def detail_approval(db, submission, amount) -> dict:
 
 def suggested_approvers(db, submission) -> dict:
     """The lowest eligible approvers of the submission's current step (share link)."""
-    ctx = load_context(db)
     requester_id = submission.created_by
+    ctx = ensure_people(db, load_context(db), requester_id)
     info = describe(db, requester_id, _amount_of(db, submission.id), ctx)
     requester = ctx.people[requester_id]
     state = rules.evaluate_step(info, ctx.people, ctx.mappings, requester_id, submission.current_approval_level,
@@ -217,11 +229,11 @@ def _in_progress_advances(db):
 
 def pending_for(db, employee_id):
     """ADV In Progress items whose *current* step this user can approve; tab per step."""
-    ctx = load_context(db)
+    subs = _in_progress_advances(db)
+    ctx = ensure_people(db, load_context(db), employee_id, *[s.created_by for s in subs])
     approver = ctx.people.get(employee_id)
     if approver is None or approver["level"] is None:
         return []
-    subs = _in_progress_advances(db)
     ids = [s.id for s in subs]
     requests = advance_repo.request_values_by_submission(db, ids)
     rounds = round_logs_by_submission(db, ids)
