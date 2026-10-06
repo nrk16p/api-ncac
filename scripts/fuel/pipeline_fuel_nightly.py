@@ -1,12 +1,14 @@
 """fuel_nightly (04:15 BKK) — spec §3.3, §6.
 
-1. Besttech: if the 01:30 run left no docs for yesterday, run it once more — unless that run is
-   still going (the per-vehicle pull takes ~76 min; two clients on one key get throttled). A
-   failure is recorded and does not stop Terminus.
-2. Terminus: wait until yesterday's driving_log has at least half the usual number of trucks
+1. Terminus: wait until yesterday's driving_log has at least half the usual number of trucks
    (NIGHTLY_RETRIES × NIGHTLY_WAIT_S, default 3 × 30 min), then ingest; flag terminus_partial if
-   it never got there.
-Part 2 appends the fuel_events step.
+   it never got there. Runs first so a long Besttech catch-up never pushes the driving_log read
+   into the 05:00 heavy-write window. A failure is recorded, steps 2–3 still run, and the run is
+   marked failed at the end.
+2. Besttech: if the 01:30 run left no docs for yesterday, run it once more — unless that run is
+   still going (the per-vehicle pull takes ~76 min; two clients on one key get throttled). A
+   failure is recorded and does not stop the events step.
+3. fuel_events for yesterday (Part 2) — a failure here fails the run, after Terminus is stored.
 """
 import os
 import sys
@@ -19,6 +21,7 @@ from common import MONGODB_URI, JobLog, log, yesterday_bkk  # noqa: E402
 from pymongo import MongoClient  # noqa: E402
 
 from dates import ddmmyyyy  # noqa: E402
+from pipeline_fuel_events import run_day  # noqa: E402
 from series_besttech import make_client, run_days  # noqa: E402
 from series_store import SERIES, count_series, ensure_indexes  # noqa: E402
 from series_terminus import ingest_terminus_day  # noqa: E402
@@ -62,6 +65,22 @@ def main() -> None:
         db = client["analytics"]
         ensure_indexes(db)
 
+        try:
+            driving_log = client["terminus"]["driving_log"]
+            recent = recent_terminus_counts(db, day)
+            today = 0
+            for attempt in range(retries + 1):
+                today = len(driving_log.distinct("ทะเบียนพาหนะ", {"วันที่": ddmmyyyy(day)}))
+                if terminus_ready(today, recent) or attempt == retries:
+                    break
+                log.info("terminus %s not ready (%d trucks) — waiting %.0fs", day, today, wait_s)
+                time.sleep(wait_s)
+            result["terminus_partial"] = not terminus_ready(today, recent)
+            result["terminus_docs"] = ingest_terminus_day(client["terminus"], db, day)
+        except Exception as e:  # Besttech and the events step still run; the run fails at the end
+            log.error("terminus ingest failed: %s", e)
+            result["terminus_error"] = str(e)
+
         if count_series(db, day.isoformat(), "besttech") == 0:
             latest = db["etl_jobs"].find_one({"job_type": "fuel_series_besttech"}, sort=[("created_at", -1)])
             if besttech_run_in_progress(latest, datetime.now(timezone.utc).replace(tzinfo=None)):
@@ -69,21 +88,13 @@ def main() -> None:
             else:
                 try:
                     result["besttech_catchup_docs"] = run_days(make_client(), db, [day])
-                except Exception as e:  # Terminus must still run when Besttech is down
+                except Exception as e:  # the events step must still run when Besttech is down
                     log.error("besttech catch-up failed: %s", e)
                     result["besttech_error"] = str(e)
 
-        driving_log = client["terminus"]["driving_log"]
-        recent = recent_terminus_counts(db, day)
-        today = 0
-        for attempt in range(retries + 1):
-            today = len(driving_log.distinct("ทะเบียนพาหนะ", {"วันที่": ddmmyyyy(day)}))
-            if terminus_ready(today, recent) or attempt == retries:
-                break
-            log.info("terminus %s not ready (%d trucks) — waiting %.0fs", day, today, wait_s)
-            time.sleep(wait_s)
-        result["terminus_partial"] = not terminus_ready(today, recent)
-        result["terminus_docs"] = ingest_terminus_day(client["terminus"], db, day)
+        result["events"] = run_day(client, day)["events"]
+        if "terminus_error" in result:
+            raise RuntimeError(f"terminus ingest failed: {result['terminus_error']}")
         job.finish("success", **result)
     except Exception as e:
         job.finish("failed", error=str(e), **result)
