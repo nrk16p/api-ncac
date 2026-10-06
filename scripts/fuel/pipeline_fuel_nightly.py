@@ -8,7 +8,9 @@
 2. Besttech: if the 01:30 run left no docs for yesterday, run it once more — unless that run is
    still going (the per-vehicle pull takes ~76 min; two clients on one key get throttled). A
    failure is recorded and does not stop the events step.
-3. fuel_events for yesterday (Part 2) — a failure here fails the run, after Terminus is stored.
+3. fuel_events for yesterday, then re-runs of the two days before (drivers arrive 1–2 days late;
+   decided events keep their _id and decision). A failed day is recorded, the other days still run,
+   and the run is marked failed at the end.
 """
 import os
 import sys
@@ -28,6 +30,7 @@ from series_terminus import ingest_terminus_day  # noqa: E402
 
 READY_RATIO = 0.5
 BESTTECH_RUN_MAX_HOURS = 2.5   # 01:30 + 2.5 h < 04:15, so a hard-killed run never blocks the catch-up
+EVENT_DAYS = 3                 # fuel_events for D, D−1, D−2: drivers reach engineon_trip_summary 1–2 days late
 
 
 def terminus_ready(plates_today: int, plates_recent: list[int], ratio: float = READY_RATIO) -> bool:
@@ -92,9 +95,25 @@ def main() -> None:
                     log.error("besttech catch-up failed: %s", e)
                     result["besttech_error"] = str(e)
 
-        result["events"] = run_day(client, day)["events"]
-        if "terminus_error" in result:
-            raise RuntimeError(f"terminus ingest failed: {result['terminus_error']}")
+        rerun: dict = {}
+        errors: dict = {}
+        for back in range(EVENT_DAYS):   # yesterday first, then re-runs that pick up late drivers
+            d = day - timedelta(days=back)
+            try:
+                count = run_day(client, d)["events"]
+            except Exception as e:  # one day's failure must not stop the others; the run fails at the end
+                log.error("fuel_events %s failed: %s", d, e)
+                errors[d.isoformat()] = str(e)
+                continue
+            if back == 0:
+                result["events"] = count
+            else:
+                rerun[d.isoformat()] = count
+        result["events_rerun"] = rerun
+        if errors:
+            result["events_error"] = errors
+        if "terminus_error" in result or errors:
+            raise RuntimeError(f"fuel_nightly failed: {result.get('terminus_error') or errors}")
         job.finish("success", **result)
     except Exception as e:
         job.finish("failed", error=str(e), **result)

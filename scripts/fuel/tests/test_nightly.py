@@ -44,7 +44,7 @@ class FakeJob:
         FakeJob.finished.append((status, extra))
 
 
-def wire_nightly(monkeypatch, calls, terminus=None):
+def wire_nightly(monkeypatch, calls, terminus=None, events_fail_day=None):
     """main() with every Mongo/HTTP step faked; `calls` records the order of the steps."""
     client = FakeClient()
     client["terminus"]["driving_log"].replace_one({}, {"_id": 1, "ทะเบียนพาหนะ": "71-0001", "วันที่": "05/10/2026"})
@@ -62,7 +62,13 @@ def wire_nightly(monkeypatch, calls, terminus=None):
     monkeypatch.setattr(nightly, "ingest_terminus_day", ingest)
     monkeypatch.setattr(nightly, "make_client", lambda: object())
     monkeypatch.setattr(nightly, "run_days", lambda *args, **kwargs: calls.append("besttech") or 130)
-    monkeypatch.setattr(nightly, "run_day", lambda c, day: calls.append("events") or {"events": 7})
+    def run_day(c, day):
+        calls.append(f"events:{day.isoformat()}")
+        if day.isoformat() == events_fail_day:
+            raise RuntimeError("boom")
+        return {"events": 7}
+
+    monkeypatch.setattr(nightly, "run_day", run_day)
     monkeypatch.setenv("NIGHTLY_RETRIES", "0")
 
 
@@ -70,10 +76,10 @@ def test_nightly_order_terminus_then_besttech_catch_up_then_events(monkeypatch):
     calls: list = []
     wire_nightly(monkeypatch, calls)
     nightly.main()
-    assert calls == ["terminus", "besttech", "events"]
+    assert calls == ["terminus", "besttech", "events:2026-10-05", "events:2026-10-04", "events:2026-10-03"]
     status, extra = FakeJob.finished[-1]
     assert status == "success" and extra["terminus_docs"] == 300 and extra["besttech_catchup_docs"] == 130
-    assert extra["events"] == 7
+    assert extra["events"] == 7 and extra["events_rerun"] == {"2026-10-04": 7, "2026-10-03": 7}
 
 
 def test_terminus_failure_still_runs_besttech_and_events_then_fails_the_run(monkeypatch):
@@ -81,6 +87,17 @@ def test_terminus_failure_still_runs_besttech_and_events_then_fails_the_run(monk
     wire_nightly(monkeypatch, calls, terminus=RuntimeError("driving_log timeout"))
     with pytest.raises(RuntimeError):
         nightly.main()
-    assert calls == ["terminus", "besttech", "events"]
+    assert calls == ["terminus", "besttech", "events:2026-10-05", "events:2026-10-04", "events:2026-10-03"]
     status, extra = FakeJob.finished[-1]
     assert status == "failed" and extra["terminus_error"] == "driving_log timeout" and extra["events"] == 7
+
+
+def test_a_failed_rerun_day_does_not_stop_the_others_and_fails_the_run(monkeypatch):
+    calls: list = []
+    wire_nightly(monkeypatch, calls, events_fail_day="2026-10-04")
+    with pytest.raises(RuntimeError):
+        nightly.main()
+    assert calls[-3:] == ["events:2026-10-05", "events:2026-10-04", "events:2026-10-03"]
+    status, extra = FakeJob.finished[-1]
+    assert status == "failed" and extra["events"] == 7 and extra["events_error"] == {"2026-10-04": "boom"}
+    assert extra["events_rerun"] == {"2026-10-03": 7}
