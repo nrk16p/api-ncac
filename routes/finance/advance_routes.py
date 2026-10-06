@@ -8,7 +8,7 @@ import os
 from datetime import date
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -106,10 +106,24 @@ def list_advances(
     acc_code: Optional[str] = None,
     date_from: Optional[date] = None,
     date_to: Optional[date] = None,
+    cost_center: Optional[str] = None,
+    q: Optional[str] = None,
+    page: Optional[int] = Query(None, ge=1),
+    page_size: int = Query(logic.PAGE_SIZE_DEFAULT, ge=1, le=logic.PAGE_SIZE_MAX),
     db: Session = Depends(get_db),
 ):
-    return repo.list_advances(db, status=status, overdue=overdue, employee_id=employee_id,
-                              acc_code=acc_code, date_from=date_from, date_to=date_to)
+    """Without `page`: the full array (unchanged). With `page` (1-based): {items, total, page, page_size, summary}
+    (v3 §9) — `status` is a comma list of derived statuses, `q` is capped at 100 chars and matched literally.
+    Invalid page / page_size (page < 1, page_size outside 1..200) or an unknown status → 422 (no clamping)."""
+    if page is None:
+        return repo.list_advances(db, status=status, overdue=overdue, employee_id=employee_id,
+                                  acc_code=acc_code, date_from=date_from, date_to=date_to)
+    statuses, unknown = logic.parse_status_list(status)
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"สถานะไม่ถูกต้อง: {', '.join(unknown)}")
+    return repo.list_advances_page(
+        db, page=page, page_size=page_size, statuses=statuses, overdue=overdue, employee_id=employee_id,
+        acc_code=acc_code, date_from=date_from, date_to=date_to, cost_center=cost_center, q=q)
 
 
 @router.get("/summary")

@@ -1,6 +1,8 @@
 """DB loading for ADV approval by amount. Rules live in approval_logic (pure)."""
 from __future__ import annotations
 
+import threading
+import time
 from dataclasses import dataclass, field
 
 from models.finance_model import FinApprovalTier
@@ -50,8 +52,30 @@ def load_mappings(db):
     return mappings
 
 
+# v3 §9: users/tiers/mappings change rarely, so the context is cached in-process for 60 s (level and department
+# changes apply within a minute). One global entry (no key); the lock guards the swap, loading happens outside it.
+CONTEXT_TTL_SECONDS = 60
+_clock = time.monotonic
+_ctx_lock = threading.Lock()
+_ctx_cache = None  # (expires_at, ApprovalContext)
+
+
+def clear_context_cache():
+    global _ctx_cache
+    with _ctx_lock:
+        _ctx_cache = None
+
+
 def load_context(db) -> ApprovalContext:
-    return ApprovalContext(tiers=load_tiers(db), people=load_people(db), mappings=load_mappings(db))
+    global _ctx_cache
+    with _ctx_lock:
+        hit = _ctx_cache
+    if hit is not None and _clock() < hit[0]:
+        return hit[1]
+    ctx = ApprovalContext(tiers=load_tiers(db), people=load_people(db), mappings=load_mappings(db))
+    with _ctx_lock:
+        _ctx_cache = (_clock() + CONTEXT_TTL_SECONDS, ctx)
+    return ctx
 
 
 def describe(db, requester_employee_id, amount, ctx: ApprovalContext | None = None):
