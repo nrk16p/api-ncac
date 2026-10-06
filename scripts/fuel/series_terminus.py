@@ -3,8 +3,8 @@
 Default day = yesterday (Bangkok). START_DATE / END_DATE (dd/mm/YYYY) or DATES (comma list of
 dd/mm/YYYY) choose days; PLATES (comma list, any plate format) limits the trucks.
 Reads go through the วันที่-first index in batches of 50 plates with a short pause in between
-(TERMINUS_BATCH_SLEEP_S, default 0.5 s) — the cluster is small. น้ำมัน is litres; ระยะทาง(กม.) is
-always 0, so distance comes from coordinates (series_build.path_km).
+(TERMINUS_BATCH_SLEEP_S, default 0.5 s) — the cluster is small. น้ำมัน is litres; distance comes
+from coordinates (series_build.path_km). Field names with "." (ความเร็ว(กม./ชม.)) are read with $getField.
 """
 import os
 import sys
@@ -26,8 +26,11 @@ UNIT = "dl"
 INDEX = "idx_date_plate_status_order_desc"
 BATCH = 50
 ENGINE_OFF = "ดับเครื่อง"
-FIELDS = {"_id": 0, "ทะเบียนพาหนะ": 1, "รหัสพาหนะ": 1, "เวลา": 1, "น้ำมัน": 1,
-          "ความเร็ว(กม./ชม.)": 1, "สถานะ": 1, "พิกัด": 1}
+SPEED_FIELD = "ความเร็ว(กม./ชม.)"
+# $project for the batch reads. A field name with "." cannot be projected as-is — Mongo reads it as a
+# path (ความเร็ว(กม → /ชม → )) and returns nothing — so the speed comes through $getField as "speed".
+FIELDS = {"_id": 0, "ทะเบียนพาหนะ": 1, "รหัสพาหนะ": 1, "เวลา": 1, "น้ำมัน": 1, "สถานะ": 1, "พิกัด": 1,
+          "speed": {"$getField": SPEED_FIELD}}
 
 
 def _seconds(value) -> int | None:
@@ -60,7 +63,7 @@ def row_reading(row: dict) -> Reading | None:
     fuel = to_number(row.get("น้ำมัน"))
     lat, lng = _lat_lng(row.get("พิกัด"))
     return Reading(sec=sec, fuel=fuel if fuel is not None and fuel > 0 else None,
-                   speed=to_number(row.get("ความเร็ว(กม./ชม.)")) or 0.0,
+                   speed=to_number(row.get("speed", row.get(SPEED_FIELD))) or 0.0,
                    engine=0 if row.get("สถานะ") == ENGINE_OFF else 1, lat=lat, lng=lng)
 
 
@@ -102,7 +105,8 @@ def ingest_terminus_day(terminus_db, db, day: date, plates: list[str] | None = N
     written = 0
     for i in range(0, len(raw_plates), BATCH):
         batch = raw_plates[i:i + BATCH]
-        rows = list(driving_log.find({"วันที่": key, "ทะเบียนพาหนะ": {"$in": batch}}, FIELDS).hint(INDEX))
+        rows = list(driving_log.aggregate([{"$match": {"วันที่": key, "ทะเบียนพาหนะ": {"$in": batch}}},
+                                           {"$project": FIELDS}], hint=INDEX))
         docs = terminus_day_docs(day, rows, tanks)
         seen.update(d["plate"] for d in docs)
         written += upsert_series(db, docs)
