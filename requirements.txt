@@ -24,3 +24,4 @@ apscheduler
 beautifulsoup4
 boto3
 nh3
+scikit-learn
