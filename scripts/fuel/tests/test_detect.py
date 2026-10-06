@@ -2,7 +2,7 @@ import numpy as np
 
 from detect import find_candidates, hampel, prepare, rolling_median, segments, unexplained_rise
 from fuel_settings import DEFAULTS
-from synth import gap_day, noise_day, refuel_day, series, siphon_day, slosh_day
+from synth import gap_day, noise_day, parked, ramp, refuel_day, series, siphon_day, slosh_day
 
 
 def test_hampel_removes_single_spike_only():
@@ -58,3 +58,14 @@ def test_dip_then_back_is_found_and_rise_is_counted():
     _, ctx, found = candidates(noise_day())
     assert [(c.kind, c.where, round(c.litres)) for c in found] == [("drop", "parked", 20)]
     assert unexplained_rise(ctx, DEFAULTS["refuel_min_l"]) == np.float64(19.0)
+
+
+def test_blip_hours_before_a_siphon_does_not_stretch_the_event():
+    """A 4-min 10 L dip at 01:00, then a real 30 L siphon 05:00–05:15: the event is the siphon only
+    (the start used to anchor on the dip → m 59 → 314, 255 min, 0.12 L/min)."""
+    points = (parked(0, 60, 150.0) + parked(60, 64, 140.0) + parked(64, 300, 150.0)
+              + parked(300, 315, ramp(300, 315, 150.0, 120.0)) + parked(315, 420, 120.0))
+    _, day = series(points)
+    ctx = prepare(day, DEFAULTS)
+    (c,) = [c for c in find_candidates(day, ctx, DEFAULTS) if c.kind == "drop"]
+    assert 295 <= day.m[c.i0] <= 302 and 312 <= day.m[c.i1] <= 318

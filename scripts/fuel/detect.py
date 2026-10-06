@@ -172,25 +172,33 @@ def plateaus(day: DaySeries, level: np.ndarray, segs: list[Segment], plateau_min
     return out
 
 
-def _change_bounds(level: np.ndarray, seg: Segment, before: float, after: float) -> tuple[int, int]:
-    """Indices bracketing a change inside a segment: last point still near `before` and first point near `after`."""
+def _holds(day: DaySeries, level: np.ndarray, idx: list[int], k: int, test, minutes: int, forward: bool) -> bool:
+    """level at idx[k] and every valid point within `minutes` after it (forward) or before it pass `test`."""
+    t0 = int(day.m[idx[k]])
+    j = k
+    while 0 <= j < len(idx) and abs(int(day.m[idx[j]]) - t0) < minutes:
+        if not test(level[idx[j]]):
+            return False
+        j += 1 if forward else -1
+    return True
+
+
+def _change_bounds(day: DaySeries, level: np.ndarray, seg: Segment, before: float, after: float,
+                   minutes: int) -> tuple[int, int]:
+    """Indices bracketing a change inside a segment: i1 = the first point from which the level stays near
+    `after` for `minutes`; i0 = the last point before i1 that ends `minutes` near `before`. (Scanning
+    forward for the first departure from `before` latched onto short wobbles hours earlier.)"""
     tol = 0.1 * abs(after - before)
-    falling = after < before
-    i0, i1 = seg.i0, seg.i1
-    for i in range(seg.i0, seg.i1 + 1):
-        v = level[i]
-        if np.isnan(v):
-            continue
-        if (v >= before - tol) if falling else (v <= before + tol):
-            i0 = i
-        else:
-            break
-    for i in range(i0, seg.i1 + 1):
-        v = level[i]
-        if not np.isnan(v) and ((v <= after + tol) if falling else (v >= after - tol)):
-            i1 = i
-            break
-    return i0, max(i1, i0)
+    if after < before:
+        near_after, near_before = (lambda v: v <= after + tol), (lambda v: v >= before - tol)
+    else:
+        near_after, near_before = (lambda v: v >= after - tol), (lambda v: v <= before + tol)
+    idx = [i for i in range(seg.i0, seg.i1 + 1) if not np.isnan(level[i])]
+    if not idx:
+        return seg.i0, seg.i1
+    k1 = next((k for k in range(len(idx)) if _holds(day, level, idx, k, near_after, minutes, True)), len(idx) - 1)
+    k0 = next((k for k in range(k1, -1, -1) if _holds(day, level, idx, k, near_before, minutes, False)), 0)
+    return idx[k0], max(idx[k1], idx[k0])
 
 
 def _gap_level(day: DaySeries, level: np.ndarray, index: int, minutes: int, before: bool) -> float:
@@ -231,7 +239,7 @@ def find_candidates(day: DaySeries, ctx: Context, settings: dict) -> list[Candid
 
     for p in ctx.plateaus:   # inside one parked stretch
         if abs(p.end_level - p.start_level) >= min(min_drop, min_rise):
-            i0, i1 = _change_bounds(ctx.level, p.seg, p.start_level, p.end_level)
+            i0, i1 = _change_bounds(day, ctx.level, p.seg, p.start_level, p.end_level, settings["plateau_min"])
             add("drop", "parked", i0, i1, p.start_level, p.end_level)
     for a, b in zip(ctx.plateaus, ctx.plateaus[1:]):   # between two parked stretches, no gap between
         if not gap_between(ctx, a, b):
