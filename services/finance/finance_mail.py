@@ -52,20 +52,26 @@ def email_enabled() -> bool:
 
 
 def send_finance_email(to, subject: str, html: str) -> None:
-    """`to`: one address or a list (deduped, capped at MAX_RECIPIENTS). One message per recipient, each with only
+    deliver_finance_email(to, subject, html)
+
+
+def deliver_finance_email(to, subject: str, html: str) -> int:
+    """Same as send_finance_email but returns how many recipients SMTP accepted (0 when off / failed).
+    `to`: one address or a list (deduped, capped at MAX_RECIPIENTS). One message per recipient, each with only
     that recipient in To, over one SMTP connection per batch. A failed recipient is logged and the rest are still
     sent (on a fresh connection, as the failure may have broken the session); if no connection can be opened the
     remaining recipients are skipped. Never raises; opens no connection unless enabled and credentialed."""
     if not email_enabled():
         log.info("finance email skipped (FINANCE_EMAIL_ENABLED is not true): %s", subject)
-        return
+        return 0
     user = os.getenv("FINANCE_SMTP_USER")
     password = os.getenv("FINANCE_SMTP_PASSWORD")
     if not user or not password:
         log.warning("finance email enabled but FINANCE_SMTP_USER / FINANCE_SMTP_PASSWORD missing; skipped: %s",
                     subject)
-        return
+        return 0
     server = None
+    sent = 0
     try:
         recipients = pick_recipients([to] if isinstance(to, str) else list(to or []))
         subject = _one_line(subject)
@@ -76,9 +82,10 @@ def send_finance_email(to, subject: str, html: str) -> None:
                 except Exception:  # noqa: BLE001
                     log.exception("finance email: SMTP connection failed, %d recipient(s) not sent: %s",
                                   len(recipients) - index, subject)
-                    return
+                    return sent
             try:
                 server.sendmail(user, [addr], _message(user, addr, subject, html))
+                sent += 1
             except Exception:  # noqa: BLE001 - one recipient's failure must not stop the others
                 log.exception("finance email to %s failed: %s", addr, subject)
                 _quit(server)
@@ -87,6 +94,7 @@ def send_finance_email(to, subject: str, html: str) -> None:
         log.exception("finance email failed: %s", subject)
     finally:
         _quit(server)
+    return sent
 
 
 def _connect(user, password):

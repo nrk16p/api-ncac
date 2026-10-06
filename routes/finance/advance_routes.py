@@ -18,7 +18,7 @@ from models.finance_model import FinAccount, FinAdvance, FinAdvanceClearItem, Fi
 from models.master_model import FormApprovalLog
 from models.user_model import User
 from schemas.finance_schema import (
-    AccountCreate, AccountUpdate, ClearIn, ConfirmIn, PayIn, RejectVoucherIn, ResubmitIn, ReturnIn, SendBackIn,
+    AccountCreate, AccountUpdate, ClearIn, ConfirmIn, OverdueRemindIn, PayIn, RejectVoucherIn, ResubmitIn, ReturnIn, SendBackIn,
     VoucherIn,
 )
 from services.finance import advance_guard
@@ -27,6 +27,7 @@ from services.finance import advance_repo as repo
 from services.finance import approval_logic as approval_rules
 from services.finance import approval_repo
 from services.finance import finance_mail as mail
+from services.finance import overdue_reminder
 
 logger = logging.getLogger(__name__)
 
@@ -235,6 +236,23 @@ def _commit_and_return(db: Session, form_id: str):
         db.rollback()
         raise _integrity_error(exc)
     return repo.get_advance_detail(db, form_id)
+
+
+@router.post("/advances/overdue-reminders")
+def remind_overdue(body: OverdueRemindIn, db: Session = Depends(get_db)):
+    """Finance sends the overdue-clearing reminder now (v3 §7b). Ignores the 7-day interval; counts as sent only
+    when SMTP accepted it; logs OVERDUE_REMIND (remark "manual") per sent advance."""
+    finance_user = require_finance(db, body.action_by)
+    if not mail.email_enabled():
+        return {"sent": 0, "skipped": [], "disabled": True}
+    wanted = list(dict.fromkeys(body.form_ids)) if body.form_ids is not None else None
+    items, _today = overdue_reminder.load_overdue(db, wanted)
+    skipped = []
+    if wanted is not None:
+        found = {i["form_id"] for i in items}
+        skipped = [{"form_id": f, "reason": "ไม่ได้เกินกำหนดเคลียร์"} for f in wanted if f not in found]
+    sent, failed = overdue_reminder.send_for_items(db, items, "manual", finance_user.employee_id)
+    return {"sent": sent, "skipped": skipped + failed, "disabled": False}
 
 
 @router.put("/advances/{form_id}/voucher")

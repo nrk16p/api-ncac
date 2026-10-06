@@ -1,6 +1,6 @@
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Optional
+from typing import List, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -66,6 +66,11 @@ class ClearIn(_Body):
     clear_doc_no: Optional[str] = Field(default=None, max_length=100)
     settle_date: Optional[date] = None
     remark: Optional[str] = None
+
+
+class OverdueRemindIn(_Body):
+    action_by: str
+    form_ids: Optional[List[str]] = None
 
 
 class SendBackIn(_Body):

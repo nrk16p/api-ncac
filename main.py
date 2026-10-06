@@ -251,6 +251,15 @@ async def startup_event():
     #   (รอบ light ใช้เวลาจริง ~20 วินาที)
     scheduler.add_job(_run, CronTrigger(hour=22, minute=0), args=["atms_stockmovement"], id="sched_atms_stockmovement")
     scheduler.add_job(_run, CronTrigger(hour="1,5,9,13", minute=30), args=["atms_stockmovement_light"], id="sched_atms_stockmovement_light")
+    # finance advance: overdue clearing reminder, daily 09:00 BKK (no-op unless FINANCE_EMAIL_ENABLED=true)
+    from database import SessionLocal
+    from services.finance.overdue_reminder import run_overdue_reminders
+
+    async def _overdue_job():
+        await asyncio.get_running_loop().run_in_executor(None, run_overdue_reminders, SessionLocal)
+
+    scheduler.add_job(_overdue_job, CronTrigger(hour=9, minute=0, timezone=tz("Asia/Bangkok")),
+                      id="sched_finance_overdue_reminder")
     scheduler.start()
     import logging
     logging.getLogger(__name__).info("Pipeline scheduler started — LD 02:00, SCCO 02:20, deliver_result 03:30, driver_cost 05:45 (BKK); CPAC runs locally; engineon 04:00 / drivercost_ticket 06:10 / trip_summary 06:30 (BKK)")
