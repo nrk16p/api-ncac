@@ -60,6 +60,13 @@ class FakeCollection:
         for op in ops:
             self.replace_one(op._filter, op._doc, upsert=op._upsert)
 
+    def update_one(self, query, update, upsert=False):
+        doc = next((d for d in self.docs.values() if matches(d, query)), None)
+        if doc is None and upsert:
+            doc = self.docs.setdefault(query["_id"], {"_id": query["_id"]})
+        if doc is not None:
+            doc.update(copy.deepcopy(update.get("$set", {})))
+
     def update_many(self, query, update):
         for d in self.docs.values():
             if matches(d, query):

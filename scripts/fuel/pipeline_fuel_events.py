@@ -24,14 +24,14 @@ from events_store import (GPS_DB, drivers_for, ensure_event_indexes, history_cou
                           load_active_model, load_day_stats, load_existing_events, load_places,
                           save_day_stats, save_summary, vehicles_for, write_events)
 from features import day_evidence, evidence  # noqa: E402
-from fuel_settings import load_settings  # noqa: E402
+from fuel_settings import ensure_settings  # noqa: E402
 from series_store import SERIES  # noqa: E402
 
 
 def run_day(client, day: date, now: datetime | None = None) -> dict:
     db = client["analytics"]
     ensure_event_indexes(db)
-    settings = load_settings(db)
+    settings = ensure_settings(db)
     key = day.isoformat()
     now = now or datetime.now(timezone.utc).replace(tzinfo=None)
     docs = list(db[SERIES].find({"date_key": key}))

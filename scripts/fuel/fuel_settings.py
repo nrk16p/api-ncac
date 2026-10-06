@@ -43,3 +43,13 @@ def merge_settings(stored: dict | None) -> dict:
 
 def load_settings(db) -> dict:
     return merge_settings(db[SETTINGS].find_one({"_id": SETTINGS_ID}))
+
+
+def ensure_settings(db) -> dict:
+    """load_settings, and make sure the document exists with every DEFAULTS key (the page reads it
+    without fallbacks): missing keys are added, stored values are never overwritten."""
+    stored = db[SETTINGS].find_one({"_id": SETTINGS_ID}) or {}
+    missing = {k: v for k, v in DEFAULTS.items() if k not in stored}
+    if missing:
+        db[SETTINGS].update_one({"_id": SETTINGS_ID}, {"$set": missing}, upsert=True)
+    return merge_settings(stored)

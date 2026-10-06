@@ -59,3 +59,10 @@ def test_events_carry_fleet_branch_plant_from_gps_distance():
         ("Asia", "ลาดกระบัง", "พะเยา")
     assert (events["สบ.71-0002"]["fleet"], events["สบ.71-0002"]["branch"], events["สบ.71-0002"]["plant"]) == \
         (None, None, None)
+
+
+def test_run_day_seeds_the_settings_doc():
+    client = client_with_trucks()
+    run_day(client, DAY, now=NOW)
+    settings = client["analytics"]["fuel_settings"].find_one({"_id": "default"})
+    assert settings is not None and settings["price_per_litre"] is None
