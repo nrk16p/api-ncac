@@ -14,6 +14,7 @@ DAY_STATS = "fuel_day_stats"
 MODELS = "fuel_models"
 PLACES = "fuel_places"
 TRIP_SUMMARY = "engineon_trip_summary"
+REVIEWS = "fuel_drop_reviews"   # old /fueldetection reviews (+ event_id once linked); Part 3 looks them up by event_id
 GPS_DB = "gps"
 VEHICLE_SOURCES = ("terminus", "besttech")
 VEHICLE_FIELDS = ("fleet", "branch", "plant")
@@ -27,6 +28,7 @@ def ensure_event_indexes(db) -> None:
     db[EVENTS].create_index([("plate", ASCENDING), ("start", DESCENDING)], name="plate_start")
     db[DAY_STATS].create_index([("plate", ASCENDING), ("date_key", DESCENDING)], name="plate_date")
     db[DAY_STATS].create_index([("date_key", ASCENDING)], name="date")
+    db[REVIEWS].create_index([("event_id", ASCENDING)])
 
 
 def load_existing_events(db, date_key: str) -> list[dict]:

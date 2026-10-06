@@ -10,7 +10,7 @@ from common import MONGODB_URI, JobLog, log  # noqa: E402
 from pymongo import MongoClient  # noqa: E402
 
 from backfill_terminus_reviews import review_truck_days  # noqa: E402
-from events_store import EVENTS, MODELS, load_active_model  # noqa: E402
+from events_store import EVENTS, MODELS, REVIEWS, load_active_model  # noqa: E402
 from fuel_settings import load_settings  # noqa: E402
 from series_build import thai_midnight_utc  # noqa: E402
 from train import OLD_OK, OLD_SUSPICIOUS, build_dataset, train  # noqa: E402
@@ -40,8 +40,8 @@ def main() -> None:
         db = MongoClient(MONGODB_URI)["analytics"]
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         since = (now - timedelta(days=LOOKBACK_DAYS)).date()
-        reviews = list(db["fuel_drop_reviews"].find({}, {"plate": 1, "decision": 1, "start_ts": 1,
-                                                         "end_ts": 1, "event_id": 1}))
+        reviews = list(db[REVIEWS].find({}, {"plate": 1, "decision": 1, "start_ts": 1,
+                                             "end_ts": 1, "event_id": 1}))
         events = labelled_events(db, since, reviews)
         result = train(build_dataset(events, reviews), load_active_model(db), load_settings(db), now)
         model = result.pop("model", None)

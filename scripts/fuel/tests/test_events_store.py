@@ -1,6 +1,7 @@
 from datetime import datetime
 
-from events_store import EVENTS, TRIP_SUMMARY, drivers_for, history_counts, vehicles_for, write_events
+from events_store import (EVENTS, REVIEWS, TRIP_SUMMARY, drivers_for, ensure_event_indexes, history_counts,
+                          vehicles_for, write_events)
 
 
 class FakeCollection:
@@ -19,6 +20,9 @@ class FakeCollection:
 
     def delete_many(self, query):
         self.calls.append(("delete_many", query))
+
+    def create_index(self, keys, **kwargs):
+        self.calls.append(("create_index", keys))
 
 
 class FakeDB(dict):
@@ -69,3 +73,9 @@ def test_vehicles_from_gps_distance_latest_non_empty_value():
                      "vehicle_no": {"$in": ["สบ.71-0001", "สบ.71-0002"]}}
     assert gps["distance_besttech"].calls[0] == ("find", query)
     assert vehicles_for(FakeDB(), [], "2026-10-05") == {}
+
+
+def test_reviews_get_an_event_id_index():
+    db = FakeDB()
+    ensure_event_indexes(db)
+    assert REVIEWS == "fuel_drop_reviews" and ("create_index", [("event_id", 1)]) in db[REVIEWS].calls
