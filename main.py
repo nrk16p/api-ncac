@@ -248,6 +248,9 @@ async def startup_event():
     # once engine-on (21:00 UTC, ~1 min) has read the same day — done before stockmovement 22:00 UTC
     scheduler.add_job(_run, CronTrigger(hour=18, minute=30), args=["fuel_series_besttech"], id="sched_fuel_series_besttech")  # 01:30 BKK
     scheduler.add_job(_run, CronTrigger(hour=21, minute=15), args=["fuel_nightly"], id="sched_fuel_nightly")                  # 04:15 BKK
+    # fuel_places — Mondays 01:00 BKK → Sundays 18:00 UTC: one Besttech /location call, 30 min before
+    # the 18:30 UTC Besttech pull so the two never share the key's rate limit
+    scheduler.add_job(_run, CronTrigger(day_of_week="sun", hour=18, minute=0), args=["fuel_places"], id="sched_fuel_places")  # Mon 01:00 BKK
     # maintenance (MR sync → maint_* + repair-analysis) 02:00 BKK → 19:00 UTC —
     # ATMS โหลดต่ำ และก่อน ld/scco (09:00/09:20 BKK จริงตาม UTC)
     scheduler.add_job(_run, CronTrigger(hour=19, minute=0), args=["maintenance"], id="sched_maintenance")  # 02:00 BKK
