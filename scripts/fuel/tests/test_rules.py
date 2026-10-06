@@ -91,3 +91,15 @@ def test_calibration_thresholds_are_settings():
     assert classify(ev(**big, engine_off_share=0.4, rate_l_per_min=2.0), tuned, "ok") == "consumption"
     assert classify(ev(**big, recovered_60=True), tuned, "ok") == "noise"
     assert classify(ev(**big, recovered_120=True), tuned, "ok") == "suspected_loss"         # back only after 60 min
+
+
+def test_change_seen_only_while_moving_is_noise():
+    """spec §4.4: a change that appears only in moving minutes is noise (slosh)."""
+    assert DEFAULTS["moving_noise_share"] == 0.8
+    assert classify(ev(moving_share=0.8), DEFAULTS, "ok") == "noise"
+    assert classify(ev(kind="gap", where="gap", gap_min=40, moving_share=0.9), DEFAULTS, "ok") == "noise"
+    assert classify(ev(moving_share=0.79), DEFAULTS, "ok") == "suspected_loss"
+    assert classify(ev(kind="refuel", stays_up_30=True, moving_share=1.0), DEFAULTS, "ok") == "refuel"
+    assert rule_reasons("noise", ev(moving_share=0.9))[0] == "ระดับเปลี่ยนเฉพาะตอนรถวิ่ง"
+    # a drop between two parked stretches is measured on parked levels: a drive's steady fall stays consumption
+    assert classify(ev(where="moving", moving_share=1.0, excess_over_burn_l=1.0), DEFAULTS, "ok") == "consumption"

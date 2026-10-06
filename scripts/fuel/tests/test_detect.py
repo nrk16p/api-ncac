@@ -2,7 +2,7 @@ import numpy as np
 
 from detect import find_candidates, hampel, prepare, rolling_median, segments, unexplained_rise
 from fuel_settings import DEFAULTS
-from synth import gap_day, noise_day, parked, ramp, refuel_day, series, siphon_day, slosh_day
+from synth import driving, gap_day, noise_day, parked, ramp, refuel_day, series, siphon_day, slosh_day
 
 
 def test_hampel_removes_single_spike_only():
@@ -69,3 +69,13 @@ def test_blip_hours_before_a_siphon_does_not_stretch_the_event():
     ctx = prepare(day, DEFAULTS)
     (c,) = [c for c in find_candidates(day, ctx, DEFAULTS) if c.kind == "drop"]
     assert 295 <= day.m[c.i0] <= 302 and 312 <= day.m[c.i1] <= 318
+
+
+def test_outage_mid_drive_takes_no_levels_from_sloshing_minutes():
+    """20-min outage while driving; the moving minutes at its edges read 12 L low / 12 L high (slosh).
+    Gap levels come from parked minutes only, so there is no +24 L 'refuel' / gap candidate."""
+    points = (parked(0, 60, 152.0) + driving(60, 100, lambda m: 140.0 if m >= 94 else 152.0)[0]
+              + driving(120, 160, lambda m: 164.0 if m < 126 else 152.0)[0] + parked(160, 240, 150.0))
+    _, day = series(points)
+    ctx = prepare(day, DEFAULTS)
+    assert ctx.gaps and [c for c in find_candidates(day, ctx, DEFAULTS) if c.where == "gap"] == []

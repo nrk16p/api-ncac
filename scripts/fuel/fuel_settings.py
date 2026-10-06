@@ -32,6 +32,7 @@ DEFAULTS = {
     "persist_min": 120,
     "min_engine_off_share": 0.8,
     "min_rate_l_per_min": 1.0,
+    "moving_noise_share": 0.8,   # a drop/gap seen this much while moving = noise (spec §4.4: slosh)
     # burn baselines (spec §4.1)
     "baseline_days": 30,
     "baseline_min_days": 7,

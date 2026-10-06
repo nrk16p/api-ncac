@@ -17,6 +17,7 @@ RULE_CONF_CLEAR, RULE_CONF_OTHER = 0.95, 0.7
 # a drop no bigger than this × the sensor's unexplained rises that day is noise; the tunable value is
 # fuel_settings "noise_rise_factor" (this constant is its default and the threshold the phrase uses)
 NOISE_RISE_FACTOR = 1.5
+MOVING_NOISE_SHARE = 0.8   # default of fuel_settings "moving_noise_share"; the phrase uses it
 
 ACTION_CHECK = "เทียบใบเติมน้ำมัน + สอบถามคนขับ"
 ACTION_GAP = "ตรวจกล่อง GPS/สายไฟ ว่าถูกตัดไฟหรือไม่"
@@ -39,6 +40,9 @@ def classify(ev: dict, settings: dict, day_status: str) -> str:
     rise_factor = settings.get("noise_rise_factor", NOISE_RISE_FACTOR)
     if ev["recovered_30"] or ev["rebound_60"] or ev["litres"] <= rise_factor * ev["day_rise_l"]:
         return "noise"
+    if ev["where"] != "moving" and ev["moving_share"] >= settings["moving_noise_share"]:
+        return "noise"   # the change appears only in moving minutes (slosh); a drop between two parked
+                         # stretches is measured on parked levels, so a steady fall on a drive stays consumption
     if ev["excess_over_burn_l"] < settings["min_excess_l"]:
         return "consumption"
     if recovered_within(ev, settings["persist_min"]):
@@ -88,6 +92,8 @@ def phrases(ev: dict) -> dict[str, str]:
         out["litres"] = f"ลดลง {ev['litres']:.0f} L ({ev['pct_tank']:.0f}% ของถัง)"
     if ev["engine_off_share"] >= 0.8:
         out["engine_off_share"] = "จอดดับเครื่อง"
+    if ev["kind"] != "refuel" and ev.get("where") != "moving" and ev.get("moving_share", 0) >= MOVING_NOISE_SHARE:
+        out["moving_share"] = "ระดับเปลี่ยนเฉพาะตอนรถวิ่ง"
     if ev.get("recovered_30"):
         out["recovered_30"] = "ระดับกลับขึ้นภายใน 30 นาที"
     elif ev.get("rebound_60"):
@@ -117,7 +123,7 @@ _REASON_ORDER = {
     "suspected_loss": ["engine_off_share", "recovered_120", "at_place", "night", "rate_l_per_min", "both_boxes", "litres"],
     "gap_loss": ["gap_min", "recovered_120", "at_place", "night", "litres"],
     "place_drop": ["at_place", "recovered_120", "engine_off_share", "rate_l_per_min", "night", "litres"],
-    "noise": ["recovered_30", "rebound_60", "day_rise_l", "sensor_noise_parked", "litres"],
+    "noise": ["recovered_30", "rebound_60", "moving_share", "day_rise_l", "sensor_noise_parked", "litres"],
     "consumption": ["excess_over_burn_l", "litres"],
     "refuel": ["litres", "at_place"],
     "sensor_fault": ["sensor_noise_parked", "litres"],

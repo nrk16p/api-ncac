@@ -201,13 +201,15 @@ def _change_bounds(day: DaySeries, level: np.ndarray, seg: Segment, before: floa
     return idx[k0], max(idx[k1], idx[k0])
 
 
-def _gap_level(day: DaySeries, level: np.ndarray, index: int, minutes: int, before: bool) -> float:
+def _gap_level(day: DaySeries, level: np.ndarray, index: int, minutes: int, before: bool, parked_kmh: float) -> float:
+    """Level next to a gap from parked minutes only (NaN if none): moving minutes slosh ±10 % of tank."""
     if before:
         sel = (day.m <= day.m[index]) & (day.m > day.m[index] - minutes)
         sel[index + 1:] = False
     else:
         sel = (day.m >= day.m[index]) & (day.m < day.m[index] + minutes)
         sel[:index] = False
+    sel &= day.speed <= parked_kmh
     values = level[sel]
     values = values[~np.isnan(values)]
     return float(np.median(values)) if values.size else float("nan")
@@ -245,8 +247,8 @@ def find_candidates(day: DaySeries, ctx: Context, settings: dict) -> list[Candid
         if not gap_between(ctx, a, b):
             add("drop", "moving", a.seg.i1, b.seg.i0, a.end_level, b.start_level)
     for i_before, i_after in ctx.gaps:
-        before = _gap_level(day, ctx.level, i_before, settings["plateau_min"], True)
-        after = _gap_level(day, ctx.level, i_after, settings["plateau_min"], False)
+        before = _gap_level(day, ctx.level, i_before, settings["plateau_min"], True, settings["parked_kmh"])
+        after = _gap_level(day, ctx.level, i_after, settings["plateau_min"], False, settings["parked_kmh"])
         if not (np.isnan(before) or np.isnan(after)):
             add("gap", "gap", i_before, i_after, before, after)
     return merge_candidates(day, found, settings["merge_min"])
