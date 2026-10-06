@@ -50,8 +50,9 @@ def main() -> None:
                 db[MODELS].update_many({"active": True}, {"$set": {"active": False}})
             db[MODELS].replace_one({"_id": model["_id"]}, model, upsert=True)
         metrics = result.pop("metrics", {})
-        log.info("fuel_train: %s %s", result, metrics)
-        job.finish("success", **result, **metrics)
+        outcome = result.pop("status")   # skipped | kept | promoted — finish() has its own status
+        log.info("fuel_train: %s %s %s", outcome, result, metrics)
+        job.finish("success", train_status=outcome, **result, **metrics)
     except Exception as e:
         job.finish("failed", error=str(e))
         raise
