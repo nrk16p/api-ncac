@@ -1,5 +1,8 @@
-# Local test/run env for scripts/fuel on macOS — Render installs requirements.txt only
+# Local test/run env for scripts/fuel, overspeed, rmc and engineon tests on macOS — Render installs
+# requirements.txt only
 numpy
+pandas
+openpyxl
 pymongo
 requests
 python-dotenv
