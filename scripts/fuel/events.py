@@ -109,8 +109,10 @@ def score_event(raw: dict, settings: dict, model: dict | None, driver: str | Non
 
 
 def _overlaps(a: dict, b: dict) -> bool:
+    """Same plate, same direction (a refuel never inherits a drop's decision), windows within the tolerance."""
     tol = timedelta(minutes=OVERLAP_TOL_MIN)
-    return a["plate"] == b["plate"] and a["start"] <= b["end"] + tol and b["start"] <= a["end"] + tol
+    same_way = (a["kind"] == "refuel") == (b["kind"] == "refuel")
+    return a["plate"] == b["plate"] and same_way and a["start"] <= b["end"] + tol and b["start"] <= a["end"] + tol
 
 
 def plan_rerun(new_events: list[dict], existing: list[dict]) -> tuple[list[dict], list[str], list[str]]:

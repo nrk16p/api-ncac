@@ -129,3 +129,11 @@ def test_failed_source_reaches_the_summary_even_with_docs():
     assert s["sources_missing"] == ["terminus"] and s["sources_failed"] == ["terminus"]
     clean = daily_summary(KEY, docs, [], DEFAULTS, NOW)
     assert clean["sources_missing"] == [] and clean["sources_failed"] == []
+
+
+def test_plan_rerun_never_hands_a_decision_to_the_other_direction():
+    decided = score_event(raw(), DEFAULTS, None, None, NOW) | {"status": "decided", "decision": "real_loss", "review_id": "r1"}
+    refuel = score_event(raw(kind="refuel", stays_up_30=True, start_min=147, end_min=150), DEFAULTS, None, None, NOW)
+    upserts, stale, delete = plan_rerun([refuel], [decided])   # 2 min after the decided drop ended
+    assert upserts[0]["_id"] == refuel["_id"] and upserts[0]["status"] != "decided" and upserts[0]["decision"] is None
+    assert stale == [decided["_id"]] and delete == []
