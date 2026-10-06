@@ -23,3 +23,9 @@ def test_ensure_settings_creates_the_doc_and_never_overwrites():
     assert ensure_settings(db)["audit_rate"] == 0.1
     stored = db["fuel_settings"].find_one({"_id": "default"})
     assert stored["audit_rate"] == 0.1 and stored["min_drop_l"] == DEFAULTS["min_drop_l"]
+
+
+def test_calibration_defaults():
+    """User decision 2026-10-06: strict suspected loss — tunable in analytics.fuel_settings."""
+    assert (DEFAULTS["min_excess_l"], DEFAULTS["persist_min"]) == (15.0, 120)
+    assert (DEFAULTS["min_engine_off_share"], DEFAULTS["min_rate_l_per_min"]) == (0.8, 1.0)

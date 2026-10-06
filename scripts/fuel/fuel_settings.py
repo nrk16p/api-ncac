@@ -26,6 +26,12 @@ DEFAULTS = {
     "noisy_sensor_pct": 3.0,    # parked noise above this lowers the score
     "faulty_sensor_pct": 10.0,  # parked noise above this = sensor_fault
     "noise_rise_factor": 1.5,   # a drop ≤ this × the sensor's unexplained rises that day = noise (starting rule)
+    # suspected loss (user decision 2026-10-06): excess ≥ min_excess_l, still down after persist_min,
+    # not at a plant/POI, and engine off ≥ min_engine_off_share or falling ≥ min_rate_l_per_min
+    "min_excess_l": 15.0,
+    "persist_min": 120,
+    "min_engine_off_share": 0.8,
+    "min_rate_l_per_min": 1.0,
     # burn baselines (spec §4.1)
     "baseline_days": 30,
     "baseline_min_days": 7,

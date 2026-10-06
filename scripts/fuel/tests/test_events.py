@@ -74,7 +74,7 @@ def test_score_v2_uses_model_and_never_auto_closes_a_suggested_loss():
     calm = score_event(raw(excess_over_burn_l=1.0, engine_off_share=0.0, recovered_120=True), DEFAULTS,
                        toy_model(engine_off_share=5.0, recovered_120=-4.0), None, NOW)   # p ≈ 0.018
     assert calm["suggestion"] == "legit" and calm["confidence"] >= 0.95 and calm["status"] in ("auto_closed", "audit")
-    doubted = score_event(raw(recovered_120=True), DEFAULTS, toy_model(recovered_120=-4.0), None, NOW)
+    doubted = score_event(raw(night=True), DEFAULTS, toy_model(night=-6.0), None, NOW)
     assert doubted["class"] == "suspected_loss" and doubted["suggestion"] == "noise" and doubted["status"] == "open"
 
 
@@ -113,3 +113,11 @@ def test_broken_model_falls_back_to_rules():
     broken = {"version": "lr-old", "coef": [1.0], "intercept": 0.0, "scaler_mean": [0.0], "scaler_scale": [1.0]}
     e = score_event(raw(), DEFAULTS, broken, None, NOW)
     assert e["scorer"] == "rules-v1" and e["class"] == "suspected_loss" and e["score"] == 100
+
+
+def test_place_drop_stays_open_with_a_noise_suggestion():
+    e = score_event(raw(at_place=True, place_name="ACON A109"), DEFAULTS, None, None, NOW)
+    assert (e["class"], e["status"], e["suggestion"], e["confidence"]) == ("place_drop", "open", "noise", 0.7)
+    assert e["score"] == 95 and e["p_real_loss"] == 0.95 and e["reasons"][0] == "อยู่ที่ ACON A109"
+    calm = score_event(raw(at_place=True, place_name="ACON A109"), DEFAULTS, toy_model(engine_off_share=-6.0), None, NOW)
+    assert calm["suggestion"] == "noise" and calm["confidence"] >= 0.95 and calm["status"] == "open"   # never auto-closed

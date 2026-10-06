@@ -1,7 +1,15 @@
-"""Rules v1 (spec §4.2, §4.4): class, score, clear flag, suggestion, reasons and action in Thai."""
+"""Rules v1 (spec §4.2, §4.4): class, score, clear flag, suggestion, reasons and action in Thai.
+
+Calibration (user decision 2026-10-06, after the 2026-10-05 smoke): a drop or gap is a suspected loss
+only when its excess over the expected burn is ≥ min_excess_l, it is still down after persist_min, it
+is not at a plant/POI, and the engine was off (≥ min_engine_off_share) or the level fell fast
+(≥ min_rate_l_per_min). The same drop at a plant/POI is `place_drop` (Thai label "ลดที่แพลนท์/จุดจอด"):
+open, suggested as noise, with its own filter on the page. All four thresholds are fuel_settings.
+"""
 
 LOSS_CLASSES = ("suspected_loss", "gap_loss")
-SUGGESTION = {"suspected_loss": "real_loss", "gap_loss": "real_loss", "noise": "noise",
+NEVER_AUTO_CLOSED = LOSS_CLASSES + ("place_drop",)
+SUGGESTION = {"suspected_loss": "real_loss", "gap_loss": "real_loss", "place_drop": "noise", "noise": "noise",
               "sensor_fault": "noise", "consumption": "legit", "refuel": "legit"}
 SCORER_V1 = "rules-v1"
 # v1 has no probability for non-loss events; these confidences only drive the card's wording
@@ -14,6 +22,13 @@ ACTION_CHECK = "เทียบใบเติมน้ำมัน + สอบ�
 ACTION_GAP = "ตรวจกล่อง GPS/สายไฟ ว่าถูกตัดไฟหรือไม่"
 ACTION_SENSOR = "แจ้งผู้ให้บริการ GPS ตรวจเซนเซอร์"
 ACTION_ESCALATE = "ส่งเรื่องหัวหน้าฟลีท"
+ACTION_PLACE = "สอบถามแพลนท์/จุดจอด + เทียบใบเติมน้ำมัน"
+
+
+def recovered_within(ev: dict, minutes: int) -> bool:
+    """The level came back within `minutes` (any recovered_<n> window up to it)."""
+    return any(bool(value) for key, value in ev.items()
+               if key.startswith("recovered_") and key[10:].isdigit() and int(key[10:]) <= minutes)
 
 
 def classify(ev: dict, settings: dict, day_status: str) -> str:
@@ -24,17 +39,23 @@ def classify(ev: dict, settings: dict, day_status: str) -> str:
     rise_factor = settings.get("noise_rise_factor", NOISE_RISE_FACTOR)
     if ev["recovered_30"] or ev["rebound_60"] or ev["litres"] <= rise_factor * ev["day_rise_l"]:
         return "noise"
-    if ev["excess_over_burn_l"] < settings["min_drop_l"]:
+    if ev["excess_over_burn_l"] < settings["min_excess_l"]:
         return "consumption"
-    if ev["kind"] == "gap" and ev["gap_min"] >= settings["gap_min"] and not ev["recovered_60"]:
+    if recovered_within(ev, settings["persist_min"]):
+        return "noise"
+    if ev["at_place"]:
+        return "place_drop"
+    if (ev["engine_off_share"] < settings["min_engine_off_share"]
+            and ev["rate_l_per_min"] < settings["min_rate_l_per_min"]):
+        return "consumption"   # slow drain with the engine mostly on
+    if ev["kind"] == "gap" and ev["gap_min"] >= settings["gap_min"]:
         return "gap_loss"
-    if not ev["recovered_60"]:
-        return "suspected_loss"
-    return "noise"
+    return "suspected_loss"
 
 
 def score_v1(cls: str, ev: dict, settings: dict) -> int:
-    if cls not in LOSS_CLASSES:
+    """Evidence score for losses and place drops (so big place drops sort first in their filter)."""
+    if cls not in NEVER_AUTO_CLOSED:
         return 0
     score = 50
     score += 15 if ev["engine_off_share"] >= 0.8 else 0
@@ -95,6 +116,7 @@ def phrases(ev: dict) -> dict[str, str]:
 _REASON_ORDER = {
     "suspected_loss": ["engine_off_share", "recovered_120", "at_place", "night", "rate_l_per_min", "both_boxes", "litres"],
     "gap_loss": ["gap_min", "recovered_120", "at_place", "night", "litres"],
+    "place_drop": ["at_place", "recovered_120", "engine_off_share", "rate_l_per_min", "night", "litres"],
     "noise": ["recovered_30", "rebound_60", "day_rise_l", "sensor_noise_parked", "litres"],
     "consumption": ["excess_over_burn_l", "litres"],
     "refuel": ["litres", "at_place"],
@@ -117,6 +139,8 @@ def action_for(cls: str, ev: dict, repeat: bool) -> str | None:
         action = ACTION_CHECK
     elif cls == "sensor_fault":
         action = ACTION_SENSOR
+    elif cls == "place_drop":
+        action = ACTION_PLACE
     else:
         return None
     return f"{action} + {ACTION_ESCALATE}" if repeat and cls in LOSS_CLASSES else action

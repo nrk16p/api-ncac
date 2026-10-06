@@ -8,8 +8,8 @@ import hashlib
 from datetime import date, datetime, timedelta
 
 from model import model_reasons, predict
-from rules import (LOSS_CLASSES, RULE_CONF_CLEAR, RULE_CONF_OTHER, SCORER_V1, SUGGESTION, action_for,
-                   classify, is_clear, rule_reasons, score_v1)
+from rules import (LOSS_CLASSES, NEVER_AUTO_CLOSED, RULE_CONF_CLEAR, RULE_CONF_OTHER, SCORER_V1, SUGGESTION,
+                   action_for, classify, is_clear, rule_reasons, score_v1)
 from series_build import thai_midnight_utc
 
 STATUS_ORDER = ["ok", "stuck", "no_sensor", "offline", "no_data"]   # best first, when two sources disagree
@@ -76,7 +76,7 @@ def score_event(raw: dict, settings: dict, model: dict | None, driver: str | Non
         confidence = p if towards_loss else 1 - p
         reasons = model_reasons(contributions, ev, towards_loss)
         scorer = model["version"]
-        clear = cls not in LOSS_CLASSES and not towards_loss and confidence >= settings["auto_close_conf"]
+        clear = cls not in NEVER_AUTO_CLOSED and not towards_loss and confidence >= settings["auto_close_conf"]
         score = round(p * 100)
     else:
         score = score_v1(cls, ev, settings)

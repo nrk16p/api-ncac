@@ -1,5 +1,6 @@
 from fuel_settings import DEFAULTS
-from rules import ACTION_CHECK, ACTION_ESCALATE, ACTION_GAP, ACTION_SENSOR, action_for, classify, is_clear, rule_reasons, score_v1
+from rules import (ACTION_CHECK, ACTION_ESCALATE, ACTION_GAP, ACTION_PLACE, ACTION_SENSOR, SUGGESTION, action_for,
+                   classify, is_clear, rule_reasons, score_v1)
 
 
 def ev(**overrides):
@@ -56,3 +57,37 @@ def test_reasons_and_actions_in_thai():
     assert action_for("gap_loss", ev(), repeat=True) == f"{ACTION_GAP} + {ACTION_ESCALATE}"
     assert action_for("sensor_fault", ev(), repeat=True) == ACTION_SENSOR
     assert action_for("noise", ev(), repeat=True) is None
+
+
+def test_strict_suspected_loss():
+    """Big (excess ≥ 15 L), away from plants/POIs, still down after 2 h, and engine off or fast."""
+    assert classify(ev(engine_off_share=0.9, rate_l_per_min=0.5), DEFAULTS, "ok") == "suspected_loss"
+    assert classify(ev(engine_off_share=0.0, rate_l_per_min=1.0), DEFAULTS, "ok") == "suspected_loss"
+    assert classify(ev(excess_over_burn_l=14.9), DEFAULTS, "ok") == "consumption"
+    assert classify(ev(recovered_120=True), DEFAULTS, "ok") == "noise"                     # back within 2 h
+    assert classify(ev(engine_off_share=0.79, rate_l_per_min=0.99), DEFAULTS, "ok") == "consumption"   # slow drain, engine on
+    assert classify(ev(kind="gap", where="gap", gap_min=40, engine_off_share=0.0, rate_l_per_min=0.3),
+                    DEFAULTS, "ok") == "consumption"
+
+
+def test_place_drop():
+    at_plant = ev(at_place=True, place_name="ACON A109")
+    assert classify(at_plant, DEFAULTS, "ok") == "place_drop"
+    assert classify({**at_plant, "engine_off_share": 0.0, "rate_l_per_min": 0.2}, DEFAULTS, "ok") == "place_drop"
+    assert classify({**at_plant, "recovered_120": True}, DEFAULTS, "ok") == "noise"
+    assert classify({**at_plant, "excess_over_burn_l": 10.0}, DEFAULTS, "ok") == "consumption"
+    assert classify(ev(kind="gap", where="gap", gap_min=40, at_place=True, place_name="x"), DEFAULTS, "ok") == "place_drop"
+    assert SUGGESTION["place_drop"] == "noise" and not is_clear("place_drop", at_plant, DEFAULTS)
+    assert score_v1("place_drop", at_plant, DEFAULTS) == 95      # normal score, without the 'away from places' 10
+    assert rule_reasons("place_drop", at_plant)[0] == "อยู่ที่ ACON A109"
+    assert action_for("place_drop", at_plant, repeat=True) == ACTION_PLACE
+
+
+def test_calibration_thresholds_are_settings():
+    tuned = {**DEFAULTS, "min_excess_l": 40.0, "min_engine_off_share": 0.5, "min_rate_l_per_min": 3.0, "persist_min": 60}
+    assert classify(ev(), tuned, "ok") == "consumption"                                    # 30 < 40
+    big = {"excess_over_burn_l": 50.0}
+    assert classify(ev(**big, engine_off_share=0.6, rate_l_per_min=0.1), tuned, "ok") == "suspected_loss"
+    assert classify(ev(**big, engine_off_share=0.4, rate_l_per_min=2.0), tuned, "ok") == "consumption"
+    assert classify(ev(**big, recovered_60=True), tuned, "ok") == "noise"
+    assert classify(ev(**big, recovered_120=True), tuned, "ok") == "suspected_loss"         # back only after 60 min

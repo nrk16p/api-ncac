@@ -80,7 +80,7 @@ def evidence(day: DaySeries, ctx: Context, c: Candidate, baseline: dict, setting
             after = _parked_levels_after(day, ctx, c.i1, n, parked_kmh)
             ev[f"stays_up_{n}"] = bool(after.size and after.min() >= c.after - tol)
     else:
-        for n in RECOVERY_WINDOWS:
+        for n in sorted(set(RECOVERY_WINDOWS) | {int(settings["persist_min"])}):   # + the rules' persistence window
             after = _parked_levels_after(day, ctx, c.i1, n, parked_kmh)
             ev[f"recovered_{n}"] = bool(after.size and after.max() >= c.before - tol)
         after = _parked_levels_after(day, ctx, c.i1, 60, parked_kmh)
