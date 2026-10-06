@@ -229,7 +229,6 @@ def create_project(
         "estimated_users": body.estimated_users,
         "user_groups": body.user_groups,
         "priority": body.priority,
-        "priority_reason": body.priority_reason,
         "target_date": _date_str(body.target_date),
     }
     doc = ops_repo.create_project(fields, caller.person)

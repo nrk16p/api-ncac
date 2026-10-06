@@ -87,7 +87,6 @@ class ProjectRequestInput(BaseModel):
     estimated_users: int = Field(ge=1)
     user_groups: Optional[str] = Field(default=None, max_length=2000)
     priority: Priority
-    priority_reason: str = Field(min_length=1, max_length=2000)
     target_date: Optional[date] = None
 
 
@@ -101,7 +100,6 @@ class ProjectEditInput(BaseModel):
     estimated_users: Optional[int] = Field(default=None, ge=1)
     user_groups: Optional[str] = Field(default=None, max_length=2000)
     priority: Optional[Priority] = None
-    priority_reason: Optional[str] = Field(default=None, min_length=1, max_length=2000)
     target_date: Optional[date] = None
 
     @model_validator(mode="after")
@@ -130,7 +128,6 @@ class Project(BaseModel):
     estimated_users: int
     user_groups: Optional[str] = None
     priority: Priority
-    priority_reason: str
     target_date: Optional[date] = None
 
     status: Status
