@@ -9,22 +9,58 @@ from test_overspeed_segments import readings
 DAY = date(2026, 10, 5)
 
 
+MISSING = object()
+
+
+def mongo_path(doc, name):
+    """Mongo reads a projected name as a path: "a.b" means doc["a"]["b"] — so a name with dots in it
+    (ความเร็ว(กม./ชม.), ระยะทาง(กม.)) finds nothing."""
+    value = doc
+    for part in name.split("."):
+        if not isinstance(value, dict) or part not in value:
+            return MISSING
+        value = value[part]
+    return value
+
+
+def project(doc, spec):
+    out = {}
+    for name, how in spec.items():
+        if name == "_id":
+            continue
+        value = doc.get(how["$getField"], MISSING) if isinstance(how, dict) else mongo_path(doc, name)
+        if value is not MISSING:
+            out[name] = value
+    return out
+
+
 class FakeCursor(list):
     def hint(self, _index):
         return self
 
 
 class FakeDrivingLog:
+    """terminus.driving_log with Mongo's projection semantics for dotted names."""
+
     def __init__(self, rows):
-        self.rows, self.finds = rows, []
+        self.rows, self.matches, self.hints = rows, [], []
 
     def distinct(self, field, query):
         return [r[field] for r in self.rows if r["วันที่"] == query["วันที่"]] + [None, "  "]
 
-    def find(self, query, projection):
-        self.finds.append(query)
+    def _match(self, query):
         wanted = set(query["ทะเบียนพาหนะ"]["$in"])
-        return FakeCursor(r for r in self.rows if r["วันที่"] == query["วันที่"] and r["ทะเบียนพาหนะ"] in wanted)
+        return [r for r in self.rows if r["วันที่"] == query["วันที่"] and r["ทะเบียนพาหนะ"] in wanted]
+
+    def find(self, query, projection):
+        self.matches.append(query)
+        return FakeCursor(project(r, projection) for r in self._match(query))
+
+    def aggregate(self, pipeline, hint=None):
+        match, spec = pipeline[0]["$match"], pipeline[1]["$project"]
+        self.matches.append(match)
+        self.hints.append(hint)
+        return iter([project(r, spec) for r in self._match(match)])
 
 
 class DeleteResult:
@@ -54,10 +90,29 @@ def test_day_replaces_rows_for_every_processed_plate():
     assert [d["vehicle"] for d in target.inserts] == ["71-0001"]
 
 
+
+def test_speed_and_distance_are_read_despite_the_dots_in_their_names():
+    log = FakeDrivingLog(readings("71-0001", "08:00:00", [80] * 10))
+    target = FakeTarget()
+    overspeed_day(log, target, DAY, batch_pause_s=0)
+    assert target.inserts[0]["max_speed"] == 80
+    assert target.inserts[0]["sum_distance_km"] == pytest.approx(2.5)
+    assert log.hints == ["idx_date_plate_status_order_desc"]
+
+
+def test_rows_without_speed_fail_instead_of_wiping_the_day():
+    rows = [{k: v for k, v in r.items() if k != "ความเร็ว(กม./ชม.)"}
+            for r in readings("71-0001", "08:00:00", [80] * 10)]
+    target = FakeTarget()
+    with pytest.raises(RuntimeError, match="without speed"):
+        overspeed_day(FakeDrivingLog(rows), target, DAY, batch_pause_s=0)
+    assert target.deletes == [] and target.inserts == []
+
+
 def test_plates_filter_accepts_either_plate_form():
     log = FakeDrivingLog(readings("71-0001", "08:00:00", [80] * 10))
     overspeed_day(log, FakeTarget(), DAY, plates=["สบ.71-0001"], batch_pause_s=0)
-    assert log.finds[0]["ทะเบียนพาหนะ"] == {"$in": ["71-0001"]}
+    assert log.matches[0]["ทะเบียนพาหนะ"] == {"$in": ["71-0001"]}
 
 
 def test_day_without_rows_deletes_nothing():
