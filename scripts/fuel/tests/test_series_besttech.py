@@ -1,6 +1,6 @@
-from datetime import date
+from datetime import date, datetime
 
-from series_besttech import besttech_day_docs
+from series_besttech import besttech_day_docs, fetch_day
 from series_codec import decode_columns
 
 DAY = date(2026, 10, 5)
@@ -63,6 +63,27 @@ def test_tank_size_comes_from_tanks():
     tanks = {"สบ.71-8635": {"tank_l": 180.0, "tank_from": "calibrated"}}
     d = by_plate(besttech_day_docs(DAY, TRACK, windows, tanks))["สบ.71-8635"]
     assert (d["tank_l"], d["tank_from"]) == (180.0, "calibrated")
+
+
+class FakeClient:
+    def __init__(self):
+        self.calls = []
+
+    def history(self, vehicle_no, start, end):
+        self.calls.append((vehicle_no, start, end))
+        return [pt("2026-10-05 08:00:00")] if vehicle_no.startswith("ME152") else []
+
+
+def test_fetch_day_calls_history_once_per_live_vehicle():
+    client = FakeClient()
+    windows = fetch_day(client, DAY, TRACK)
+    # ME162's box has been silent since June, so it is not asked for this day
+    assert [call[0] for call in client.calls] == ["ME152 (71-8635 สบ.)", "70-6294 สบ."]
+    assert client.calls[0][1:] == (datetime(2026, 10, 5, 0, 0, 0), datetime(2026, 10, 5, 23, 59, 59))
+    docs = by_plate(besttech_day_docs(DAY, TRACK, windows, {}))
+    assert docs["สบ.71-8635"]["n"] == 1
+    assert docs["สบ.70-6294"]["coverage"]["status"] == "no_data"
+    assert docs["สบ.71-8623"]["coverage"]["status"] == "offline"
 
 
 def test_string_numbers_are_accepted():

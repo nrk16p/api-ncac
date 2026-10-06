@@ -1,4 +1,4 @@
-"""fuel_series_besttech — Besttech /history_all → analytics.gps_series (spec §3.3, §3.5).
+"""fuel_series_besttech — Besttech per-vehicle /history → analytics.gps_series (spec §3.3, §3.5).
 
 Default day = yesterday (Bangkok). START_DATE / END_DATE (dd/mm/YYYY) select a range.
 A day that already has docs for ≥ 90 % of the /track vehicle list is skipped unless FORCE=1,
@@ -7,7 +7,7 @@ Local runs read scripts/.env (MONGODB_URI, BESTTECH_API).
 """
 import os
 import sys
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "engineon"))
@@ -47,7 +47,8 @@ def _reading(point: dict, sec: int) -> Reading:
 
 def besttech_day_docs(day: date, track_vehicles: list[dict], windows: list[list[dict]],
                       tanks: dict, now: datetime | None = None) -> list[dict]:
-    """One doc per plate for `day`, from the /track list and the day's /history_all windows."""
+    """One doc per plate for `day`, from the /track list and the day's /history results
+    (`windows`: lists of {vehicle_no, points}, as fetch_day returns them)."""
     readings: dict[str, list[Reading]] = {}
     codes: dict[str, str] = {}
     for vehicles in windows:
@@ -84,11 +85,21 @@ def besttech_day_docs(day: date, track_vehicles: list[dict], windows: list[list[
     return docs
 
 
-def fetch_day(client: BesttechClient, day: date) -> list[list[dict]]:
+def fetch_day(client: BesttechClient, day: date, track_vehicles: list[dict]) -> list[list[dict]]:
+    """One /history call per vehicle for the whole day (≈ 131 calls ≈ 76 min at 35 s spacing).
+
+    /history_all is not used — it locks the key out for 20+ minutes after ~7 calls. Vehicles whose
+    box has been silent since before `day` are not asked; besttech_day_docs marks them offline.
+    """
+    start = datetime.combine(day, time(0, 0, 0))
+    end = datetime.combine(day, time(23, 59, 59))
     windows = []
-    for hour in range(24):
-        start = datetime.combine(day, time(hour, 0, 0))
-        windows.append(client.history_all(start, start + timedelta(minutes=59, seconds=59)))
+    for vehicle in track_vehicles:
+        vehicle_no = vehicle.get("vehicle_no")
+        last = _parse_time(vehicle.get("gps_time"))
+        if not vehicle_no or last is None or last < start:
+            continue
+        windows.append([{"vehicle_no": vehicle_no, "points": client.history(vehicle_no, start, end)}])
     return windows
 
 
@@ -102,7 +113,7 @@ def run_days(client: BesttechClient, db, days: list[date], force: bool = False) 
         if not force and track and count_series(db, key, SOURCE) >= COMPLETE_SHARE * len(track):
             log.info("besttech %s already complete — skipped", key)
             continue
-        docs = besttech_day_docs(day, track, fetch_day(client, day), tanks)
+        docs = besttech_day_docs(day, track, fetch_day(client, day, track), tanks)
         written += upsert_series(db, docs)
         log.info("besttech %s: %d docs", key, len(docs))
     return written

@@ -109,12 +109,21 @@ def test_pause_window_waits_until_it_ends():
     assert clock.sleeps[0] == 30 * 60
 
 
-def test_history_all_body():
-    resp = FakeResp({"what": "ok", "info": {"count_vehicles": 1, "vehicles": [{"vehicle_no": "x", "points": []}]}})
+def test_history_body_and_points():
+    resp = FakeResp({"what": "ok", "info": {"vehicle_no": "ME152 (71-8635 สบ.)", "count": 1,
+                                            "points": [{"gps_time": "2026-10-05 10:00:00"}]}})
     client, session, _ = make([resp])
-    out = client.history_all(datetime(2026, 10, 5, 10, 0, 0), datetime(2026, 10, 5, 10, 59, 59))
-    assert out == [{"vehicle_no": "x", "points": []}]
-    assert session.calls[0]["json"] == {"start_time": "2026-10-05 10:00:00", "end_time": "2026-10-05 10:59:59"}
+    out = client.history("ME152 (71-8635 สบ.)", datetime(2026, 10, 5, 0, 0, 0), datetime(2026, 10, 5, 23, 59, 59))
+    assert out == [{"gps_time": "2026-10-05 10:00:00"}]
+    call = session.calls[0]
+    assert call["url"].endswith("/apiservices/history")
+    assert call["json"] == {"vehicle_no": "ME152 (71-8635 สบ.)",
+                            "start_time": "2026-10-05 00:00:00", "end_time": "2026-10-05 23:59:59"}
+
+
+def test_history_all_is_not_offered():
+    # /history_all locks the key out for 20+ minutes after ~7 calls (measured 2026-10-06)
+    assert not hasattr(BesttechClient, "history_all")
 
 
 def test_missing_key_raises():

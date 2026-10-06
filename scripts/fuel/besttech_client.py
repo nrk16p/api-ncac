@@ -1,4 +1,8 @@
-"""BestTransport API client — /track and /history_all (spec §3.3).
+"""BestTransport API client — /track and per-vehicle /history (spec §3.3).
+
+/history_all is deliberately not offered: measured 2026-10-06, it answers error.TooManyRequests
+after ~7 calls and then keeps the key locked out of that endpoint for 20+ minutes (retries do not
+clear it), while /track and /history keep working.
 
 Quirks confirmed in production (menatransport/mongodb-gps app/services/besttech.py):
 - Auth is `Authorization: Bearer <key>`.
@@ -85,7 +89,8 @@ class BesttechClient:
         payload = self._post("track", {"last_gps_time": ""})
         return (payload.get("info") or {}).get("vehicles") or []
 
-    def history_all(self, start: datetime, end: datetime) -> list[dict]:
-        body = {"start_time": start.strftime(TIME_FMT), "end_time": end.strftime(TIME_FMT)}
-        payload = self._post("history_all", body)
-        return (payload.get("info") or {}).get("vehicles") or []
+    def history(self, vehicle_no: str, start: datetime, end: datetime) -> list[dict]:
+        """GPS points of one vehicle (`vehicle_no` exactly as /track returns it, ≤ 24 h per call)."""
+        body = {"vehicle_no": vehicle_no, "start_time": start.strftime(TIME_FMT), "end_time": end.strftime(TIME_FMT)}
+        payload = self._post("history", body)
+        return (payload.get("info") or {}).get("points") or []
