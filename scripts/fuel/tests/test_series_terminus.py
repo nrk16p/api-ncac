@@ -1,7 +1,8 @@
 from datetime import date
 
+from fake_mongo import FakeClient, matches
 from series_codec import decode_columns
-from series_terminus import day_plates, row_reading, terminus_day_docs
+from series_terminus import FIELDS, SPEED_FIELD, day_plates, ingest_terminus_day, row_reading, terminus_day_docs
 
 DAY = date(2026, 10, 5)
 
@@ -47,3 +48,38 @@ def test_day_plates_skips_nulls_and_blanks():
 def test_silent_plates_get_no_data_docs():
     docs = {d["plate"]: d for d in terminus_day_docs(DAY, [], {}, silent_plates={"สบ.70-0001"})}
     assert docs["สบ.70-0001"]["coverage"]["status"] == "no_data"
+
+
+def test_reads_never_project_a_dotted_field_name():
+    """Mongo reads a projected "ความเร็ว(กม./ชม.)" as the path ความเร็ว(กม → /ชม → ) and returns nothing:
+    every Terminus minute came back with speed 0, so whole driving days looked parked."""
+    assert [k for k in FIELDS if "." in k] == []
+    assert FIELDS["speed"] == {"$getField": SPEED_FIELD} == {"$getField": "ความเร็ว(กม./ชม.)"}
+
+
+class FakeDrivingLog:
+    """distinct + aggregate($match, $project with 1 / $getField) — enough for ingest_terminus_day."""
+    def __init__(self, rows):
+        self.rows = rows
+
+    def distinct(self, key, query):
+        return sorted({r[key] for r in self.rows if matches(r, query)})
+
+    def aggregate(self, pipeline, hint=None):
+        rows = self.rows
+        for stage in pipeline:
+            if "$match" in stage:
+                rows = [r for r in rows if matches(r, stage["$match"])]
+            if "$project" in stage:
+                rows = [{k: (r.get(v["$getField"]) if isinstance(v, dict) else r.get(k))
+                         for k, v in stage["$project"].items() if v} for r in rows]
+        return rows
+
+
+def test_ingest_keeps_the_terminus_speed():
+    rows = [dict(row("70-6302", "07:00:00", 160.0), วันที่="05/10/2026"),
+            dict(row("70-6302", "07:27:56", 159.0, status="รถวิ่ง", speed=42.0), วันที่="05/10/2026")]
+    db = FakeClient()["analytics"]
+    ingest_terminus_day({"driving_log": FakeDrivingLog(rows)}, db, DAY, tanks={}, batch_pause_s=0)
+    doc = db["gps_series"].find({})[0]
+    assert int(decode_columns(doc["cols"], doc["n"])["speed"].max()) == 42
