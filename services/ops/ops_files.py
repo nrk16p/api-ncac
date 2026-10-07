@@ -29,6 +29,11 @@ def task_attachment_key(project_id: str, task_id: str, attachment_id: str, safe_
     return f"ops_project/{project_id}/tasks/{task_id}/{attachment_id}-{safe_name}"
 
 
+def comment_attachment_key(project_id: str, comment_id: str, attachment_id: str, safe_name: str) -> str:
+    """For an issue comment, project_id is the issue's project_id (see ops_routes)."""
+    return f"ops_project/{project_id}/comments/{comment_id}/{attachment_id}_{safe_name}"
+
+
 def upload_bytes(key: str, data: bytes, content_type: str) -> None:
     client = _get_s3_client()
     try:

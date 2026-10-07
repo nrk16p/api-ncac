@@ -221,8 +221,11 @@ class ProjectTask(BaseModel):
 
 
 class CommentInput(BaseModel):
+    """body may be empty here — the real "non-empty body OR has an image" rule is
+    enforced in ops_logic.validate_comment_body, since a PATCH on a comment that
+    already has an image attachment is allowed to clear the body entirely."""
     model_config = ConfigDict(extra="forbid")
-    body: str = Field(min_length=1, max_length=2000)
+    body: str = Field(default="", max_length=2000)
 
 
 class Comment(BaseModel):
@@ -231,6 +234,7 @@ class Comment(BaseModel):
     ref_id: str
     author: Person
     body: str
+    attachments: List[Attachment] = Field(default_factory=list)
     created_at: datetime
     edited_at: Optional[datetime] = None
     like_count: int = 0

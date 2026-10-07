@@ -476,9 +476,17 @@ def remove_task_attachment(task_id: str, attachment_id: str) -> Optional[dict]:
 # Comments
 # ---------------------------------------------------------------------------
 
-def create_comment(ref_type: str, ref_id: str, body: str, author: dict) -> dict:
+def create_comment(
+    ref_type: str,
+    ref_id: str,
+    body: str,
+    author: dict,
+    *,
+    comment_id: Optional[str] = None,
+    attachments: Optional[List[dict]] = None,
+) -> dict:
     now = _now()
-    comment_id = uuid.uuid4().hex
+    comment_id = comment_id or uuid.uuid4().hex
     doc = {
         "_id": comment_id,
         "comment_id": comment_id,
@@ -486,6 +494,7 @@ def create_comment(ref_type: str, ref_id: str, body: str, author: dict) -> dict:
         "ref_id": ref_id,
         "author": author,
         "body": body,
+        "attachments": attachments or [],
         "created_at": now,
         "edited_at": None,
         "liked_by": [],

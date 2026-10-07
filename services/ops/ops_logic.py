@@ -75,6 +75,11 @@ MSG_ATTACHMENT_TOO_LARGE = "ไฟล์แนบต้องมีขนาด�
 MSG_ATTACHMENT_TYPE_INVALID = "ไม่รองรับไฟล์ประเภทนี้"
 MSG_ATTACHMENT_OWN_ONLY = "แนบไฟล์ได้เฉพาะโปรเจกต์/ปัญหาที่ตัวเองสร้าง"
 MSG_REF_TYPE_INVALID = "ref_type ต้องเป็น project หรือ issue"
+MSG_COMMENT_EMPTY = "กรุณาพิมพ์ความคิดเห็นหรือแนบรูปภาพ"
+MSG_COMMENT_BODY_TOO_LONG = "ความคิดเห็นต้องไม่เกิน 2000 ตัวอักษร"
+MSG_COMMENT_TOO_MANY_IMAGES = "แนบรูปได้สูงสุด 4 รูปต่อความคิดเห็น"
+MSG_COMMENT_IMAGE_TYPE_INVALID = "แนบได้เฉพาะไฟล์รูปภาพ"
+MSG_UNSUPPORTED_CONTENT_TYPE = "รูปแบบข้อมูลไม่ถูกต้อง"
 MSG_TASK_NOTE_FORBIDDEN = "แก้ไขโน้ตและรูปได้เฉพาะผู้รับผิดชอบ Task นี้"
 MSG_TASK_IMAGE_ONLY = "แนบได้เฉพาะไฟล์รูปภาพ (PNG, JPEG, GIF, WebP)"
 MSG_TASK_IMAGE_LIMIT = "แนบรูปได้สูงสุด 10 รูปต่อ Task"
@@ -329,6 +334,36 @@ def exclude_owner(usernames: Iterable[str], owner_username: Optional[str]) -> Li
 def check_comment_author(author_employee_id: str, caller_employee_id: str) -> None:
     if author_employee_id != caller_employee_id:
         raise OpsForbidden(MSG_COMMENT_OWN_ONLY)
+
+
+MAX_COMMENT_IMAGES = 4
+# images only (no office docs / pdf / zip — those stay attachment-upload-only)
+ALLOWED_COMMENT_IMAGE_MIME = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+
+
+def validate_comment_body(body: Optional[str], has_images: bool) -> str:
+    """Stripped body, <=2000 chars, non-empty unless at least one image backs it up
+    (a newly-uploaded image on create, or an existing attachment on a PATCH edit)."""
+    body = (body or "").strip()
+    if len(body) > 2000:
+        raise OpsError(MSG_COMMENT_BODY_TOO_LONG, field_errors={"body": MSG_COMMENT_BODY_TOO_LONG})
+    if not body and not has_images:
+        raise OpsError(MSG_COMMENT_EMPTY, field_errors={"body": MSG_COMMENT_EMPTY})
+    return body
+
+
+def check_comment_image_count(count: int) -> None:
+    if count > MAX_COMMENT_IMAGES:
+        raise OpsError(MSG_COMMENT_TOO_MANY_IMAGES)
+
+
+def check_comment_image_file(mime_type: str, size: int) -> None:
+    """Same size ceiling as check_attachment_file, but images only — comments never
+    accept pdf/office/zip the way project & issue attachments do."""
+    if size > MAX_ATTACHMENT_BYTES:
+        raise OpsError(MSG_ATTACHMENT_TOO_LARGE)
+    if mime_type not in ALLOWED_COMMENT_IMAGE_MIME:
+        raise OpsError(MSG_COMMENT_IMAGE_TYPE_INVALID)
 
 
 # ---------------------------------------------------------------------------

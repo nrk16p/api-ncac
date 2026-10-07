@@ -13,20 +13,26 @@ untouched).
 """
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import date
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, Response, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
+from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from database import get_db
 from schemas import ops_schema as schemas
 from services.ops import ops_files, ops_logic, ops_repo, people_repo
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Router with a scoped error-shaping route class (see module docstring)
@@ -163,6 +169,7 @@ def _comment_out(doc: dict, caller_employee_id: str) -> dict:
         "ref_id": doc["ref_id"],
         "author": doc["author"],
         "body": doc["body"],
+        "attachments": _attachments_out(doc.get("attachments", [])),
         "created_at": doc["created_at"],
         "edited_at": doc.get("edited_at"),
         "like_count": len(liked_by),
@@ -207,6 +214,114 @@ def _validate_status_filter(status: Optional[str]) -> Optional[str]:
     if status is not None and status not in ops_logic.STATUSES:
         raise ops_logic.OpsError(f"สถานะไม่ถูกต้อง: {status}")
     return status
+
+
+def _validation_error_to_ops_error(exc: ValidationError) -> ops_logic.OpsError:
+    """Mirrors OpsAPIRoute's RequestValidationError → field_errors mapping, for the
+    rare case a hand-parsed JSON body fails schemas.CommentInput's own validation
+    (e.g. body > 2000 chars or an unexpected extra field)."""
+    field_errors: Dict[str, str] = {}
+    for err in exc.errors():
+        loc = err.get("loc", ())
+        field = str(loc[-1]) if loc else "body"
+        field_errors[field] = err.get("msg", "ข้อมูลไม่ถูกต้อง")
+    return ops_logic.OpsError("ข้อมูลไม่ถูกต้อง", field_errors)
+
+
+async def _parse_comment_input(request: Request) -> Tuple[str, List[UploadFile]]:
+    """POST /ops/.../comments accepts both application/json {"body"} (unchanged,
+    for the currently-deployed frontend) and multipart/form-data with a "body" text
+    field (optional/empty) plus zero or more repeated "files" image fields."""
+    content_type = request.headers.get("content-type", "")
+    if content_type.startswith("application/json"):
+        try:
+            payload = await request.json()
+        except ValueError:
+            raise ops_logic.OpsError(ops_logic.MSG_UNSUPPORTED_CONTENT_TYPE)
+        try:
+            comment_in = schemas.CommentInput(**(payload or {}))
+        except ValidationError as exc:
+            raise _validation_error_to_ops_error(exc)
+        return comment_in.body, []
+    if content_type.startswith("multipart/form-data"):
+        form = await request.form()
+        raw_body = form.get("body")
+        body = raw_body if isinstance(raw_body, str) else ""
+        # request.form() hands back plain starlette.datastructures.UploadFile instances
+        # (fastapi.UploadFile is a *subclass* used for declared File()/UploadFile params,
+        # which isn't what a hand-parsed multipart body yields) — check the base class.
+        files = [f for f in form.getlist("files") if isinstance(f, StarletteUploadFile) and f.filename]
+        return body, files
+    raise ops_logic.OpsError(ops_logic.MSG_UNSUPPORTED_CONTENT_TYPE)
+
+
+async def _read_comment_images(files: List[UploadFile]) -> List[Tuple[str, str, bytes]]:
+    """Only reads each file's bytes (UploadFile.read() is a coroutine that Starlette
+    already offloads to a thread for the actual file I/O, so this part is fine to
+    await directly on the event loop). No validation, no S3, no Mongo here — see
+    _create_comment_sync, which does all of that off the event loop in one thread."""
+    reads: List[Tuple[str, str, bytes]] = []
+    for f in files:
+        data = await f.read()
+        mime_type = f.content_type or "application/octet-stream"
+        reads.append((f.filename or "file", mime_type, data))
+    return reads
+
+
+def _upload_comment_images(
+    reads: List[Tuple[str, str, bytes]], project_id: str, comment_id: str
+) -> List[dict]:
+    now = ops_repo.utc_now()
+    attachments: List[dict] = []
+    for filename, mime_type, data in reads:
+        attachment_id = uuid.uuid4().hex
+        safe_name = ops_logic.safe_file_name(filename)
+        key = ops_files.comment_attachment_key(project_id, comment_id, attachment_id, safe_name)
+        ops_files.upload_bytes(key, data, mime_type)
+        attachments.append(
+            {
+                "attachment_id": attachment_id,
+                "file_name": filename or safe_name,
+                "mime_type": mime_type,
+                "size": len(data),
+                "s3_key": key,
+                "uploaded_at": now,
+            }
+        )
+    return attachments
+
+
+def _create_comment_sync(
+    ref_type: Literal["project", "issue"],
+    ref_id: str,
+    raw_body: str,
+    reads: List[Tuple[str, str, bytes]],
+    caller: Caller,
+) -> dict:
+    """Everything blocking for a comment create — the project/issue existence check
+    (pymongo), file validation, the S3 upload(s) (boto3), the Mongo insert (pymongo),
+    and building the response (presigned URLs, also boto3) — run via run_in_threadpool
+    from the two async route handlers below, so none of it blocks uvicorn's event loop.
+    Image count/type/size and the body are both validated before any S3 upload, so a
+    rejection here never leaves an orphaned upload behind."""
+    if ref_type == "project":
+        _require_project(ref_id)
+        s3_project_id = ref_id
+    else:
+        issue = _require_issue(ref_id)
+        s3_project_id = issue["project_id"]
+
+    ops_logic.check_comment_image_count(len(reads))
+    for _filename, mime_type, data in reads:
+        ops_logic.check_comment_image_file(mime_type, len(data))
+    cleaned_body = ops_logic.validate_comment_body(raw_body, has_images=bool(reads))
+
+    comment_id = uuid.uuid4().hex
+    attachments = _upload_comment_images(reads, s3_project_id, comment_id)
+    doc = ops_repo.create_comment(
+        ref_type, ref_id, cleaned_body, caller.person, comment_id=comment_id, attachments=attachments
+    )
+    return _comment_out(doc, caller.employee_id)
 
 
 # ---------------------------------------------------------------------------
@@ -356,14 +471,14 @@ def list_project_comments(project_id: str, caller: Caller = Depends(get_caller))
 
 
 @router.post("/projects/{project_id}/comments", response_model=schemas.Comment, status_code=201)
-def create_project_comment(
+async def create_project_comment(
     project_id: str,
-    body: schemas.CommentInput,
+    request: Request,
     caller: Caller = Depends(get_caller),
 ):
-    _require_project(project_id)
-    doc = ops_repo.create_comment("project", project_id, body.body, caller.person)
-    return _comment_out(doc, caller.employee_id)
+    raw_body, files = await _parse_comment_input(request)
+    reads = await _read_comment_images(files)
+    return await run_in_threadpool(_create_comment_sync, "project", project_id, raw_body, reads, caller)
 
 
 # ---------------------------------------------------------------------------
@@ -443,14 +558,14 @@ def list_issue_comments(issue_id: str, caller: Caller = Depends(get_caller)):
 
 
 @router.post("/issues/{issue_id}/comments", response_model=schemas.Comment, status_code=201)
-def create_issue_comment(
+async def create_issue_comment(
     issue_id: str,
-    body: schemas.CommentInput,
+    request: Request,
     caller: Caller = Depends(get_caller),
 ):
-    _require_issue(issue_id)
-    doc = ops_repo.create_comment("issue", issue_id, body.body, caller.person)
-    return _comment_out(doc, caller.employee_id)
+    raw_body, files = await _parse_comment_input(request)
+    reads = await _read_comment_images(files)
+    return await run_in_threadpool(_create_comment_sync, "issue", issue_id, raw_body, reads, caller)
 
 
 # ---------------------------------------------------------------------------
@@ -616,9 +731,13 @@ def update_comment(
     body: schemas.CommentInput,
     caller: Caller = Depends(get_caller),
 ):
+    """Text-only edit — images are unchanged here. An empty body is allowed only
+    when the comment already has at least one image attachment to fall back on."""
     comment = _require_comment(comment_id)
     ops_logic.check_comment_author(comment["author"]["employee_id"], caller.employee_id)
-    updated = ops_repo.update_comment(comment_id, body.body)
+    has_images = bool(comment.get("attachments"))
+    cleaned_body = ops_logic.validate_comment_body(body.body, has_images=has_images)
+    updated = ops_repo.update_comment(comment_id, cleaned_body)
     return _comment_out(updated, caller.employee_id)
 
 
@@ -627,6 +746,12 @@ def delete_comment(comment_id: str, caller: Caller = Depends(get_caller)):
     comment = _require_comment(comment_id)
     ops_logic.check_comment_author(comment["author"]["employee_id"], caller.employee_id)
     ops_repo.delete_comment(comment_id)
+    keys = [a["s3_key"] for a in comment.get("attachments") or [] if a.get("s3_key")]
+    if keys:
+        try:
+            ops_files.delete_objects(keys)
+        except Exception:
+            logger.warning("ops: failed to delete S3 objects for comment %s", comment_id, exc_info=True)
     return Response(status_code=204)
 
 
