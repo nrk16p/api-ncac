@@ -13,20 +13,26 @@ untouched).
 """
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import date
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, Response, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
+from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from database import get_db
 from schemas import ops_schema as schemas
 from services.ops import ops_files, ops_logic, ops_repo, people_repo
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Router with a scoped error-shaping route class (see module docstring)
@@ -74,6 +80,7 @@ class Caller:
     employee_id: str
     username: Optional[str]
     is_manager: bool
+    is_admin: bool = False
 
 
 def get_caller(
@@ -87,7 +94,13 @@ def get_caller(
         raise HTTPException(status_code=401, detail=ops_logic.MSG_LOGIN_REQUIRED)
     person = people_repo.person_from_user(user)
     is_mgr = ops_logic.is_manager(user.username, user.department_id, user.employee_id)
-    return Caller(person=person, employee_id=person["employee_id"], username=user.username, is_manager=is_mgr)
+    return Caller(
+        person=person,
+        employee_id=person["employee_id"],
+        username=user.username,
+        is_manager=is_mgr,
+        is_admin=ops_logic.is_admin(user.department_id, user.employee_id),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -130,6 +143,7 @@ def _project_out(doc: dict, issue_count: int, caller: Caller) -> dict:
     out["attachments"] = _attachments_out(doc.get("attachments", []))
     out["issue_count"] = issue_count
     out["can_edit"] = _can_edit(doc, caller)
+    out["can_rename"] = ops_logic.can_rename_project(doc, caller.is_manager, out["can_edit"])
     return out
 
 
@@ -141,8 +155,11 @@ def _issue_out(doc: dict, project_title: str, project_assignees: List[dict]) -> 
     return out
 
 
-def _task_out(doc: dict) -> dict:
-    return {k: v for k, v in doc.items() if k != "_id"}
+def _task_out(doc: dict, caller: Caller) -> dict:
+    out = {k: v for k, v in doc.items() if k not in ("_id", "attachments")}
+    out["attachments"] = _attachments_out(doc.get("attachments", []))
+    out["can_note"] = ops_logic.can_note_task(doc, caller.employee_id, caller.is_admin)
+    return out
 
 
 def _comment_out(doc: dict, caller_employee_id: str) -> dict:
@@ -153,6 +170,7 @@ def _comment_out(doc: dict, caller_employee_id: str) -> dict:
         "ref_id": doc["ref_id"],
         "author": doc["author"],
         "body": doc["body"],
+        "attachments": _attachments_out(doc.get("attachments", [])),
         "created_at": doc["created_at"],
         "edited_at": doc.get("edited_at"),
         "like_count": len(liked_by),
@@ -197,6 +215,114 @@ def _validate_status_filter(status: Optional[str]) -> Optional[str]:
     if status is not None and status not in ops_logic.STATUSES:
         raise ops_logic.OpsError(f"สถานะไม่ถูกต้อง: {status}")
     return status
+
+
+def _validation_error_to_ops_error(exc: ValidationError) -> ops_logic.OpsError:
+    """Mirrors OpsAPIRoute's RequestValidationError → field_errors mapping, for the
+    rare case a hand-parsed JSON body fails schemas.CommentInput's own validation
+    (e.g. body > 2000 chars or an unexpected extra field)."""
+    field_errors: Dict[str, str] = {}
+    for err in exc.errors():
+        loc = err.get("loc", ())
+        field = str(loc[-1]) if loc else "body"
+        field_errors[field] = err.get("msg", "ข้อมูลไม่ถูกต้อง")
+    return ops_logic.OpsError("ข้อมูลไม่ถูกต้อง", field_errors)
+
+
+async def _parse_comment_input(request: Request) -> Tuple[str, List[UploadFile]]:
+    """POST /ops/.../comments accepts both application/json {"body"} (unchanged,
+    for the currently-deployed frontend) and multipart/form-data with a "body" text
+    field (optional/empty) plus zero or more repeated "files" image fields."""
+    content_type = request.headers.get("content-type", "")
+    if content_type.startswith("application/json"):
+        try:
+            payload = await request.json()
+        except ValueError:
+            raise ops_logic.OpsError(ops_logic.MSG_UNSUPPORTED_CONTENT_TYPE)
+        try:
+            comment_in = schemas.CommentInput(**(payload or {}))
+        except ValidationError as exc:
+            raise _validation_error_to_ops_error(exc)
+        return comment_in.body, []
+    if content_type.startswith("multipart/form-data"):
+        form = await request.form()
+        raw_body = form.get("body")
+        body = raw_body if isinstance(raw_body, str) else ""
+        # request.form() hands back plain starlette.datastructures.UploadFile instances
+        # (fastapi.UploadFile is a *subclass* used for declared File()/UploadFile params,
+        # which isn't what a hand-parsed multipart body yields) — check the base class.
+        files = [f for f in form.getlist("files") if isinstance(f, StarletteUploadFile) and f.filename]
+        return body, files
+    raise ops_logic.OpsError(ops_logic.MSG_UNSUPPORTED_CONTENT_TYPE)
+
+
+async def _read_comment_images(files: List[UploadFile]) -> List[Tuple[str, str, bytes]]:
+    """Only reads each file's bytes (UploadFile.read() is a coroutine that Starlette
+    already offloads to a thread for the actual file I/O, so this part is fine to
+    await directly on the event loop). No validation, no S3, no Mongo here — see
+    _create_comment_sync, which does all of that off the event loop in one thread."""
+    reads: List[Tuple[str, str, bytes]] = []
+    for f in files:
+        data = await f.read()
+        mime_type = f.content_type or "application/octet-stream"
+        reads.append((f.filename or "file", mime_type, data))
+    return reads
+
+
+def _upload_comment_images(
+    reads: List[Tuple[str, str, bytes]], project_id: str, comment_id: str
+) -> List[dict]:
+    now = ops_repo.utc_now()
+    attachments: List[dict] = []
+    for filename, mime_type, data in reads:
+        attachment_id = uuid.uuid4().hex
+        safe_name = ops_logic.safe_file_name(filename)
+        key = ops_files.comment_attachment_key(project_id, comment_id, attachment_id, safe_name)
+        ops_files.upload_bytes(key, data, mime_type)
+        attachments.append(
+            {
+                "attachment_id": attachment_id,
+                "file_name": filename or safe_name,
+                "mime_type": mime_type,
+                "size": len(data),
+                "s3_key": key,
+                "uploaded_at": now,
+            }
+        )
+    return attachments
+
+
+def _create_comment_sync(
+    ref_type: Literal["project", "issue"],
+    ref_id: str,
+    raw_body: str,
+    reads: List[Tuple[str, str, bytes]],
+    caller: Caller,
+) -> dict:
+    """Everything blocking for a comment create — the project/issue existence check
+    (pymongo), file validation, the S3 upload(s) (boto3), the Mongo insert (pymongo),
+    and building the response (presigned URLs, also boto3) — run via run_in_threadpool
+    from the two async route handlers below, so none of it blocks uvicorn's event loop.
+    Image count/type/size and the body are both validated before any S3 upload, so a
+    rejection here never leaves an orphaned upload behind."""
+    if ref_type == "project":
+        _require_project(ref_id)
+        s3_project_id = ref_id
+    else:
+        issue = _require_issue(ref_id)
+        s3_project_id = issue["project_id"]
+
+    ops_logic.check_comment_image_count(len(reads))
+    for _filename, mime_type, data in reads:
+        ops_logic.check_comment_image_file(mime_type, len(data))
+    cleaned_body = ops_logic.validate_comment_body(raw_body, has_images=bool(reads))
+
+    comment_id = uuid.uuid4().hex
+    attachments = _upload_comment_images(reads, s3_project_id, comment_id)
+    doc = ops_repo.create_comment(
+        ref_type, ref_id, cleaned_body, caller.person, comment_id=comment_id, attachments=attachments
+    )
+    return _comment_out(doc, caller.employee_id)
 
 
 # ---------------------------------------------------------------------------
@@ -258,6 +384,19 @@ def update_project(
     if "user_groups" in changes:
         changes["user_groups"] = (changes["user_groups"] or "").strip() or None
     updated = ops_repo.update_project_fields(project_id, changes)
+    count = ops_repo.bulk_issue_counts([project_id]).get(project_id, 0)
+    return _project_out(updated, count, caller)
+
+
+@router.patch("/projects/{project_id}/title", response_model=schemas.Project)
+def update_project_title(
+    project_id: str,
+    body: schemas.ProjectTitleInput,
+    caller: Caller = Depends(get_caller),
+):
+    doc = _require_project(project_id)
+    ops_logic.require_project_renamable(doc, caller.is_manager, _can_edit(doc, caller))
+    updated = ops_repo.update_project_fields(project_id, {"title": ops_logic.validate_project_title(body.title)})
     count = ops_repo.bulk_issue_counts([project_id]).get(project_id, 0)
     return _project_out(updated, count, caller)
 
@@ -346,14 +485,14 @@ def list_project_comments(project_id: str, caller: Caller = Depends(get_caller))
 
 
 @router.post("/projects/{project_id}/comments", response_model=schemas.Comment, status_code=201)
-def create_project_comment(
+async def create_project_comment(
     project_id: str,
-    body: schemas.CommentInput,
+    request: Request,
     caller: Caller = Depends(get_caller),
 ):
-    _require_project(project_id)
-    doc = ops_repo.create_comment("project", project_id, body.body, caller.person)
-    return _comment_out(doc, caller.employee_id)
+    raw_body, files = await _parse_comment_input(request)
+    reads = await _read_comment_images(files)
+    return await run_in_threadpool(_create_comment_sync, "project", project_id, raw_body, reads, caller)
 
 
 # ---------------------------------------------------------------------------
@@ -433,14 +572,14 @@ def list_issue_comments(issue_id: str, caller: Caller = Depends(get_caller)):
 
 
 @router.post("/issues/{issue_id}/comments", response_model=schemas.Comment, status_code=201)
-def create_issue_comment(
+async def create_issue_comment(
     issue_id: str,
-    body: schemas.CommentInput,
+    request: Request,
     caller: Caller = Depends(get_caller),
 ):
-    _require_issue(issue_id)
-    doc = ops_repo.create_comment("issue", issue_id, body.body, caller.person)
-    return _comment_out(doc, caller.employee_id)
+    raw_body, files = await _parse_comment_input(request)
+    reads = await _read_comment_images(files)
+    return await run_in_threadpool(_create_comment_sync, "issue", issue_id, raw_body, reads, caller)
 
 
 # ---------------------------------------------------------------------------
@@ -455,7 +594,7 @@ def list_tasks(
 ):
     mine_id = caller.employee_id if scope == "mine" else None
     docs = ops_repo.list_tasks(mine_employee_id=mine_id, project_id=project_id)
-    return [_task_out(d) for d in docs]
+    return [_task_out(d, caller) for d in docs]
 
 
 @router.post("/tasks", response_model=schemas.ProjectTask, status_code=201)
@@ -469,7 +608,7 @@ def create_task(
     title = ops_logic.validate_task_title(body.title)
     fields = {"project_id": body.project_id, "title": title, "due_date": _date_str(body.due_date)}
     doc = ops_repo.create_task(fields, proj["title"], caller.person)
-    return _task_out(doc)
+    return _task_out(doc, caller)
 
 
 @router.patch("/tasks/{task_id}", response_model=schemas.ProjectTask)
@@ -480,17 +619,18 @@ def update_task(
 ):
     ops_logic.require_manager(caller.is_manager)
     task = _require_task(task_id)
-    ops_logic.check_task_editable(task["status"])
     changes: Dict[str, Any] = {}
     if body.title is not None:
+        ops_logic.check_task_title_editable(task["status"])
         changes["title"] = ops_logic.validate_task_title(body.title)
     if body.project_id is not None and body.project_id != task["project_id"]:
+        ops_logic.check_task_editable(task["status"])
         proj = _require_project(body.project_id)
         ops_logic.check_task_move_target(proj["status"])
         changes["project_id"] = body.project_id
         changes["project_title"] = proj["title"]
     updated = ops_repo.update_task_fields(task_id, changes)
-    return _task_out(updated)
+    return _task_out(updated, caller)
 
 
 @router.patch("/tasks/{task_id}/status", response_model=schemas.ProjectTask)
@@ -503,7 +643,7 @@ def update_task_status(
     _require_task(task_id)
     remark = ops_logic.validate_status_input(body.status, body.remark)
     updated = ops_repo.update_task_status(task_id, body.status, remark, caller.person)
-    return _task_out(updated)
+    return _task_out(updated, caller)
 
 
 @router.patch("/tasks/{task_id}/assignees", response_model=schemas.ProjectTask)
@@ -520,7 +660,7 @@ def update_task_assignees(
     usernames = ops_logic.exclude_owner(usernames, (task.get("owner") or {}).get("username"))
     people = people_repo.resolve_people(db, usernames)
     updated = ops_repo.update_task_assignees(task_id, people)
-    return _task_out(updated)
+    return _task_out(updated, caller)
 
 
 @router.patch("/tasks/{task_id}/plan", response_model=schemas.ProjectTask)
@@ -533,7 +673,111 @@ def update_task_plan(
     task = _require_task(task_id)
     ops_logic.check_task_plan_editable(task["status"])
     updated = ops_repo.update_task_plan(task_id, _date_str(body.due_date))
-    return _task_out(updated)
+    return _task_out(updated, caller)
+
+
+@router.patch("/tasks/{task_id}/note", response_model=schemas.ProjectTask)
+def update_task_note(
+    task_id: str,
+    body: schemas.TaskNoteInput,
+    caller: Caller = Depends(get_caller),
+):
+    task = _require_task(task_id)
+    ops_logic.require_task_note_editor(task, caller.employee_id, caller.is_admin)
+    updated = ops_repo.update_task_note(task_id, ops_logic.clean_task_note(body.note), caller.person)
+    return _task_out(updated, caller)
+
+
+@router.post("/tasks/{task_id}/attachments", response_model=schemas.Attachment, status_code=201)
+def upload_task_image(
+    task_id: str,
+    file: UploadFile = File(...),
+    caller: Caller = Depends(get_caller),
+):
+    """Pictures under the task note — images only, up to MAX_TASK_IMAGES."""
+    task = _require_task(task_id)
+    ops_logic.require_task_note_editor(task, caller.employee_id, caller.is_admin)
+    data = file.file.read()
+    mime_type = file.content_type or "application/octet-stream"
+    ops_logic.check_attachment_file(mime_type, len(data))
+    ops_logic.check_task_image(mime_type, len(task.get("attachments") or []))
+
+    attachment_id = uuid.uuid4().hex
+    safe_name = ops_logic.safe_file_name(file.filename or "image")
+    key = ops_files.task_attachment_key(task["project_id"], task_id, attachment_id, safe_name)
+    ops_files.upload_bytes(key, data, mime_type)
+
+    attachment = {
+        "attachment_id": attachment_id,
+        "file_name": file.filename or safe_name,
+        "mime_type": mime_type,
+        "size": len(data),
+        "s3_key": key,
+        "uploaded_at": ops_repo.utc_now(),
+        "uploaded_by": caller.person,
+    }
+    ops_repo.add_task_attachment(task_id, attachment)
+    return _attachments_out([attachment])[0]
+
+
+@router.delete("/tasks/{task_id}/attachments/{attachment_id}", response_model=schemas.ProjectTask)
+def delete_task_image(task_id: str, attachment_id: str, caller: Caller = Depends(get_caller)):
+    task = _require_task(task_id)
+    ops_logic.require_task_note_editor(task, caller.employee_id, caller.is_admin)
+    found = next((a for a in task.get("attachments") or [] if a["attachment_id"] == attachment_id), None)
+    if found is None:
+        raise ops_logic.OpsNotFound(ops_logic.MSG_ATTACHMENT_NOT_FOUND)
+    updated = ops_repo.remove_task_attachment(task_id, attachment_id)
+    try:
+        ops_files.delete_objects([found["s3_key"]])
+    except Exception:  # the record is gone already; a stray object in S3 is harmless
+        pass
+    return _task_out(updated, caller)
+
+
+# ---------------------------------------------------------------------------
+# Satisfaction surveys (menaIT /survey-ops)
+# ---------------------------------------------------------------------------
+
+def _survey_out(doc: dict) -> dict:
+    return {k: v for k, v in doc.items() if k != "_id"}
+
+
+@router.post("/surveys", response_model=schemas.SurveyResponse, status_code=201)
+def submit_survey(body: schemas.SurveyInput, caller: Caller = Depends(get_caller)):
+    """Signed in only; answering the same system again replaces the earlier answer.
+    An OPS project must be in Review or Done; other systems (Apps Script list) are stored as-is."""
+    system_id = body.system_id.strip()
+    project_id = None
+    system_name = (body.system_name or "").strip() or None
+    if ops_logic.PROJECT_ID_RE.match(system_id):
+        project = _require_project(system_id)
+        ops_logic.check_project_surveyable(project["status"])
+        project_id = system_id
+        system_name = project["title"]
+    fields = {
+        "project_id": project_id,
+        "system_name": system_name,
+        "section2": ops_logic.clean_survey_ratings(body.section2, "section2"),
+        "section3": ops_logic.clean_survey_ratings(body.section3, "section3"),
+        "comment": (body.comment or "").strip() or None,
+    }
+    return _survey_out(ops_repo.upsert_survey(system_id, fields, caller.person))
+
+
+@router.get("/surveys/mine", response_model=Optional[schemas.SurveyResponse])
+def my_survey(system_id: str = Query(..., min_length=1, max_length=100), caller: Caller = Depends(get_caller)):
+    """The caller's own earlier answer for this system (null if none) — the form pre-fills it for editing."""
+    doc = ops_repo.get_survey(system_id.strip(), caller.employee_id)
+    return _survey_out(doc) if doc else None
+
+
+@router.get("/projects/{project_id}/surveys", response_model=schemas.SurveyResults)
+def list_project_surveys(project_id: str, caller: Caller = Depends(get_caller)):
+    ops_logic.require_manager(caller.is_manager)
+    _require_project(project_id)
+    docs = ops_repo.list_surveys(project_id)
+    return {"project_id": project_id, **ops_logic.survey_summary(docs), "responses": [_survey_out(d) for d in docs]}
 
 
 # ---------------------------------------------------------------------------
@@ -546,9 +790,13 @@ def update_comment(
     body: schemas.CommentInput,
     caller: Caller = Depends(get_caller),
 ):
+    """Text-only edit — images are unchanged here. An empty body is allowed only
+    when the comment already has at least one image attachment to fall back on."""
     comment = _require_comment(comment_id)
     ops_logic.check_comment_author(comment["author"]["employee_id"], caller.employee_id)
-    updated = ops_repo.update_comment(comment_id, body.body)
+    has_images = bool(comment.get("attachments"))
+    cleaned_body = ops_logic.validate_comment_body(body.body, has_images=has_images)
+    updated = ops_repo.update_comment(comment_id, cleaned_body)
     return _comment_out(updated, caller.employee_id)
 
 
@@ -557,6 +805,12 @@ def delete_comment(comment_id: str, caller: Caller = Depends(get_caller)):
     comment = _require_comment(comment_id)
     ops_logic.check_comment_author(comment["author"]["employee_id"], caller.employee_id)
     ops_repo.delete_comment(comment_id)
+    keys = [a["s3_key"] for a in comment.get("attachments") or [] if a.get("s3_key")]
+    if keys:
+        try:
+            ops_files.delete_objects(keys)
+        except Exception:
+            logger.warning("ops: failed to delete S3 objects for comment %s", comment_id, exc_info=True)
     return Response(status_code=204)
 
 

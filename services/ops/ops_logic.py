@@ -60,9 +60,16 @@ MSG_LINK_DONE_ONLY = "ใส่ลิงก์ได้เมื่อโปร�
 MSG_LINK_INVALID = "ลิงก์ต้องขึ้นต้นด้วย http:// หรือ https://"
 MSG_PROJECT_CLOSED_EDIT = "โปรเจกต์นี้ปิดแล้ว แก้ไขคำขอไม่ได้"
 MSG_PROJECT_EDIT_FORBIDDEN = "แก้ไขคำขอได้เฉพาะผู้รับผิดชอบ (คำขอจากระบบ) หรือคนในแผนกเดียวกับผู้ยื่น"
+MSG_PROJECT_DONE_TITLE = "โปรเจกต์นี้ Done แล้ว แก้ไขชื่อไม่ได้"
+MSG_PROJECT_RENAME_FORBIDDEN = "แก้ไขชื่อโปรเจกต์ได้เฉพาะทีม OPS หรือผู้มีสิทธิ์แก้ไขคำขอ"
+MSG_PROJECT_TITLE_TOO_SHORT = "ชื่อโปรเจกต์ต้องมีอย่างน้อย 3 ตัวอักษร"
+MSG_SURVEY_NOT_READY = "ประเมินได้เมื่อโปรเจกต์อยู่ในขั้น Review หรือ Done"
+MSG_SURVEY_INCOMPLETE = "กรุณาให้คะแนนให้ครบทุกข้อ"
 MSG_PROJECT_REJECTED_TASK_CREATE = "โปรเจกต์นี้ไม่อนุมัติ สร้าง Task ไม่ได้"
 MSG_PROJECT_REJECTED_TASK_MOVE = "โปรเจกต์นี้ไม่อนุมัติ ย้าย Task เข้าไม่ได้"
-MSG_TASK_NOT_OPEN = "แก้ไขชื่อและโปรเจกต์ได้เฉพาะ Task ที่ยัง Open"
+MSG_TASK_NOT_OPEN = "ย้ายโปรเจกต์ได้เฉพาะ Task ที่ยัง Open"
+MSG_TASK_DONE_TITLE = "Task นี้ Done แล้ว แก้ไขชื่อไม่ได้"
+MSG_TASK_DONE_NOTE = "Task นี้ Done แล้ว แก้ไขโน้ตและรูปไม่ได้"
 MSG_TASK_CLOSED = "Task นี้ปิดแล้ว แก้ไขไม่ได้"
 MSG_TASK_TITLE_REQUIRED = "กรุณาระบุชื่อ Task"
 MSG_REVIEW_NOT_IN_REVIEW = "รายการนี้ไม่ได้อยู่ในขั้นรีวิว"
@@ -73,6 +80,15 @@ MSG_ATTACHMENT_TOO_LARGE = "ไฟล์แนบต้องมีขนาด�
 MSG_ATTACHMENT_TYPE_INVALID = "ไม่รองรับไฟล์ประเภทนี้"
 MSG_ATTACHMENT_OWN_ONLY = "แนบไฟล์ได้เฉพาะโปรเจกต์/ปัญหาที่ตัวเองสร้าง"
 MSG_REF_TYPE_INVALID = "ref_type ต้องเป็น project หรือ issue"
+MSG_COMMENT_EMPTY = "กรุณาพิมพ์ความคิดเห็นหรือแนบรูปภาพ"
+MSG_COMMENT_BODY_TOO_LONG = "ความคิดเห็นต้องไม่เกิน 2000 ตัวอักษร"
+MSG_COMMENT_TOO_MANY_IMAGES = "แนบรูปได้สูงสุด 4 รูปต่อความคิดเห็น"
+MSG_COMMENT_IMAGE_TYPE_INVALID = "แนบได้เฉพาะไฟล์รูปภาพ"
+MSG_UNSUPPORTED_CONTENT_TYPE = "รูปแบบข้อมูลไม่ถูกต้อง"
+MSG_TASK_NOTE_FORBIDDEN = "แก้ไขโน้ตและรูปได้เฉพาะผู้รับผิดชอบ Task นี้"
+MSG_TASK_IMAGE_ONLY = "แนบได้เฉพาะไฟล์รูปภาพ (PNG, JPEG, GIF, WebP)"
+MSG_TASK_IMAGE_LIMIT = "แนบรูปได้สูงสุด 10 รูปต่อ Task"
+MSG_ATTACHMENT_NOT_FOUND = "ไม่พบไฟล์แนบ"
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +171,25 @@ def can_edit_project(project: dict, caller_employee_id: str, caller_username: Op
     return bool(dept) and dept == _norm(requester.get("department"))
 
 
+def can_rename_project(project: dict, is_mgr: bool, can_edit: bool) -> bool:
+    """Title only: the OPS team / admin, or whoever may edit the request — any status except Done."""
+    return project.get("status") != "Done" and (is_mgr or can_edit)
+
+
+def require_project_renamable(project: dict, is_mgr: bool, can_edit: bool) -> None:
+    if project.get("status") == "Done":
+        raise OpsConflict(MSG_PROJECT_DONE_TITLE)
+    if not can_rename_project(project, is_mgr, can_edit):
+        raise OpsForbidden(MSG_PROJECT_RENAME_FORBIDDEN)
+
+
+def validate_project_title(title: Optional[str]) -> str:
+    title = (title or "").strip()
+    if len(title) < 3:
+        raise OpsError(MSG_PROJECT_TITLE_TOO_SHORT, field_errors={"title": MSG_PROJECT_TITLE_TOO_SHORT})
+    return title
+
+
 def validate_link_url(project_status: str, url: Optional[str]) -> Optional[str]:
     """Done projects only; http(s) with a host, or empty/None to clear."""
     if project_status != "Done":
@@ -224,9 +259,15 @@ def check_task_move_target(project_status: str) -> None:
 
 
 def check_task_editable(task_status: str) -> None:
-    """Title / project_id edits: only while the task is Open."""
+    """Moving it to another project: only while the task is Open."""
     if task_status != "Open":
         raise OpsConflict(MSG_TASK_NOT_OPEN)
+
+
+def check_task_title_editable(task_status: str) -> None:
+    """Renaming: any status except Done (Reject included)."""
+    if task_status == "Done":
+        raise OpsConflict(MSG_TASK_DONE_TITLE)
 
 
 def check_task_assignees_editable(task_status: str) -> None:
@@ -245,6 +286,84 @@ def validate_task_title(title: Optional[str]) -> str:
         raise OpsError(MSG_TASK_TITLE_REQUIRED, field_errors={"title": MSG_TASK_TITLE_REQUIRED})
     return title
 
+
+# ---------------------------------------------------------------------------
+# Task note + pictures — the people responsible for the task (owner / co-assignees)
+# and menaIT admin; any status except Done (Bew's call 2026-10-07).
+# ---------------------------------------------------------------------------
+
+TASK_IMAGE_MIME = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+MAX_TASK_IMAGES = 10
+
+
+def is_admin(department_id: Optional[int], employee_id: Optional[str]) -> bool:
+    return department_id in ADMIN_DEPARTMENT_IDS or employee_id in ADMIN_EMPLOYEE_IDS
+
+
+def can_note_task(task: dict, caller_employee_id: str, caller_is_admin: bool) -> bool:
+    if task.get("status") == "Done":
+        return False
+    if caller_is_admin:
+        return True
+    people = [task.get("owner") or {}, *(task.get("assignees") or [])]
+    return any(p.get("employee_id") == caller_employee_id for p in people)
+
+
+def require_task_note_editor(task: dict, caller_employee_id: str, caller_is_admin: bool) -> None:
+    if task.get("status") == "Done":
+        raise OpsConflict(MSG_TASK_DONE_NOTE)
+    if not can_note_task(task, caller_employee_id, caller_is_admin):
+        raise OpsForbidden(MSG_TASK_NOTE_FORBIDDEN)
+
+
+def clean_task_note(note: Optional[str]) -> Optional[str]:
+    return (note or "").strip() or None
+
+
+def check_task_image(mime_type: str, current_count: int) -> None:
+    if mime_type not in TASK_IMAGE_MIME:
+        raise OpsError(MSG_TASK_IMAGE_ONLY)
+    if current_count >= MAX_TASK_IMAGES:
+        raise OpsConflict(MSG_TASK_IMAGE_LIMIT)
+
+
+
+# ---------------------------------------------------------------------------
+# Satisfaction surveys (menaIT /survey-ops) — 2 sections × 5 questions, 1–5 each
+# ---------------------------------------------------------------------------
+
+SURVEY_QUESTION_IDS = (1, 2, 3, 4, 5)
+SURVEY_STATUSES = ("Review", "Done")
+
+
+def check_project_surveyable(project_status: str) -> None:
+    if project_status not in SURVEY_STATUSES:
+        raise OpsConflict(MSG_SURVEY_NOT_READY)
+
+
+def clean_survey_ratings(ratings: dict, field: str) -> dict:
+    """Every question answered → {"1": n, … "5": n} (Mongo keys must be strings)."""
+    if sorted(int(k) for k in ratings) != list(SURVEY_QUESTION_IDS):
+        raise OpsError(MSG_SURVEY_INCOMPLETE, field_errors={field: MSG_SURVEY_INCOMPLETE})
+    return {str(int(k)): int(v) for k, v in sorted(ratings.items(), key=lambda kv: int(kv[0]))}
+
+
+def survey_summary(docs: List[dict]) -> dict:
+    """Averages per question and overall (1 decimal); None when nobody answered."""
+    def avg(values: List[int]) -> Optional[float]:
+        return round(sum(values) / len(values), 2) if values else None
+
+    out: dict = {"count": len(docs)}
+    every: List[int] = []
+    for section in ("section2", "section3"):
+        per_q = []
+        for q in SURVEY_QUESTION_IDS:
+            vals = [d[section][str(q)] for d in docs if str(q) in (d.get(section) or {})]
+            every.extend(vals)
+            per_q.append(avg(vals))
+        out[f"{section}_avg"] = per_q
+    out["average"] = avg(every)
+    return out
 
 # ---------------------------------------------------------------------------
 # Assignees
@@ -277,6 +396,36 @@ def exclude_owner(usernames: Iterable[str], owner_username: Optional[str]) -> Li
 def check_comment_author(author_employee_id: str, caller_employee_id: str) -> None:
     if author_employee_id != caller_employee_id:
         raise OpsForbidden(MSG_COMMENT_OWN_ONLY)
+
+
+MAX_COMMENT_IMAGES = 4
+# images only (no office docs / pdf / zip — those stay attachment-upload-only)
+ALLOWED_COMMENT_IMAGE_MIME = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+
+
+def validate_comment_body(body: Optional[str], has_images: bool) -> str:
+    """Stripped body, <=2000 chars, non-empty unless at least one image backs it up
+    (a newly-uploaded image on create, or an existing attachment on a PATCH edit)."""
+    body = (body or "").strip()
+    if len(body) > 2000:
+        raise OpsError(MSG_COMMENT_BODY_TOO_LONG, field_errors={"body": MSG_COMMENT_BODY_TOO_LONG})
+    if not body and not has_images:
+        raise OpsError(MSG_COMMENT_EMPTY, field_errors={"body": MSG_COMMENT_EMPTY})
+    return body
+
+
+def check_comment_image_count(count: int) -> None:
+    if count > MAX_COMMENT_IMAGES:
+        raise OpsError(MSG_COMMENT_TOO_MANY_IMAGES)
+
+
+def check_comment_image_file(mime_type: str, size: int) -> None:
+    """Same size ceiling as check_attachment_file, but images only — comments never
+    accept pdf/office/zip the way project & issue attachments do."""
+    if size > MAX_ATTACHMENT_BYTES:
+        raise OpsError(MSG_ATTACHMENT_TOO_LARGE)
+    if mime_type not in ALLOWED_COMMENT_IMAGE_MIME:
+        raise OpsError(MSG_COMMENT_IMAGE_TYPE_INVALID)
 
 
 # ---------------------------------------------------------------------------

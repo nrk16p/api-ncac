@@ -7,7 +7,7 @@ a key never leaks as a public/permanent URL.
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import Iterable, Optional
 
 from botocore.exceptions import BotoCoreError, ClientError
 
@@ -22,6 +22,16 @@ def project_attachment_key(project_id: str, attachment_id: str, safe_name: str) 
 
 def issue_attachment_key(project_id: str, issue_id: str, attachment_id: str, safe_name: str) -> str:
     return f"ops_project/{project_id}/issues/{issue_id}/{attachment_id}-{safe_name}"
+
+
+def task_attachment_key(project_id: str, task_id: str, attachment_id: str, safe_name: str) -> str:
+    """project_id at upload time — a task moved to another project keeps its old keys."""
+    return f"ops_project/{project_id}/tasks/{task_id}/{attachment_id}-{safe_name}"
+
+
+def comment_attachment_key(project_id: str, comment_id: str, attachment_id: str, safe_name: str) -> str:
+    """For an issue comment, project_id is the issue's project_id (see ops_routes)."""
+    return f"ops_project/{project_id}/comments/{comment_id}/{attachment_id}_{safe_name}"
 
 
 def upload_bytes(key: str, data: bytes, content_type: str) -> None:
@@ -44,3 +54,17 @@ def presigned_get_url(key: str) -> Optional[str]:
     except (BotoCoreError, ClientError) as exc:
         logger.warning("ops attachment presign failed for key=%s: %s", key, exc)
         return None
+
+
+def delete_objects(keys: Iterable[str]) -> None:
+    """Best-effort bulk delete (used when a comment is deleted). Raises on failure —
+    callers that must never fail the request (e.g. delete_comment) catch and log it."""
+    keys = [k for k in keys if k]
+    if not keys:
+        return
+    client = _get_s3_client()
+    try:
+        client.delete_objects(Bucket=DO_SPACES_BUCKET, Delete={"Objects": [{"Key": k} for k in keys]})
+    except (BotoCoreError, ClientError) as exc:
+        logger.error("ops attachment delete failed for keys=%s: %s", keys, exc)
+        raise

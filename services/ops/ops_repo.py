@@ -1,6 +1,6 @@
 """MongoDB persistence for the OPS module (db `ops`).
 
-Collections: projects, issues, tasks, comments, counters.
+Collections: projects, issues, tasks, comments, surveys, counters.
 
 The business id (project_id / issue_id / task_id) is used as Mongo's `_id` —
 ids are minted from an atomic counter (strictly increasing, no retry-on-collision
@@ -30,6 +30,7 @@ PROJECTS = "projects"
 ISSUES = "issues"
 TASKS = "tasks"
 COMMENTS = "comments"
+SURVEYS = "surveys"
 COUNTERS = "counters"
 
 OPEN_STATUS = "Open"
@@ -59,6 +60,7 @@ def ensure_indexes() -> None:
     db[COMMENTS].create_index(
         [("ref_type", ASCENDING), ("ref_id", ASCENDING), ("created_at", ASCENDING)], name="ref_created_at"
     )
+    db[SURVEYS].create_index([("system_id", ASCENDING), ("updated_at", ASCENDING)], name="system_updated_at")
 
 
 def _col(name: str) -> Collection:
@@ -438,13 +440,55 @@ def update_task_plan(task_id: str, due_date) -> Optional[dict]:
         raise mongo_error(exc) from exc
 
 
+def update_task_note(task_id: str, note: Optional[str], by: dict) -> Optional[dict]:
+    now = _now()
+    try:
+        return _col(TASKS).find_one_and_update(
+            {"_id": task_id},
+            {"$set": {"note": note, "note_updated_at": now, "note_updated_by": by, "updated_at": now}},
+            return_document=ReturnDocument.AFTER,
+        )
+    except PyMongoError as exc:
+        raise mongo_error(exc) from exc
+
+
+def add_task_attachment(task_id: str, attachment: dict) -> Optional[dict]:
+    try:
+        return _col(TASKS).find_one_and_update(
+            {"_id": task_id},
+            {"$push": {"attachments": attachment}, "$set": {"updated_at": _now()}},
+            return_document=ReturnDocument.AFTER,
+        )
+    except PyMongoError as exc:
+        raise mongo_error(exc) from exc
+
+
+def remove_task_attachment(task_id: str, attachment_id: str) -> Optional[dict]:
+    try:
+        return _col(TASKS).find_one_and_update(
+            {"_id": task_id},
+            {"$pull": {"attachments": {"attachment_id": attachment_id}}, "$set": {"updated_at": _now()}},
+            return_document=ReturnDocument.AFTER,
+        )
+    except PyMongoError as exc:
+        raise mongo_error(exc) from exc
+
+
 # ---------------------------------------------------------------------------
 # Comments
 # ---------------------------------------------------------------------------
 
-def create_comment(ref_type: str, ref_id: str, body: str, author: dict) -> dict:
+def create_comment(
+    ref_type: str,
+    ref_id: str,
+    body: str,
+    author: dict,
+    *,
+    comment_id: Optional[str] = None,
+    attachments: Optional[List[dict]] = None,
+) -> dict:
     now = _now()
-    comment_id = uuid.uuid4().hex
+    comment_id = comment_id or uuid.uuid4().hex
     doc = {
         "_id": comment_id,
         "comment_id": comment_id,
@@ -452,6 +496,7 @@ def create_comment(ref_type: str, ref_id: str, body: str, author: dict) -> dict:
         "ref_id": ref_id,
         "author": author,
         "body": body,
+        "attachments": attachments or [],
         "created_at": now,
         "edited_at": None,
         "liked_by": [],
@@ -501,5 +546,40 @@ def set_comment_like(comment_id: str, employee_id: str, like: bool) -> Optional[
         return _col(COMMENTS).find_one_and_update(
             {"_id": comment_id}, op, return_document=ReturnDocument.AFTER
         )
+    except PyMongoError as exc:
+        raise mongo_error(exc) from exc
+
+
+# ---------------------------------------------------------------------------
+# Satisfaction surveys — one answer per person per system; answering again replaces it
+# ---------------------------------------------------------------------------
+
+def upsert_survey(system_id: str, fields: Dict[str, Any], respondent: dict) -> dict:
+    now = _now()
+    survey_id = f"{system_id}:{respondent['employee_id']}"
+    try:
+        return _col(SURVEYS).find_one_and_update(
+            {"_id": survey_id},
+            {
+                "$set": {**fields, "system_id": system_id, "respondent": respondent, "updated_at": now},
+                "$setOnInsert": {"survey_id": survey_id, "created_at": now},
+            },
+            upsert=True,
+            return_document=ReturnDocument.AFTER,
+        )
+    except PyMongoError as exc:
+        raise mongo_error(exc) from exc
+
+
+def get_survey(system_id: str, employee_id: str) -> Optional[dict]:
+    try:
+        return _col(SURVEYS).find_one({"_id": f"{system_id}:{employee_id}"})
+    except PyMongoError as exc:
+        raise mongo_error(exc) from exc
+
+
+def list_surveys(system_id: str) -> List[dict]:
+    try:
+        return list(_col(SURVEYS).find({"system_id": system_id}).sort("updated_at", -1))
     except PyMongoError as exc:
         raise mongo_error(exc) from exc
