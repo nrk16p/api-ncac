@@ -96,3 +96,16 @@ def test_results_for_ops_team_only(client):
     assert r.status_code == 200, r.text
     assert r.json()["count"] == 1 and r.json()["average"] == 4.0
     assert r.json()["responses"][0]["respondent"]["employee_id"] == USER["employee_id"]
+
+
+def test_my_survey_returns_own_answer_or_null(client, monkeypatch):
+    c, state = client
+    monkeypatch.setattr(ops_routes.ops_repo, "get_survey", lambda sid, emp: state["store"].get(f"{sid}:{emp}"))
+    r = c.get("/ops/surveys/mine", params={"system_id": "OPS-2026-003"})
+    assert r.status_code == 200 and r.json() is None
+    _post(c, comment="ครั้งแรก")
+    r = c.get("/ops/surveys/mine", params={"system_id": "OPS-2026-003"})
+    assert r.status_code == 200, r.text
+    assert r.json()["comment"] == "ครั้งแรก" and r.json()["section2"]["1"] == 4
+    state["caller"] = OPS
+    assert c.get("/ops/surveys/mine", params={"system_id": "OPS-2026-003"}).json() is None

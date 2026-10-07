@@ -571,6 +571,13 @@ def upsert_survey(system_id: str, fields: Dict[str, Any], respondent: dict) -> d
         raise mongo_error(exc) from exc
 
 
+def get_survey(system_id: str, employee_id: str) -> Optional[dict]:
+    try:
+        return _col(SURVEYS).find_one({"_id": f"{system_id}:{employee_id}"})
+    except PyMongoError as exc:
+        raise mongo_error(exc) from exc
+
+
 def list_surveys(system_id: str) -> List[dict]:
     try:
         return list(_col(SURVEYS).find({"system_id": system_id}).sort("updated_at", -1))

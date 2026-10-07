@@ -765,6 +765,13 @@ def submit_survey(body: schemas.SurveyInput, caller: Caller = Depends(get_caller
     return _survey_out(ops_repo.upsert_survey(system_id, fields, caller.person))
 
 
+@router.get("/surveys/mine", response_model=Optional[schemas.SurveyResponse])
+def my_survey(system_id: str = Query(..., min_length=1, max_length=100), caller: Caller = Depends(get_caller)):
+    """The caller's own earlier answer for this system (null if none) — the form pre-fills it for editing."""
+    doc = ops_repo.get_survey(system_id.strip(), caller.employee_id)
+    return _survey_out(doc) if doc else None
+
+
 @router.get("/projects/{project_id}/surveys", response_model=schemas.SurveyResults)
 def list_project_surveys(project_id: str, caller: Caller = Depends(get_caller)):
     ops_logic.require_manager(caller.is_manager)
