@@ -113,6 +113,12 @@ class ProjectEditInput(BaseModel):
         return self
 
 
+class ProjectTitleInput(BaseModel):
+    """PATCH /ops/projects/{id}/title — OPS team / admin or can_edit, any status except Done."""
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(min_length=3, max_length=200)
+
+
 class LinkInput(BaseModel):
     """PATCH /ops/projects/{id}/link — null clears it."""
     model_config = ConfigDict(extra="forbid")
@@ -144,6 +150,8 @@ class Project(BaseModel):
     issue_count: int = 0
     # whether the caller may PATCH /ops/projects/{id} (ops_logic.can_edit_project)
     can_edit: bool = False
+    # whether the caller may PATCH /ops/projects/{id}/title (ops_logic.can_rename_project)
+    can_rename: bool = False
     created_at: datetime
     updated_at: datetime
 

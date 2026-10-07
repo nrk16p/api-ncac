@@ -143,6 +143,7 @@ def _project_out(doc: dict, issue_count: int, caller: Caller) -> dict:
     out["attachments"] = _attachments_out(doc.get("attachments", []))
     out["issue_count"] = issue_count
     out["can_edit"] = _can_edit(doc, caller)
+    out["can_rename"] = ops_logic.can_rename_project(doc, caller.is_manager, out["can_edit"])
     return out
 
 
@@ -383,6 +384,19 @@ def update_project(
     if "user_groups" in changes:
         changes["user_groups"] = (changes["user_groups"] or "").strip() or None
     updated = ops_repo.update_project_fields(project_id, changes)
+    count = ops_repo.bulk_issue_counts([project_id]).get(project_id, 0)
+    return _project_out(updated, count, caller)
+
+
+@router.patch("/projects/{project_id}/title", response_model=schemas.Project)
+def update_project_title(
+    project_id: str,
+    body: schemas.ProjectTitleInput,
+    caller: Caller = Depends(get_caller),
+):
+    doc = _require_project(project_id)
+    ops_logic.require_project_renamable(doc, caller.is_manager, _can_edit(doc, caller))
+    updated = ops_repo.update_project_fields(project_id, {"title": ops_logic.validate_project_title(body.title)})
     count = ops_repo.bulk_issue_counts([project_id]).get(project_id, 0)
     return _project_out(updated, count, caller)
 
