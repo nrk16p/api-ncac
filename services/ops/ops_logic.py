@@ -62,7 +62,9 @@ MSG_PROJECT_CLOSED_EDIT = "โปรเจกต์นี้ปิดแล้�
 MSG_PROJECT_EDIT_FORBIDDEN = "แก้ไขคำขอได้เฉพาะผู้รับผิดชอบ (คำขอจากระบบ) หรือคนในแผนกเดียวกับผู้ยื่น"
 MSG_PROJECT_REJECTED_TASK_CREATE = "โปรเจกต์นี้ไม่อนุมัติ สร้าง Task ไม่ได้"
 MSG_PROJECT_REJECTED_TASK_MOVE = "โปรเจกต์นี้ไม่อนุมัติ ย้าย Task เข้าไม่ได้"
-MSG_TASK_NOT_OPEN = "แก้ไขชื่อและโปรเจกต์ได้เฉพาะ Task ที่ยัง Open"
+MSG_TASK_NOT_OPEN = "ย้ายโปรเจกต์ได้เฉพาะ Task ที่ยัง Open"
+MSG_TASK_DONE_TITLE = "Task นี้ Done แล้ว แก้ไขชื่อไม่ได้"
+MSG_TASK_DONE_NOTE = "Task นี้ Done แล้ว แก้ไขโน้ตและรูปไม่ได้"
 MSG_TASK_CLOSED = "Task นี้ปิดแล้ว แก้ไขไม่ได้"
 MSG_TASK_TITLE_REQUIRED = "กรุณาระบุชื่อ Task"
 MSG_REVIEW_NOT_IN_REVIEW = "รายการนี้ไม่ได้อยู่ในขั้นรีวิว"
@@ -73,6 +75,10 @@ MSG_ATTACHMENT_TOO_LARGE = "ไฟล์แนบต้องมีขนาด�
 MSG_ATTACHMENT_TYPE_INVALID = "ไม่รองรับไฟล์ประเภทนี้"
 MSG_ATTACHMENT_OWN_ONLY = "แนบไฟล์ได้เฉพาะโปรเจกต์/ปัญหาที่ตัวเองสร้าง"
 MSG_REF_TYPE_INVALID = "ref_type ต้องเป็น project หรือ issue"
+MSG_TASK_NOTE_FORBIDDEN = "แก้ไขโน้ตและรูปได้เฉพาะผู้รับผิดชอบ Task นี้"
+MSG_TASK_IMAGE_ONLY = "แนบได้เฉพาะไฟล์รูปภาพ (PNG, JPEG, GIF, WebP)"
+MSG_TASK_IMAGE_LIMIT = "แนบรูปได้สูงสุด 10 รูปต่อ Task"
+MSG_ATTACHMENT_NOT_FOUND = "ไม่พบไฟล์แนบ"
 
 
 # ---------------------------------------------------------------------------
@@ -224,9 +230,15 @@ def check_task_move_target(project_status: str) -> None:
 
 
 def check_task_editable(task_status: str) -> None:
-    """Title / project_id edits: only while the task is Open."""
+    """Moving it to another project: only while the task is Open."""
     if task_status != "Open":
         raise OpsConflict(MSG_TASK_NOT_OPEN)
+
+
+def check_task_title_editable(task_status: str) -> None:
+    """Renaming: any status except Done (Reject included)."""
+    if task_status == "Done":
+        raise OpsConflict(MSG_TASK_DONE_TITLE)
 
 
 def check_task_assignees_editable(task_status: str) -> None:
@@ -244,6 +256,46 @@ def validate_task_title(title: Optional[str]) -> str:
     if not title:
         raise OpsError(MSG_TASK_TITLE_REQUIRED, field_errors={"title": MSG_TASK_TITLE_REQUIRED})
     return title
+
+
+# ---------------------------------------------------------------------------
+# Task note + pictures — the people responsible for the task (owner / co-assignees)
+# and menaIT admin; any status except Done (Bew's call 2026-10-07).
+# ---------------------------------------------------------------------------
+
+TASK_IMAGE_MIME = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+MAX_TASK_IMAGES = 10
+
+
+def is_admin(department_id: Optional[int], employee_id: Optional[str]) -> bool:
+    return department_id in ADMIN_DEPARTMENT_IDS or employee_id in ADMIN_EMPLOYEE_IDS
+
+
+def can_note_task(task: dict, caller_employee_id: str, caller_is_admin: bool) -> bool:
+    if task.get("status") == "Done":
+        return False
+    if caller_is_admin:
+        return True
+    people = [task.get("owner") or {}, *(task.get("assignees") or [])]
+    return any(p.get("employee_id") == caller_employee_id for p in people)
+
+
+def require_task_note_editor(task: dict, caller_employee_id: str, caller_is_admin: bool) -> None:
+    if task.get("status") == "Done":
+        raise OpsConflict(MSG_TASK_DONE_NOTE)
+    if not can_note_task(task, caller_employee_id, caller_is_admin):
+        raise OpsForbidden(MSG_TASK_NOTE_FORBIDDEN)
+
+
+def clean_task_note(note: Optional[str]) -> Optional[str]:
+    return (note or "").strip() or None
+
+
+def check_task_image(mime_type: str, current_count: int) -> None:
+    if mime_type not in TASK_IMAGE_MIME:
+        raise OpsError(MSG_TASK_IMAGE_ONLY)
+    if current_count >= MAX_TASK_IMAGES:
+        raise OpsConflict(MSG_TASK_IMAGE_LIMIT)
 
 
 # ---------------------------------------------------------------------------

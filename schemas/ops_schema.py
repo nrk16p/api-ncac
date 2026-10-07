@@ -193,6 +193,12 @@ class TaskPlanInput(BaseModel):
     due_date: Optional[date] = None
 
 
+class TaskNoteInput(BaseModel):
+    """PATCH /ops/tasks/{id}/note — empty / null clears it."""
+    model_config = ConfigDict(extra="forbid")
+    note: Optional[str] = Field(default=None, max_length=5000)
+
+
 class ProjectTask(BaseModel):
     task_id: str
     project_id: str
@@ -204,6 +210,12 @@ class ProjectTask(BaseModel):
     owner: Person
     assignees: List[Person] = Field(default_factory=list)
     status_history: List[StatusChange] = Field(default_factory=list)
+    # the responsible people's work note + pictures (owner / co-assignees / admin edit them)
+    note: Optional[str] = None
+    note_updated_at: Optional[datetime] = None
+    note_updated_by: Optional[Person] = None
+    attachments: List[Attachment] = Field(default_factory=list)
+    can_note: bool = False
     created_at: datetime
     updated_at: datetime
 

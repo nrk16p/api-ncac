@@ -74,6 +74,7 @@ class Caller:
     employee_id: str
     username: Optional[str]
     is_manager: bool
+    is_admin: bool = False
 
 
 def get_caller(
@@ -87,7 +88,13 @@ def get_caller(
         raise HTTPException(status_code=401, detail=ops_logic.MSG_LOGIN_REQUIRED)
     person = people_repo.person_from_user(user)
     is_mgr = ops_logic.is_manager(user.username, user.department_id, user.employee_id)
-    return Caller(person=person, employee_id=person["employee_id"], username=user.username, is_manager=is_mgr)
+    return Caller(
+        person=person,
+        employee_id=person["employee_id"],
+        username=user.username,
+        is_manager=is_mgr,
+        is_admin=ops_logic.is_admin(user.department_id, user.employee_id),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -141,8 +148,11 @@ def _issue_out(doc: dict, project_title: str, project_assignees: List[dict]) -> 
     return out
 
 
-def _task_out(doc: dict) -> dict:
-    return {k: v for k, v in doc.items() if k != "_id"}
+def _task_out(doc: dict, caller: Caller) -> dict:
+    out = {k: v for k, v in doc.items() if k not in ("_id", "attachments")}
+    out["attachments"] = _attachments_out(doc.get("attachments", []))
+    out["can_note"] = ops_logic.can_note_task(doc, caller.employee_id, caller.is_admin)
+    return out
 
 
 def _comment_out(doc: dict, caller_employee_id: str) -> dict:
@@ -455,7 +465,7 @@ def list_tasks(
 ):
     mine_id = caller.employee_id if scope == "mine" else None
     docs = ops_repo.list_tasks(mine_employee_id=mine_id, project_id=project_id)
-    return [_task_out(d) for d in docs]
+    return [_task_out(d, caller) for d in docs]
 
 
 @router.post("/tasks", response_model=schemas.ProjectTask, status_code=201)
@@ -469,7 +479,7 @@ def create_task(
     title = ops_logic.validate_task_title(body.title)
     fields = {"project_id": body.project_id, "title": title, "due_date": _date_str(body.due_date)}
     doc = ops_repo.create_task(fields, proj["title"], caller.person)
-    return _task_out(doc)
+    return _task_out(doc, caller)
 
 
 @router.patch("/tasks/{task_id}", response_model=schemas.ProjectTask)
@@ -480,17 +490,18 @@ def update_task(
 ):
     ops_logic.require_manager(caller.is_manager)
     task = _require_task(task_id)
-    ops_logic.check_task_editable(task["status"])
     changes: Dict[str, Any] = {}
     if body.title is not None:
+        ops_logic.check_task_title_editable(task["status"])
         changes["title"] = ops_logic.validate_task_title(body.title)
     if body.project_id is not None and body.project_id != task["project_id"]:
+        ops_logic.check_task_editable(task["status"])
         proj = _require_project(body.project_id)
         ops_logic.check_task_move_target(proj["status"])
         changes["project_id"] = body.project_id
         changes["project_title"] = proj["title"]
     updated = ops_repo.update_task_fields(task_id, changes)
-    return _task_out(updated)
+    return _task_out(updated, caller)
 
 
 @router.patch("/tasks/{task_id}/status", response_model=schemas.ProjectTask)
@@ -503,7 +514,7 @@ def update_task_status(
     _require_task(task_id)
     remark = ops_logic.validate_status_input(body.status, body.remark)
     updated = ops_repo.update_task_status(task_id, body.status, remark, caller.person)
-    return _task_out(updated)
+    return _task_out(updated, caller)
 
 
 @router.patch("/tasks/{task_id}/assignees", response_model=schemas.ProjectTask)
@@ -520,7 +531,7 @@ def update_task_assignees(
     usernames = ops_logic.exclude_owner(usernames, (task.get("owner") or {}).get("username"))
     people = people_repo.resolve_people(db, usernames)
     updated = ops_repo.update_task_assignees(task_id, people)
-    return _task_out(updated)
+    return _task_out(updated, caller)
 
 
 @router.patch("/tasks/{task_id}/plan", response_model=schemas.ProjectTask)
@@ -533,7 +544,66 @@ def update_task_plan(
     task = _require_task(task_id)
     ops_logic.check_task_plan_editable(task["status"])
     updated = ops_repo.update_task_plan(task_id, _date_str(body.due_date))
-    return _task_out(updated)
+    return _task_out(updated, caller)
+
+
+@router.patch("/tasks/{task_id}/note", response_model=schemas.ProjectTask)
+def update_task_note(
+    task_id: str,
+    body: schemas.TaskNoteInput,
+    caller: Caller = Depends(get_caller),
+):
+    task = _require_task(task_id)
+    ops_logic.require_task_note_editor(task, caller.employee_id, caller.is_admin)
+    updated = ops_repo.update_task_note(task_id, ops_logic.clean_task_note(body.note), caller.person)
+    return _task_out(updated, caller)
+
+
+@router.post("/tasks/{task_id}/attachments", response_model=schemas.Attachment, status_code=201)
+def upload_task_image(
+    task_id: str,
+    file: UploadFile = File(...),
+    caller: Caller = Depends(get_caller),
+):
+    """Pictures under the task note — images only, up to MAX_TASK_IMAGES."""
+    task = _require_task(task_id)
+    ops_logic.require_task_note_editor(task, caller.employee_id, caller.is_admin)
+    data = file.file.read()
+    mime_type = file.content_type or "application/octet-stream"
+    ops_logic.check_attachment_file(mime_type, len(data))
+    ops_logic.check_task_image(mime_type, len(task.get("attachments") or []))
+
+    attachment_id = uuid.uuid4().hex
+    safe_name = ops_logic.safe_file_name(file.filename or "image")
+    key = ops_files.task_attachment_key(task["project_id"], task_id, attachment_id, safe_name)
+    ops_files.upload_bytes(key, data, mime_type)
+
+    attachment = {
+        "attachment_id": attachment_id,
+        "file_name": file.filename or safe_name,
+        "mime_type": mime_type,
+        "size": len(data),
+        "s3_key": key,
+        "uploaded_at": ops_repo.utc_now(),
+        "uploaded_by": caller.person,
+    }
+    ops_repo.add_task_attachment(task_id, attachment)
+    return _attachments_out([attachment])[0]
+
+
+@router.delete("/tasks/{task_id}/attachments/{attachment_id}", response_model=schemas.ProjectTask)
+def delete_task_image(task_id: str, attachment_id: str, caller: Caller = Depends(get_caller)):
+    task = _require_task(task_id)
+    ops_logic.require_task_note_editor(task, caller.employee_id, caller.is_admin)
+    found = next((a for a in task.get("attachments") or [] if a["attachment_id"] == attachment_id), None)
+    if found is None:
+        raise ops_logic.OpsNotFound(ops_logic.MSG_ATTACHMENT_NOT_FOUND)
+    updated = ops_repo.remove_task_attachment(task_id, attachment_id)
+    try:
+        ops_files.delete_objects([found["s3_key"]])
+    except Exception:  # the record is gone already; a stray object in S3 is harmless
+        pass
+    return _task_out(updated, caller)
 
 
 # ---------------------------------------------------------------------------

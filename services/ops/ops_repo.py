@@ -438,6 +438,40 @@ def update_task_plan(task_id: str, due_date) -> Optional[dict]:
         raise mongo_error(exc) from exc
 
 
+def update_task_note(task_id: str, note: Optional[str], by: dict) -> Optional[dict]:
+    now = _now()
+    try:
+        return _col(TASKS).find_one_and_update(
+            {"_id": task_id},
+            {"$set": {"note": note, "note_updated_at": now, "note_updated_by": by, "updated_at": now}},
+            return_document=ReturnDocument.AFTER,
+        )
+    except PyMongoError as exc:
+        raise mongo_error(exc) from exc
+
+
+def add_task_attachment(task_id: str, attachment: dict) -> Optional[dict]:
+    try:
+        return _col(TASKS).find_one_and_update(
+            {"_id": task_id},
+            {"$push": {"attachments": attachment}, "$set": {"updated_at": _now()}},
+            return_document=ReturnDocument.AFTER,
+        )
+    except PyMongoError as exc:
+        raise mongo_error(exc) from exc
+
+
+def remove_task_attachment(task_id: str, attachment_id: str) -> Optional[dict]:
+    try:
+        return _col(TASKS).find_one_and_update(
+            {"_id": task_id},
+            {"$pull": {"attachments": {"attachment_id": attachment_id}}, "$set": {"updated_at": _now()}},
+            return_document=ReturnDocument.AFTER,
+        )
+    except PyMongoError as exc:
+        raise mongo_error(exc) from exc
+
+
 # ---------------------------------------------------------------------------
 # Comments
 # ---------------------------------------------------------------------------
