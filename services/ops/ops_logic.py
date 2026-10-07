@@ -63,6 +63,8 @@ MSG_PROJECT_EDIT_FORBIDDEN = "แก้ไขคำขอได้เฉพา�
 MSG_PROJECT_DONE_TITLE = "โปรเจกต์นี้ Done แล้ว แก้ไขชื่อไม่ได้"
 MSG_PROJECT_RENAME_FORBIDDEN = "แก้ไขชื่อโปรเจกต์ได้เฉพาะทีม OPS หรือผู้มีสิทธิ์แก้ไขคำขอ"
 MSG_PROJECT_TITLE_TOO_SHORT = "ชื่อโปรเจกต์ต้องมีอย่างน้อย 3 ตัวอักษร"
+MSG_SURVEY_NOT_READY = "ประเมินได้เมื่อโปรเจกต์อยู่ในขั้น Review หรือ Done"
+MSG_SURVEY_INCOMPLETE = "กรุณาให้คะแนนให้ครบทุกข้อ"
 MSG_PROJECT_REJECTED_TASK_CREATE = "โปรเจกต์นี้ไม่อนุมัติ สร้าง Task ไม่ได้"
 MSG_PROJECT_REJECTED_TASK_MOVE = "โปรเจกต์นี้ไม่อนุมัติ ย้าย Task เข้าไม่ได้"
 MSG_TASK_NOT_OPEN = "ย้ายโปรเจกต์ได้เฉพาะ Task ที่ยัง Open"
@@ -324,6 +326,44 @@ def check_task_image(mime_type: str, current_count: int) -> None:
     if current_count >= MAX_TASK_IMAGES:
         raise OpsConflict(MSG_TASK_IMAGE_LIMIT)
 
+
+
+# ---------------------------------------------------------------------------
+# Satisfaction surveys (menaIT /survey-ops) — 2 sections × 5 questions, 1–5 each
+# ---------------------------------------------------------------------------
+
+SURVEY_QUESTION_IDS = (1, 2, 3, 4, 5)
+SURVEY_STATUSES = ("Review", "Done")
+
+
+def check_project_surveyable(project_status: str) -> None:
+    if project_status not in SURVEY_STATUSES:
+        raise OpsConflict(MSG_SURVEY_NOT_READY)
+
+
+def clean_survey_ratings(ratings: dict, field: str) -> dict:
+    """Every question answered → {"1": n, … "5": n} (Mongo keys must be strings)."""
+    if sorted(int(k) for k in ratings) != list(SURVEY_QUESTION_IDS):
+        raise OpsError(MSG_SURVEY_INCOMPLETE, field_errors={field: MSG_SURVEY_INCOMPLETE})
+    return {str(int(k)): int(v) for k, v in sorted(ratings.items(), key=lambda kv: int(kv[0]))}
+
+
+def survey_summary(docs: List[dict]) -> dict:
+    """Averages per question and overall (1 decimal); None when nobody answered."""
+    def avg(values: List[int]) -> Optional[float]:
+        return round(sum(values) / len(values), 2) if values else None
+
+    out: dict = {"count": len(docs)}
+    every: List[int] = []
+    for section in ("section2", "section3"):
+        per_q = []
+        for q in SURVEY_QUESTION_IDS:
+            vals = [d[section][str(q)] for d in docs if str(q) in (d.get(section) or {})]
+            every.extend(vals)
+            per_q.append(avg(vals))
+        out[f"{section}_avg"] = per_q
+    out["average"] = avg(every)
+    return out
 
 # ---------------------------------------------------------------------------
 # Assignees

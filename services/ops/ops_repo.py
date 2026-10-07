@@ -1,6 +1,6 @@
 """MongoDB persistence for the OPS module (db `ops`).
 
-Collections: projects, issues, tasks, comments, counters.
+Collections: projects, issues, tasks, comments, surveys, counters.
 
 The business id (project_id / issue_id / task_id) is used as Mongo's `_id` —
 ids are minted from an atomic counter (strictly increasing, no retry-on-collision
@@ -30,6 +30,7 @@ PROJECTS = "projects"
 ISSUES = "issues"
 TASKS = "tasks"
 COMMENTS = "comments"
+SURVEYS = "surveys"
 COUNTERS = "counters"
 
 OPEN_STATUS = "Open"
@@ -59,6 +60,7 @@ def ensure_indexes() -> None:
     db[COMMENTS].create_index(
         [("ref_type", ASCENDING), ("ref_id", ASCENDING), ("created_at", ASCENDING)], name="ref_created_at"
     )
+    db[SURVEYS].create_index([("system_id", ASCENDING), ("updated_at", ASCENDING)], name="system_updated_at")
 
 
 def _col(name: str) -> Collection:
@@ -544,5 +546,33 @@ def set_comment_like(comment_id: str, employee_id: str, like: bool) -> Optional[
         return _col(COMMENTS).find_one_and_update(
             {"_id": comment_id}, op, return_document=ReturnDocument.AFTER
         )
+    except PyMongoError as exc:
+        raise mongo_error(exc) from exc
+
+
+# ---------------------------------------------------------------------------
+# Satisfaction surveys — one answer per person per system; answering again replaces it
+# ---------------------------------------------------------------------------
+
+def upsert_survey(system_id: str, fields: Dict[str, Any], respondent: dict) -> dict:
+    now = _now()
+    survey_id = f"{system_id}:{respondent['employee_id']}"
+    try:
+        return _col(SURVEYS).find_one_and_update(
+            {"_id": survey_id},
+            {
+                "$set": {**fields, "system_id": system_id, "respondent": respondent, "updated_at": now},
+                "$setOnInsert": {"survey_id": survey_id, "created_at": now},
+            },
+            upsert=True,
+            return_document=ReturnDocument.AFTER,
+        )
+    except PyMongoError as exc:
+        raise mongo_error(exc) from exc
+
+
+def list_surveys(system_id: str) -> List[dict]:
+    try:
+        return list(_col(SURVEYS).find({"system_id": system_id}).sort("updated_at", -1))
     except PyMongoError as exc:
         raise mongo_error(exc) from exc

@@ -6,9 +6,9 @@ Mirrors menaIT-v2's app/ops/schema/ops.schema.json + app/ops/types.ts exactly
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import List, Literal, Optional
+from typing import Dict, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 Status = Literal["Open", "To-Do", "In Progress", "Review", "Done", "Reject"]
 Priority = Literal["Critical", "High", "Medium", "Low"]
@@ -117,6 +117,47 @@ class ProjectTitleInput(BaseModel):
     """PATCH /ops/projects/{id}/title — OPS team / admin or can_edit, any status except Done."""
     model_config = ConfigDict(extra="forbid")
     title: str = Field(min_length=3, max_length=200)
+
+
+class SurveyInput(BaseModel):
+    """POST /ops/surveys — menaIT /survey-ops. system_id = an OPS project id (OPS-…) or a system
+    from the Apps Script list; ratings are question id → 1..5, all 5 questions per section."""
+    model_config = ConfigDict(extra="forbid")
+    system_id: str = Field(min_length=1, max_length=100)
+    system_name: Optional[str] = Field(default=None, max_length=300)
+    section2: Dict[int, int]
+    section3: Dict[int, int]
+    comment: Optional[str] = Field(default=None, max_length=2000)
+
+    @field_validator("section2", "section3")
+    @classmethod
+    def _scores_1_to_5(cls, v: Dict[int, int]) -> Dict[int, int]:
+        if any(not 1 <= score <= 5 for score in v.values()):
+            raise ValueError("คะแนนต้องอยู่ระหว่าง 1–5")
+        return v
+
+
+class SurveyResponse(BaseModel):
+    survey_id: str
+    system_id: str
+    system_name: Optional[str] = None
+    project_id: Optional[str] = None
+    respondent: Person
+    section2: Dict[str, int]
+    section3: Dict[str, int]
+    comment: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class SurveyResults(BaseModel):
+    """GET /ops/projects/{id}/surveys — OPS team / admin."""
+    project_id: str
+    count: int
+    average: Optional[float] = None
+    section2_avg: List[Optional[float]]
+    section3_avg: List[Optional[float]]
+    responses: List[SurveyResponse]
 
 
 class LinkInput(BaseModel):

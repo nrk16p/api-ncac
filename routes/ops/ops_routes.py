@@ -736,6 +736,44 @@ def delete_task_image(task_id: str, attachment_id: str, caller: Caller = Depends
 
 
 # ---------------------------------------------------------------------------
+# Satisfaction surveys (menaIT /survey-ops)
+# ---------------------------------------------------------------------------
+
+def _survey_out(doc: dict) -> dict:
+    return {k: v for k, v in doc.items() if k != "_id"}
+
+
+@router.post("/surveys", response_model=schemas.SurveyResponse, status_code=201)
+def submit_survey(body: schemas.SurveyInput, caller: Caller = Depends(get_caller)):
+    """Signed in only; answering the same system again replaces the earlier answer.
+    An OPS project must be in Review or Done; other systems (Apps Script list) are stored as-is."""
+    system_id = body.system_id.strip()
+    project_id = None
+    system_name = (body.system_name or "").strip() or None
+    if ops_logic.PROJECT_ID_RE.match(system_id):
+        project = _require_project(system_id)
+        ops_logic.check_project_surveyable(project["status"])
+        project_id = system_id
+        system_name = project["title"]
+    fields = {
+        "project_id": project_id,
+        "system_name": system_name,
+        "section2": ops_logic.clean_survey_ratings(body.section2, "section2"),
+        "section3": ops_logic.clean_survey_ratings(body.section3, "section3"),
+        "comment": (body.comment or "").strip() or None,
+    }
+    return _survey_out(ops_repo.upsert_survey(system_id, fields, caller.person))
+
+
+@router.get("/projects/{project_id}/surveys", response_model=schemas.SurveyResults)
+def list_project_surveys(project_id: str, caller: Caller = Depends(get_caller)):
+    ops_logic.require_manager(caller.is_manager)
+    _require_project(project_id)
+    docs = ops_repo.list_surveys(project_id)
+    return {"project_id": project_id, **ops_logic.survey_summary(docs), "responses": [_survey_out(d) for d in docs]}
+
+
+# ---------------------------------------------------------------------------
 # Comments (generic actions by comment_id)
 # ---------------------------------------------------------------------------
 
