@@ -712,3 +712,92 @@ def test_attach_standalone_by_non_manager_refused(env):
     c, state, tasks = env
     task_id = _file_request(c, state, project_id=None)
     assert c.patch(f"/ops/tasks/{task_id}", json={"project_id": ACTIVE}).status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# OPS team: standalone tasks ("คำร้อง (ไม่มีในโปรเจกต์เดิม)") and detaching
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("payload", [{"title": "งานคำร้อง"}, {"title": "งานคำร้อง", "project_id": None},
+                                     {"title": "งานคำร้อง", "project_id": " "}])
+def test_ops_creates_standalone_task(env, payload):
+    c, state, tasks = env
+    state["caller"] = OPS1
+    r = c.post("/ops/tasks", json=payload)
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["project_id"] is None and body["project_title"] is None
+    assert body["owner"]["employee_id"] == OPS1["employee_id"]
+    assert tasks.docs[body["task_id"]]["status_history"][0]["changed_by"] == OPS1
+
+
+def test_ops_create_with_project_still_validated(env):
+    c, state, tasks = env
+    state["caller"] = OPS1
+    r = c.post("/ops/tasks", json={"title": "งาน", "project_id": ACTIVE})
+    assert r.status_code == 201, r.text
+    assert r.json()["project_title"] == "ระบบ A"
+    assert c.post("/ops/tasks", json={"title": "งาน", "project_id": "OPS-2026-999"}).status_code == 404
+    r = c.post("/ops/tasks", json={"title": "งาน", "project_id": REJECTED})
+    assert r.status_code == 409 and r.json()["error"] == ops_logic.MSG_PROJECT_REJECTED_TASK_CREATE
+    state["caller"] = REQUESTER
+    assert c.post("/ops/tasks", json={"title": "งาน"}).status_code == 403
+
+
+def test_detach_task_from_project(env):
+    c, state, tasks = env
+    task_id = _ops_task()["task_id"]
+    state["caller"] = OPS1
+    r = c.patch(f"/ops/tasks/{task_id}", json={"project_id": None})
+    assert r.status_code == 200, r.text
+    assert r.json()["project_id"] is None and r.json()["project_title"] is None
+    assert tasks.docs[task_id]["project_id"] is None and tasks.docs[task_id]["project_title"] is None
+
+
+def test_omitted_project_id_does_not_detach(env):
+    c, state, tasks = env
+    task_id = _ops_task()["task_id"]
+    state["caller"] = OPS1
+    r = c.patch(f"/ops/tasks/{task_id}", json={"title": "ชื่อใหม่"})
+    assert r.status_code == 200, r.text
+    assert r.json()["project_id"] == ACTIVE and r.json()["project_title"] == "ระบบ A"
+
+
+def test_detach_refused_when_task_not_open(env):
+    c, state, tasks = env
+    task_id = _ops_task()["task_id"]
+    tasks.docs[task_id]["status"] = "In Progress"
+    state["caller"] = OPS1
+    r = c.patch(f"/ops/tasks/{task_id}", json={"project_id": None})
+    assert r.status_code == 409
+    assert r.json()["error"] == ops_logic.MSG_TASK_NOT_OPEN
+    assert tasks.docs[task_id]["project_id"] == ACTIVE
+
+
+def test_detach_by_non_manager_refused(env):
+    c, state, tasks = env
+    task_id = _file_request(c, state)
+    r = c.patch(f"/ops/tasks/{task_id}", json={"project_id": None})
+    assert r.status_code == 403
+    assert tasks.docs[task_id]["project_id"] == ACTIVE
+
+
+def test_detach_standalone_is_noop(env):
+    """Already standalone → nothing to check, even when no longer Open."""
+    c, state, tasks = env
+    task_id = _file_request(c, state, project_id=None)
+    tasks.docs[task_id]["status"] = "In Progress"
+    state["caller"] = OPS1
+    r = c.patch(f"/ops/tasks/{task_id}", json={"project_id": None})
+    assert r.status_code == 200, r.text
+    assert r.json()["project_id"] is None and r.json()["status"] == "In Progress"
+
+
+def test_detach_then_reattach(env):
+    c, state, tasks = env
+    task_id = _ops_task()["task_id"]
+    state["caller"] = OPS1
+    assert c.patch(f"/ops/tasks/{task_id}", json={"project_id": None}).status_code == 200
+    r = c.patch(f"/ops/tasks/{task_id}", json={"project_id": ACTIVE})
+    assert r.status_code == 200, r.text
+    assert r.json()["project_id"] == ACTIVE and r.json()["project_title"] == "ระบบ A"

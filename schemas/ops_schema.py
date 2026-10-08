@@ -219,8 +219,10 @@ class ProjectIssue(BaseModel):
 
 
 class ProjectTaskInput(BaseModel):
+    """POST /ops/tasks — OPS team. project_id null / omitted / blank = a standalone task
+    ("คำร้อง (ไม่มีในโปรเจกต์เดิม)")."""
     model_config = ConfigDict(extra="forbid")
-    project_id: str
+    project_id: Optional[str] = None
     title: str = Field(min_length=1, max_length=200)
     due_date: Optional[date] = None
 
@@ -238,8 +240,9 @@ class TaskRequestInput(BaseModel):
 
 
 class TaskEditInput(BaseModel):
-    """PATCH /ops/tasks/{id} — OPS team. detail / priority / target_date: an explicit null
-    clears it (model_fields_set); detail (sanitized HTML) has no minimum here, unlike
+    """PATCH /ops/tasks/{id} — OPS team. project_id: another project moves it, an explicit
+    null detaches it (standalone) — both only while the task is Open. detail / priority /
+    target_date: an explicit null clears it (model_fields_set); detail (sanitized HTML) has no minimum here, unlike
     TaskRequestInput — no visible text stores null."""
     model_config = ConfigDict(extra="forbid")
     title: Optional[str] = Field(default=None, min_length=1, max_length=200)

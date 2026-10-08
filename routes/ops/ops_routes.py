@@ -604,11 +604,15 @@ def create_task(
     caller: Caller = Depends(get_caller),
 ):
     ops_logic.require_manager(caller.is_manager)
-    proj = _require_project(body.project_id)
-    ops_logic.check_task_create_allowed(proj["status"])
+    project_id = (body.project_id or "").strip() or None  # None = standalone task
+    project_title = None
+    if project_id is not None:
+        proj = _require_project(project_id)
+        ops_logic.check_task_create_allowed(proj["status"])
+        project_title = proj["title"]
     title = ops_logic.validate_task_title(body.title)
-    fields = {"project_id": body.project_id, "title": title, "due_date": _date_str(body.due_date)}
-    doc = ops_repo.create_task(fields, proj["title"], caller.person)
+    fields = {"project_id": project_id, "title": title, "due_date": _date_str(body.due_date)}
+    doc = ops_repo.create_task(fields, project_title, caller.person)
     return _task_out(doc, caller)
 
 
@@ -654,15 +658,22 @@ def update_task(
     if body.title is not None:
         ops_logic.check_task_title_editable(task["status"])
         changes["title"] = ops_logic.validate_task_title(body.title)
-    # also attaches a standalone task (project_id null) to a project — same rules as a move
-    if body.project_id is not None and body.project_id != task.get("project_id"):
-        ops_logic.check_task_editable(task["status"])
-        proj = _require_project(body.project_id)
-        ops_logic.check_task_move_target(proj["status"])
-        changes["project_id"] = body.project_id
-        changes["project_title"] = proj["title"]
-    # the request-style detail sheet, on any task — an explicit null clears a field
     sent = body.model_fields_set
+    # project_id: move to another project, attach a standalone task, or an explicit null
+    # (or blank) detaches it — all only while the task is Open; unchanged = no-op
+    if "project_id" in sent:
+        target = (body.project_id or "").strip() or None
+        if target != task.get("project_id"):
+            ops_logic.check_task_editable(task["status"])
+            if target is None:
+                changes["project_id"] = None
+                changes["project_title"] = None
+            else:
+                proj = _require_project(target)
+                ops_logic.check_task_move_target(proj["status"])
+                changes["project_id"] = target
+                changes["project_title"] = proj["title"]
+    # the request-style detail sheet, on any task — an explicit null clears a field
     if not sent.isdisjoint({"detail", "priority", "target_date"}):
         ops_logic.check_task_detail_editable(task["status"])
     if "detail" in sent:
