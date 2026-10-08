@@ -24,14 +24,22 @@ def issue_attachment_key(project_id: str, issue_id: str, attachment_id: str, saf
     return f"ops_project/{project_id}/issues/{issue_id}/{attachment_id}-{safe_name}"
 
 
-def task_attachment_key(project_id: str, task_id: str, attachment_id: str, safe_name: str) -> str:
-    """project_id at upload time — a task moved to another project keeps its old keys."""
-    return f"ops_project/{project_id}/tasks/{task_id}/{attachment_id}-{safe_name}"
+# folder for tasks with no project (a standalone task request); project ids are OPS-YYYY-NNN, so no clash
+STANDALONE_FOLDER = "_standalone"
 
 
-def task_request_attachment_key(project_id: str, task_id: str, attachment_id: str, safe_name: str) -> str:
+def _task_folder(project_id: Optional[str]) -> str:
+    return project_id or STANDALONE_FOLDER
+
+
+def task_attachment_key(project_id: Optional[str], task_id: str, attachment_id: str, safe_name: str) -> str:
+    """project_id at upload time — a task moved to (or attached to) a project keeps its old keys."""
+    return f"ops_project/{_task_folder(project_id)}/tasks/{task_id}/{attachment_id}-{safe_name}"
+
+
+def task_request_attachment_key(project_id: Optional[str], task_id: str, attachment_id: str, safe_name: str) -> str:
     """Files the requester attaches to a task request (พัฒนาเพิ่ม) — kept apart from the note pictures."""
-    return f"ops_project/{project_id}/tasks/{task_id}/request/{attachment_id}-{safe_name}"
+    return f"ops_project/{_task_folder(project_id)}/tasks/{task_id}/request/{attachment_id}-{safe_name}"
 
 
 def comment_attachment_key(project_id: str, comment_id: str, attachment_id: str, safe_name: str) -> str:

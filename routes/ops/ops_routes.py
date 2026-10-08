@@ -617,13 +617,19 @@ def create_task_request(
     body: schemas.TaskRequestInput,
     caller: Caller = Depends(get_caller),
 ):
-    """Any signed-in user asks for more work (พัฒนาเพิ่ม) on an accepted project. The task
+    """Any signed-in user asks for more work (พัฒนาเพิ่ม) — on an accepted project, or
+    standalone (no project_id → project_id / project_title stay null; the OPS team can
+    attach it to a project later via PATCH /ops/tasks/{id} while it is Open). The task
     starts Open with no owner — an OPS team member takes it via /claim or a status move.
     Files go up afterwards via POST /ops/attachments (ref_type=task)."""
-    proj = _require_project(body.project_id)
-    ops_logic.check_task_request_allowed(proj["status"])
+    project_id = (body.project_id or "").strip() or None
+    project_title = None
+    if project_id is not None:
+        proj = _require_project(project_id)
+        ops_logic.check_task_request_allowed(proj["status"])
+        project_title = proj["title"]
     fields = {
-        "project_id": body.project_id,
+        "project_id": project_id,
         "title": ops_logic.validate_task_title(body.title),
         "due_date": None,
         "requested_by": caller.person,
@@ -632,7 +638,7 @@ def create_task_request(
         "target_date": _date_str(body.target_date),
         "request_attachments": [],
     }
-    doc = ops_repo.create_task(fields, proj["title"], None, changed_by=caller.person)
+    doc = ops_repo.create_task(fields, project_title, None, changed_by=caller.person)
     return {"task_id": doc["task_id"]}
 
 
@@ -648,7 +654,8 @@ def update_task(
     if body.title is not None:
         ops_logic.check_task_title_editable(task["status"])
         changes["title"] = ops_logic.validate_task_title(body.title)
-    if body.project_id is not None and body.project_id != task["project_id"]:
+    # also attaches a standalone task (project_id null) to a project — same rules as a move
+    if body.project_id is not None and body.project_id != task.get("project_id"):
         ops_logic.check_task_editable(task["status"])
         proj = _require_project(body.project_id)
         ops_logic.check_task_move_target(proj["status"])
@@ -759,7 +766,7 @@ def upload_task_image(
 
     attachment_id = uuid.uuid4().hex
     safe_name = ops_logic.safe_file_name(file.filename or "image")
-    key = ops_files.task_attachment_key(task["project_id"], task_id, attachment_id, safe_name)
+    key = ops_files.task_attachment_key(task.get("project_id"), task_id, attachment_id, safe_name)
     ops_files.upload_bytes(key, data, mime_type)
 
     attachment = {
@@ -946,7 +953,7 @@ def upload_attachment(
     elif ref_type == "issue":
         key = ops_files.issue_attachment_key(doc["project_id"], ref_id, attachment_id, safe_name)
     else:
-        key = ops_files.task_request_attachment_key(doc["project_id"], ref_id, attachment_id, safe_name)
+        key = ops_files.task_request_attachment_key(doc.get("project_id"), ref_id, attachment_id, safe_name)
 
     ops_files.upload_bytes(key, data, mime_type)
 

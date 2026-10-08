@@ -227,10 +227,10 @@ class ProjectTaskInput(BaseModel):
 
 class TaskRequestInput(BaseModel):
     """POST /ops/task-requests — any signed-in user asks for more work (พัฒนาเพิ่ม) on an
-    accepted project. detail is rich-text HTML; it's sanitized and its ">= 10 visible chars" rule
+    accepted project, or standalone (project_id null). detail is rich-text HTML; it's sanitized and its ">= 10 visible chars" rule
     is checked in ops_logic.validate_task_request_detail."""
     model_config = ConfigDict(extra="forbid")
-    project_id: str
+    project_id: Optional[str] = None  # null / omitted = standalone, not tied to a project
     title: str = Field(min_length=3, max_length=200)
     detail: str = Field(max_length=20000)  # sanitized HTML (TipTap), like Project.requirement
     priority: Priority
@@ -268,11 +268,12 @@ class TaskNoteInput(BaseModel):
 
 class ProjectTask(BaseModel):
     task_id: str
-    project_id: str
+    # both null = a standalone task request (no project yet)
+    project_id: Optional[str] = None
     title: str
     due_date: Optional[date] = None
 
-    project_title: str
+    project_title: Optional[str] = None
     status: Status
     # null = requested by a user (TaskRequestInput) and nobody on the OPS team has taken it yet
     owner: Optional[Person] = None

@@ -611,3 +611,104 @@ def test_old_plain_text_detail_reads_as_is(env):
     tasks.docs[task_id]["detail"] = "ข้อความเดิม a < b & c\nบรรทัดสอง"  # written before HTML, never migrated
     [out] = c.get("/ops/tasks", params={"project_id": ACTIVE}).json()
     assert out["detail"] == "ข้อความเดิม a < b & c\nบรรทัดสอง"
+
+
+# ---------------------------------------------------------------------------
+# standalone requests (no project)
+# ---------------------------------------------------------------------------
+
+STANDALONE = {k: v for k, v in REQUEST.items() if k != "project_id"}
+
+
+@pytest.mark.parametrize("payload", [STANDALONE, {**STANDALONE, "project_id": None}, {**STANDALONE, "project_id": "  "}])
+def test_standalone_request_ok(env, payload):
+    c, state, tasks = env
+    r = c.post("/ops/task-requests", json=payload)
+    assert r.status_code == 201, r.text
+    doc = tasks.docs[r.json()["task_id"]]
+    assert doc["project_id"] is None and doc["project_title"] is None
+    assert doc["owner"] is None and doc["requested_by"] == REQUESTER and doc["status"] == "Open"
+
+
+def test_standalone_listed_unfiltered_not_under_a_project(env):
+    c, state, tasks = env
+    standalone = _file_request(c, state, project_id=None)
+    linked = _file_request(c, state)
+    all_ids = {t["task_id"] for t in c.get("/ops/tasks").json()}
+    assert all_ids == {standalone, linked}
+    assert [t["task_id"] for t in c.get("/ops/tasks", params={"project_id": ACTIVE}).json()] == [linked]
+    [out] = [t for t in c.get("/ops/tasks").json() if t["task_id"] == standalone]
+    assert out["project_id"] is None and out["project_title"] is None
+    assert standalone in [t["task_id"] for t in c.get("/ops/tasks", params={"scope": "mine"}).json()]
+
+
+def test_given_project_id_still_validated(env):
+    c, _, tasks = env
+    assert c.post("/ops/task-requests", json={**STANDALONE, "project_id": "OPS-2026-999"}).status_code == 404
+    r = c.post("/ops/task-requests", json={**STANDALONE, "project_id": OPEN})
+    assert r.status_code == 409 and r.json()["error"] == ops_logic.MSG_TASK_REQUEST_PROJECT_OPEN
+    r = c.post("/ops/task-requests", json={**STANDALONE, "project_id": REJECTED})
+    assert r.status_code == 409 and r.json()["error"] == ops_logic.MSG_TASK_REQUEST_PROJECT_REJECTED
+    assert tasks.docs == {}
+
+
+def test_standalone_file_and_picture_keys(env, monkeypatch):
+    c, state, tasks = env
+    task_id = _file_request(c, state, project_id=None)
+
+    r = _upload(c, task_id)  # requester's request file
+    assert r.status_code == 201, r.text
+    req_key = tasks.docs[task_id]["request_attachments"][0]["s3_key"]
+    assert req_key == f"ops_project/_standalone/tasks/{task_id}/request/{r.json()['attachment_id']}-spec.pdf"
+
+    state["caller"] = OPS1
+    assert c.post(f"/ops/tasks/{task_id}/claim").status_code == 200
+    r = c.post(f"/ops/tasks/{task_id}/attachments", files={"file": ("shot.png", b"\x89PNG", "image/png")})
+    assert r.status_code == 201, r.text
+    pic_key = tasks.docs[task_id]["attachments"][0]["s3_key"]
+    assert pic_key == f"ops_project/_standalone/tasks/{task_id}/{r.json()['attachment_id']}-shot.png"
+    assert state["uploads"] == [req_key, pic_key]
+
+
+def test_project_task_keys_unchanged():
+    from services.ops import ops_files
+    assert ops_files.task_attachment_key(ACTIVE, "TSK-1", "a", "f.png") == f"ops_project/{ACTIVE}/tasks/TSK-1/a-f.png"
+    assert ops_files.task_request_attachment_key(ACTIVE, "TSK-1", "a", "f.pdf") == f"ops_project/{ACTIVE}/tasks/TSK-1/request/a-f.pdf"
+
+
+def test_attach_standalone_task_to_project_while_open(env):
+    c, state, tasks = env
+    task_id = _file_request(c, state, project_id=None)
+    state["caller"] = OPS1
+    r = c.patch(f"/ops/tasks/{task_id}", json={"project_id": ACTIVE})
+    assert r.status_code == 200, r.text
+    assert r.json()["project_id"] == ACTIVE and r.json()["project_title"] == "ระบบ A"
+    assert tasks.docs[task_id]["project_id"] == ACTIVE
+
+
+def test_attach_standalone_refused_when_task_not_open(env):
+    c, state, tasks = env
+    task_id = _file_request(c, state, project_id=None)
+    tasks.docs[task_id]["status"] = "In Progress"
+    state["caller"] = OPS1
+    r = c.patch(f"/ops/tasks/{task_id}", json={"project_id": ACTIVE})
+    assert r.status_code == 409
+    assert r.json()["error"] == ops_logic.MSG_TASK_NOT_OPEN
+    assert tasks.docs[task_id]["project_id"] is None
+
+
+def test_attach_standalone_to_rejected_project_refused(env):
+    c, state, tasks = env
+    task_id = _file_request(c, state, project_id=None)
+    state["caller"] = OPS1
+    r = c.patch(f"/ops/tasks/{task_id}", json={"project_id": REJECTED})
+    assert r.status_code == 409
+    assert r.json()["error"] == ops_logic.MSG_PROJECT_REJECTED_TASK_MOVE
+    assert c.patch(f"/ops/tasks/{task_id}", json={"project_id": "OPS-2026-999"}).status_code == 404
+    assert tasks.docs[task_id]["project_id"] is None
+
+
+def test_attach_standalone_by_non_manager_refused(env):
+    c, state, tasks = env
+    task_id = _file_request(c, state, project_id=None)
+    assert c.patch(f"/ops/tasks/{task_id}", json={"project_id": ACTIVE}).status_code == 403

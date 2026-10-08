@@ -352,10 +352,11 @@ def add_issue_attachment(issue_id: str, attachment: dict) -> Optional[dict]:
 # ---------------------------------------------------------------------------
 
 def create_task(
-    fields: Dict[str, Any], project_title: str, owner: Optional[dict], changed_by: Optional[dict] = None
+    fields: Dict[str, Any], project_title: Optional[str], owner: Optional[dict], changed_by: Optional[dict] = None
 ) -> dict:
     """owner None = a user's request (พัฒนาเพิ่ม) nobody has taken yet; then changed_by
-    (the requester) signs the first status_history entry instead of the owner."""
+    (the requester) signs the first status_history entry instead of the owner.
+    project_title None = a standalone request (fields["project_id"] is None too)."""
     now = _now()
     task_id = next_task_id()
     doc = {
