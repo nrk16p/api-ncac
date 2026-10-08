@@ -8,7 +8,7 @@ import os
 from datetime import date
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -106,10 +106,37 @@ def list_advances(
     acc_code: Optional[str] = None,
     date_from: Optional[date] = None,
     date_to: Optional[date] = None,
+    cost_center: Optional[str] = None,
+    q: Optional[str] = None,
+    department: Optional[str] = None,
+    sort: Optional[str] = Query("desc"),
+    page: Optional[int] = Query(None, ge=1, le=1_000_000),
+    page_size: Optional[str] = Query(str(logic.PAGE_SIZE_DEFAULT)),
     db: Session = Depends(get_db),
 ):
-    return repo.list_advances(db, status=status, overdue=overdue, employee_id=employee_id,
-                              acc_code=acc_code, date_from=date_from, date_to=date_to)
+    """Without `page`: the full array (unchanged; `page_size` and `sort` are ignored, never a 422). With `page`
+    (1-based, <= 1,000,000): {items, total, page, page_size, summary, options} (v3 §9) — `status` is a comma list of
+    derived statuses, `q` is capped at 100 chars and matched literally (NUL removed). `department` = exact requester
+    department name; `sort` = asc|desc on created_at (default desc). `summary` applies the same filters as the list
+    except status and overdue (cost_center and department included); only `options` also ignores cost_center and
+    department. Paged mode only: page < 1 or > 1,000,000, page_size outside 1..200 (or not a number), sort not
+    asc|desc, or an unknown status → 422 (no clamping)."""
+    if page is None:
+        return repo.list_advances(db, status=status, overdue=overdue, employee_id=employee_id,
+                                  acc_code=acc_code, date_from=date_from, date_to=date_to)
+    page_size_n = logic.parse_page_size(page_size)
+    if page_size_n is None:
+        raise HTTPException(status_code=422, detail=f"page_size ต้องเป็นตัวเลข {1}..{logic.PAGE_SIZE_MAX}")
+    sort = "desc" if sort is None else sort
+    if sort not in ("asc", "desc"):
+        raise HTTPException(status_code=422, detail="sort ต้องเป็น asc หรือ desc")
+    statuses, unknown = logic.parse_status_list(status)
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"สถานะไม่ถูกต้อง: {', '.join(unknown)}")
+    return repo.list_advances_page(
+        db, page=page, page_size=page_size_n, statuses=statuses, overdue=overdue, employee_id=employee_id,
+        acc_code=acc_code, date_from=date_from, date_to=date_to, cost_center=logic.clean_text(cost_center), q=logic.clean_q(q),
+        department=logic.clean_text(department), sort=sort)
 
 
 @router.get("/summary")

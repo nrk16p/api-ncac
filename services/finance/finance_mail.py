@@ -253,7 +253,7 @@ def step_approver_emails(db, submission) -> list:
     excluded step-1 approver of this round), lowest level first."""
     from models.user_model import User  # local: keeps the pure renders importable without the ORM graph
 
-    ctx = approval_repo.load_context(db)
+    ctx = approval_repo.ensure_people(db, approval_repo.load_context(db), submission.created_by)
     info = approval_repo.describe(db, submission.created_by, approval_repo._amount_of(db, submission.id), ctx)
     state = rules.evaluate_step(info, ctx.people, ctx.mappings, submission.created_by,
                                 submission.current_approval_level,
@@ -300,7 +300,7 @@ def queue_event(background_tasks, db, event: str, submission, **extra) -> None:
                "amount": values.get("amount"), "fe_base_url": os.getenv("FE_BASE_URL"), **extra}
         if event in APPROVER_EVENTS:
             try:
-                actx = approval_repo.load_context(db)
+                actx = approval_repo.ensure_people(db, approval_repo.load_context(db), submission.created_by)
                 info = approval_repo.describe(db, submission.created_by, values.get("amount"), actx)
                 state = rules.evaluate_step(info, actx.people, actx.mappings, submission.created_by,
                                             submission.current_approval_level)

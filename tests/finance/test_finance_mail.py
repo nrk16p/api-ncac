@@ -341,7 +341,7 @@ def test_queue_event_failed_step_line_rolls_back_and_still_queues(monkeypatch):
     monkeypatch.setattr(fm.advance_repo, "request_values_by_submission", lambda db, ids: {1: {"amount": 1500}})
     monkeypatch.setattr(fm.advance_repo, "people_by_employee_id", lambda db, ids: {})
 
-    def broken(db):
+    def broken(db, fresh=False):
         raise RuntimeError("statement failed")
 
     monkeypatch.setattr(approval_repo, "load_context", broken)
@@ -436,7 +436,7 @@ def test_step_approver_emails_selection(monkeypatch):
     )}
     ctx = approval_repo.ApprovalContext(tiers=[], people=people, mappings={"MAP": {10}})
     steps = [{"step": 1, "required_level": 4, "label": "x"}, {"step": 2, "required_level": 4, "label": "y"}]
-    monkeypatch.setattr(approval_repo, "load_context", lambda db: ctx)
+    monkeypatch.setattr(approval_repo, "load_context", lambda db, fresh=False: ctx)
     monkeypatch.setattr(approval_repo, "describe", lambda db, eid, amount, ctx=None: {"steps": steps})
     monkeypatch.setattr(approval_repo, "_amount_of", lambda db, sid: 15000)
     logs = [{"id": 1, "level_no": 1, "action": "APPROVED", "action_by": 8, "action_at": None, "remark": None}]

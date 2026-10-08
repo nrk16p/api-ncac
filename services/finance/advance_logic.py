@@ -90,6 +90,79 @@ def derive_status(status_approve, fin_status, clear_due_date, today):
     return status, overdue
 
 
+ALL_STATUSES = tuple(STATUS_LABELS)
+OVERDUE_FIN_STATUSES = (FIN_PAID, FIN_SENT_BACK)  # derive_status: overdue only while รอเคลียร์ / ส่งกลับแก้ไข
+Q_MAX_LEN = 100
+PAGE_SIZE_DEFAULT = 20
+PAGE_SIZE_MAX = 200
+
+
+def status_condition_spec(status):
+    """Server-side paging (v3 §9): the (status_approve, fin_status) combinations that derive to `status`, as a plain
+    spec the SQL layer translates. {"approve": [..], "fin": [..] | None (any), "fin_null": bool}. None = unknown
+    status. Mirrors derive_status: In Progress wins, then Rejected, then (Approved only) the fin_status map, where a
+    missing fin row is AWAITING_VOUCHER."""
+    if status == PENDING_APPROVAL:
+        return {"approve": ["In Progress"], "fin": None, "fin_null": True}
+    if status == REJECTED:
+        return {"approve": ["Rejected"], "fin": None, "fin_null": True}
+    fin = [code for code, mapped in _FIN_TO_STATUS.items() if mapped == status]
+    fin_null = status == AWAITING_VOUCHER
+    if not fin and not fin_null:
+        return None
+    return {"approve": ["Approved"], "fin": fin, "fin_null": fin_null}
+
+
+def parse_status_list(raw):
+    """'A,B' → (['A', 'B'], []) split into known derived statuses and unknown codes."""
+    known, unknown = [], []
+    for part in parse_id_list(raw):
+        (known if part in STATUS_LABELS else unknown).append(part)
+    return known, unknown
+
+
+def parse_page_size(raw):
+    """Paged mode only: int in 1..PAGE_SIZE_MAX (None/default → PAGE_SIZE_DEFAULT); otherwise None (→ 422)."""
+    if raw is None:
+        return PAGE_SIZE_DEFAULT
+    try:
+        n = int(str(raw).strip())
+    except ValueError:
+        return None
+    return n if 1 <= n <= PAGE_SIZE_MAX else None
+
+
+def clean_text(value):
+    """Free-text filter value: NUL removed (psycopg raises on \\x00 → 500); empty → None."""
+    return (value or "").replace("\x00", "") or None
+
+
+def clean_q(q):
+    """Search text: NUL removed, stripped, capped at Q_MAX_LEN characters; empty → None."""
+    q = (q or "").replace("\x00", "").strip()[:Q_MAX_LEN].strip()
+    return q or None
+
+
+def escape_like(text):
+    """Escape LIKE wildcards so '%' / '_' in the search text match literally (use with escape='\\')."""
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def fold_summary(rows):
+    """rows: (status_approve, fin_status, count, overdue_count, amount_paid_sum) groups → the list summary.
+    counts has every derived status (0 when none); outstanding_amount = Σ amount_paid over rows that have a fin row
+    and are not CLOSED."""
+    counts = {code: 0 for code in STATUS_LABELS}
+    overdue, outstanding = 0, Decimal(0)
+    for approve, fin, n, n_overdue, amount in rows:
+        status, _ = derive_status(approve, fin, None, date.min)
+        counts[status] += n
+        overdue += n_overdue or 0
+        if fin is not None and fin != FIN_CLOSED:
+            outstanding += Decimal(amount or 0)
+    return {"counts": counts, "overdue": overdue, "outstanding_amount": float(outstanding.quantize(_CENT))}
+
+
 def default_due_date(transfer_date: date) -> date:
     return transfer_date + timedelta(days=CLEAR_DUE_DAYS)
 

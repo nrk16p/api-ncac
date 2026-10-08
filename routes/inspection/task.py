@@ -73,12 +73,8 @@ def create_task(
     drivers = query_drivers(current_month)
     if not drivers:
         drivers = query_drivers(previous_month)
-
-    if not drivers:
-        raise HTTPException(
-            404,
-            f"No drivers found for {current_month} or {previous_month}"
-        )
+    # ไม่มีคนขับในเดือนนี้/เดือนก่อน (เช่นแพล้นท์จาก plant_master ที่ยังไม่มีคนขับ)
+    # ก็ยังสร้างงานได้ — เทรนเนอร์เพิ่มคนขับเองได้ที่หน้างาน
 
     try:
         db.add(task)

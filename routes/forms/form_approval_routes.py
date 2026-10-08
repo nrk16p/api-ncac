@@ -4,6 +4,7 @@ from database import get_db
 from fastapi import BackgroundTasks
 from services.email_service import render_form_rejected_th ,  send_email , render_form_approved_th
 from services.notify_guard import ADVANCE_FORM_TYPE, notifications_enabled
+from services.finance import advance_logic as fin_logic
 from services.finance import approval_repo
 from services.finance import finance_mail as fin_mail
 
@@ -367,27 +368,37 @@ def get_pending_approvals(
 # 🕘 Approval History (งานที่อนุมัติ/ปฏิเสธไปแล้ว)
 # ============================================================
 
-@router.get("/approval-history")
-def get_approval_history(
-    employee_id: str = Query(...),
-    start_date: str | None = Query(None),
-    end_date: str | None = Query(None),
-    db: Session = Depends(get_db),
-):
-    approver = get_user_by_employee_id(db, employee_id)
-    if not approver:
-        return []
+def _history_item(log, sub, approver, requester, department):
+    return {
+        "submission_id": sub.id,
+        "form_id": sub.form_id,
+        "form_code": sub.form.form_code,
+        "form_name": sub.form.form_name,
+        "current_level": sub.current_approval_level,
+        "level_no": log.level_no,
+        "status": sub.status,
+        "status_approve": "Approved" if log.action == "APPROVED" else "Rejected",
+        "submission_status_approve": sub.status_approve,
+        "action": log.action,
+        "action_at": log.action_at,
+        "action_by_firstname": approver.firstname,
+        "action_by_lastname": approver.lastname,
+        "remark": log.remark,
+        "created_by": sub.created_by,
+        "created_at": sub.created_at,
+        "firstname": requester.firstname if requester else None,
+        "lastname": requester.lastname if requester else None,
+        "email": requester.email if requester else None,
+        "image_url": requester.image_url if requester else None,
+        "department_name_th": department.department_name_th if department else None,
+    }
 
-    query = (
-        db.query(FormApprovalLog, FormSubmission)
-        .join(FormSubmission, FormApprovalLog.submission_id == FormSubmission.id)
-        .options(selectinload(FormSubmission.form))
-        .filter(
-            FormApprovalLog.action_by == approver.id,
-            FormApprovalLog.action.in_(["APPROVED", "REJECTED"]),
-        )
+
+def _history_filters(query, approver, start_date, end_date):
+    query = query.filter(
+        FormApprovalLog.action_by == approver.id,
+        FormApprovalLog.action.in_(["APPROVED", "REJECTED"]),
     )
-
     if start_date and end_date:
         start = parse_dt(start_date)
         end = parse_dt(end_date)
@@ -396,6 +407,105 @@ def get_approval_history(
                 FormApprovalLog.action_at >= start,
                 FormApprovalLog.action_at < end + timedelta(days=1),
             )
+    return query
+
+
+def latest_log_per_submission(rows):
+    """rows: (log_id, submission_id) already in history order → the log ids kept, one per submission (the first
+    seen = the approver's latest action)."""
+    seen, kept = set(), []
+    for log_id, submission_id in rows:
+        if submission_id in seen:
+            continue
+        seen.add(submission_id)
+        kept.append(log_id)
+    return kept
+
+
+def users_by_employee_ids(db: Session, employee_ids) -> dict:
+    """ONE query for many employee_ids → {employee_id: User}; the lowest id wins on a duplicate (as _load_users)."""
+    ids = {e for e in employee_ids if e}
+    if not ids:
+        return {}
+    found: dict[str, User] = {}
+    for u in db.query(User).filter(User.employee_id.in_(ids)).order_by(User.id.asc()).all():
+        found.setdefault(u.employee_id, u)
+    return found
+
+
+def _approval_history_page(db, employee_id, start_date, end_date, page, page_size, scope="all"):
+    approver = users_by_employee_ids(db, [employee_id]).get(employee_id)
+    if not approver:
+        return {"items": [], "total": 0, "page": page, "page_size": page_size}
+
+    # light ordered scan (ids only) → dedupe → slice; only the page's rows are loaded in full
+    order = (FormApprovalLog.action_at.desc(), FormApprovalLog.id.asc())
+    light_q = _history_filters(
+        db.query(FormApprovalLog.id, FormApprovalLog.submission_id), approver, start_date, end_date)
+    if scope in ("advance", "it"):
+        light_q = (light_q.join(FormSubmission, FormApprovalLog.submission_id == FormSubmission.id)
+                   .join(FormMaster, FormMaster.id == FormSubmission.form_master_id))
+        light_q = light_q.filter(FormMaster.form_type == ADVANCE_FORM_TYPE if scope == "advance"
+                                 else FormMaster.form_type != ADVANCE_FORM_TYPE)
+    light = light_q.order_by(*order).all()
+    kept = latest_log_per_submission((r[0], r[1]) for r in light)
+    page_ids = kept[(page - 1) * page_size: page * page_size]
+
+    full = {}
+    if page_ids:
+        for log, sub in (
+            db.query(FormApprovalLog, FormSubmission)
+            .join(FormSubmission, FormApprovalLog.submission_id == FormSubmission.id)
+            .options(selectinload(FormSubmission.form))
+            .filter(FormApprovalLog.id.in_(page_ids))
+            .all()
+        ):
+            full[log.id] = (log, sub)
+    rows = [full[i] for i in page_ids if i in full]
+
+    requesters = users_by_employee_ids(db, [sub.created_by for _, sub in rows])
+    departments = _load_departments(db, _get_request_cache(db)) if rows else {}
+    items = []
+    for log, sub in rows:
+        requester = requesters.get(sub.created_by)
+        department = departments.get(requester.department_id) if requester and requester.department_id else None
+        items.append(_history_item(log, sub, approver, requester, department))
+    return {"items": items, "total": len(kept), "page": page, "page_size": page_size}
+
+
+@router.get("/approval-history")
+def get_approval_history(
+    employee_id: str = Query(...),
+    start_date: str | None = Query(None),
+    end_date: str | None = Query(None),
+    page: int | None = Query(None, ge=1, le=1_000_000),
+    page_size: str | None = Query("20"),
+    scope: str | None = Query("all"),
+    db: Session = Depends(get_db),
+):
+    """`scope` (paged mode only): advance = form_type Advance (is_advance_submission), it = others, all; applied in
+    SQL before paging. Without `page`: the full array (IT and ADV, unchanged). With `page` (1-based): {items, total, page,
+    page_size}; page < 1 or > 1,000,000, page_size outside 1..200 or scope not advance|it|all → 422. Without `page`,
+    `page_size` and `scope` are ignored (never a 422)."""
+    if isinstance(page, int):  # (a direct call without the arg leaves the Query default object here)
+        size = fin_logic.parse_page_size(page_size if isinstance(page_size, (int, str)) else None)
+        if size is None:
+            raise HTTPException(422, "page_size ต้องเป็นตัวเลข 1..200")
+        scope = scope if isinstance(scope, str) else "all"
+        if scope not in ("advance", "it", "all"):
+            raise HTTPException(422, "scope ต้องเป็น advance, it หรือ all")
+        return _approval_history_page(db, employee_id, start_date, end_date, page, size, scope)
+
+    approver = get_user_by_employee_id(db, employee_id)
+    if not approver:
+        return []
+
+    query = _history_filters(
+        db.query(FormApprovalLog, FormSubmission)
+        .join(FormSubmission, FormApprovalLog.submission_id == FormSubmission.id)
+        .options(selectinload(FormSubmission.form)),
+        approver, start_date, end_date,
+    )
 
     # newest first; on a tie (an ADV dynamic skip writes the approver's own step log and then a system step-2 log in
     # one transaction, so both share action_at) the earlier log — the approver's own — comes first and is kept below
@@ -417,30 +527,7 @@ def get_approval_history(
         department = None
         if requester and requester.department_id:
             department = departments.get(requester.department_id)
-
-        result.append({
-            "submission_id": sub.id,
-            "form_id": sub.form_id,
-            "form_code": sub.form.form_code,
-            "form_name": sub.form.form_name,
-            "current_level": sub.current_approval_level,
-            "level_no": log.level_no,
-            "status": sub.status,
-            "status_approve": "Approved" if log.action == "APPROVED" else "Rejected",
-            "submission_status_approve": sub.status_approve,
-            "action": log.action,
-            "action_at": log.action_at,
-            "action_by_firstname": approver.firstname,
-            "action_by_lastname": approver.lastname,
-            "remark": log.remark,
-            "created_by": sub.created_by,
-            "created_at": sub.created_at,
-            "firstname": requester.firstname if requester else None,
-            "lastname": requester.lastname if requester else None,
-            "email": requester.email if requester else None,
-            "image_url": requester.image_url if requester else None,
-            "department_name_th": department.department_name_th if department else None,
-        })
+        result.append(_history_item(log, sub, approver, requester, department))
 
     return result
 
@@ -704,6 +791,7 @@ def assign_departments(
             row.is_active = True
 
     db.commit()
+    approval_repo.clear_context_cache()  # approver-department mappings feed the cached approval context
 
     return {
         "message": "Departments assigned",
@@ -744,6 +832,7 @@ def remove_department(
 
     row.is_active = False
     db.commit()
+    approval_repo.clear_context_cache()
 
     return {
         "message": "Department removed",
