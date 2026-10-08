@@ -156,8 +156,9 @@ def _issue_out(doc: dict, project_title: str, project_assignees: List[dict]) -> 
 
 
 def _task_out(doc: dict, caller: Caller) -> dict:
-    out = {k: v for k, v in doc.items() if k not in ("_id", "attachments")}
+    out = {k: v for k, v in doc.items() if k not in ("_id", "attachments", "request_attachments")}
     out["attachments"] = _attachments_out(doc.get("attachments", []))
+    out["request_attachments"] = _attachments_out(doc.get("request_attachments", []))
     out["can_note"] = ops_logic.can_note_task(doc, caller.employee_id, caller.is_admin)
     return out
 
@@ -611,6 +612,30 @@ def create_task(
     return _task_out(doc, caller)
 
 
+@router.post("/task-requests", status_code=201)
+def create_task_request(
+    body: schemas.TaskRequestInput,
+    caller: Caller = Depends(get_caller),
+):
+    """Any signed-in user asks for more work (พัฒนาเพิ่ม) on an accepted project. The task
+    starts Open with no owner — an OPS team member takes it via /claim or a status move.
+    Files go up afterwards via POST /ops/attachments (ref_type=task)."""
+    proj = _require_project(body.project_id)
+    ops_logic.check_task_request_allowed(proj["status"])
+    fields = {
+        "project_id": body.project_id,
+        "title": ops_logic.validate_task_title(body.title),
+        "due_date": None,
+        "requested_by": caller.person,
+        "detail": ops_logic.validate_task_request_detail(body.detail),
+        "priority": body.priority,
+        "target_date": _date_str(body.target_date),
+        "request_attachments": [],
+    }
+    doc = ops_repo.create_task(fields, proj["title"], None, changed_by=caller.person)
+    return {"task_id": doc["task_id"]}
+
+
 @router.patch("/tasks/{task_id}", response_model=schemas.ProjectTask)
 def update_task(
     task_id: str,
@@ -640,9 +665,29 @@ def update_task_status(
     caller: Caller = Depends(get_caller),
 ):
     ops_logic.require_manager(caller.is_manager)
-    _require_task(task_id)
+    task = _require_task(task_id)
     remark = ops_logic.validate_status_input(body.status, body.remark, require_reject_remark=False)
-    updated = ops_repo.update_task_status(task_id, body.status, remark, caller.person)
+    updated = None
+    if task.get("owner") is None:
+        # an unclaimed request: whoever moves it takes it (atomic — see ops_repo.claim_task)
+        updated = ops_repo.claim_task(task_id, caller.person, status=body.status, remark=remark)
+    if updated is None:  # already owned, or someone claimed it a moment ago — plain status move
+        updated = ops_repo.update_task_status(task_id, body.status, remark, caller.person)
+    if updated is None:
+        raise ops_logic.OpsNotFound(ops_logic.MSG_TASK_NOT_FOUND)
+    return _task_out(updated, caller)
+
+
+@router.post("/tasks/{task_id}/claim", response_model=schemas.ProjectTask)
+def claim_task(task_id: str, caller: Caller = Depends(get_caller)):
+    """OPS team takes an unowned task (a user's request) — owner becomes the caller."""
+    ops_logic.require_manager(caller.is_manager)
+    task = _require_task(task_id)
+    ops_logic.check_task_claimable(task)
+    updated = ops_repo.claim_task(task_id, caller.person)
+    if updated is None:  # lost the race — report why from the fresh doc
+        ops_logic.check_task_claimable(_require_task(task_id))
+        raise ops_logic.OpsConflict(ops_logic.MSG_TASK_ALREADY_CLAIMED)
     return _task_out(updated, caller)
 
 
@@ -834,11 +879,13 @@ def unlike_comment(comment_id: str, caller: Caller = Depends(get_caller)):
 
 @router.post("/attachments", response_model=schemas.Attachment, status_code=201)
 def upload_attachment(
-    ref_type: Literal["project", "issue"] = Form(...),
+    ref_type: Literal["project", "issue", "task"] = Form(...),
     ref_id: str = Form(...),
     file: UploadFile = File(...),
     caller: Caller = Depends(get_caller),
 ):
+    """ref_type=task → the requester's files on a task request (พัฒนาเพิ่ม), stored in the
+    task's request_attachments (any allowed doc type) — not the note pictures."""
     data = file.file.read()
     size = len(data)
     mime_type = file.content_type or "application/octet-stream"
@@ -849,11 +896,17 @@ def upload_attachment(
         if doc is None:
             raise ops_logic.OpsNotFound(ops_logic.MSG_PROJECT_NOT_FOUND)
         owner_employee_id = doc["requested_by"]["employee_id"]
-    else:
+    elif ref_type == "issue":
         doc = ops_repo.get_issue(ref_id)
         if doc is None:
             raise ops_logic.OpsNotFound(ops_logic.MSG_ISSUE_NOT_FOUND)
         owner_employee_id = doc["reported_by"]["employee_id"]
+    else:
+        doc = ops_repo.get_task(ref_id)
+        if doc is None:
+            raise ops_logic.OpsNotFound(ops_logic.MSG_TASK_NOT_FOUND)
+        # a task the OPS team created has no requester → managers only
+        owner_employee_id = (doc.get("requested_by") or {}).get("employee_id")
 
     ops_logic.check_attachment_owner(owner_employee_id, caller.employee_id, caller.is_manager)
 
@@ -861,8 +914,10 @@ def upload_attachment(
     safe_name = ops_logic.safe_file_name(file.filename or "file")
     if ref_type == "project":
         key = ops_files.project_attachment_key(ref_id, attachment_id, safe_name)
-    else:
+    elif ref_type == "issue":
         key = ops_files.issue_attachment_key(doc["project_id"], ref_id, attachment_id, safe_name)
+    else:
+        key = ops_files.task_request_attachment_key(doc["project_id"], ref_id, attachment_id, safe_name)
 
     ops_files.upload_bytes(key, data, mime_type)
 
@@ -878,8 +933,10 @@ def upload_attachment(
     }
     if ref_type == "project":
         ops_repo.add_project_attachment(ref_id, attachment)
-    else:
+    elif ref_type == "issue":
         ops_repo.add_issue_attachment(ref_id, attachment)
+    else:
+        ops_repo.add_task_request_attachment(ref_id, attachment)
 
     return {
         "attachment_id": attachment_id,

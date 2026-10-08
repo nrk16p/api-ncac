@@ -57,6 +57,7 @@ def ensure_indexes() -> None:
     db[TASKS].create_index([("project_id", ASCENDING)], name="project_id")
     db[TASKS].create_index([("owner.employee_id", ASCENDING)], name="owner_employee_id")
     db[TASKS].create_index([("assignees.employee_id", ASCENDING)], name="assignees_employee_id")
+    db[TASKS].create_index([("requested_by.employee_id", ASCENDING)], name="requested_by_employee_id")
     db[COMMENTS].create_index(
         [("ref_type", ASCENDING), ("ref_id", ASCENDING), ("created_at", ASCENDING)], name="ref_created_at"
     )
@@ -350,7 +351,11 @@ def add_issue_attachment(issue_id: str, attachment: dict) -> Optional[dict]:
 # Tasks
 # ---------------------------------------------------------------------------
 
-def create_task(fields: Dict[str, Any], project_title: str, owner: dict) -> dict:
+def create_task(
+    fields: Dict[str, Any], project_title: str, owner: Optional[dict], changed_by: Optional[dict] = None
+) -> dict:
+    """owner None = a user's request (พัฒนาเพิ่ม) nobody has taken yet; then changed_by
+    (the requester) signs the first status_history entry instead of the owner."""
     now = _now()
     task_id = next_task_id()
     doc = {
@@ -361,7 +366,9 @@ def create_task(fields: Dict[str, Any], project_title: str, owner: dict) -> dict
         "status": OPEN_STATUS,
         "owner": owner,
         "assignees": [],
-        "status_history": [{"status": OPEN_STATUS, "changed_at": now, "changed_by": owner, "remark": None}],
+        "status_history": [
+            {"status": OPEN_STATUS, "changed_at": now, "changed_by": changed_by or owner, "remark": None}
+        ],
         "created_at": now,
         "updated_at": now,
     }
@@ -385,6 +392,7 @@ def list_tasks(*, mine_employee_id: Optional[str], project_id: Optional[str]) ->
         query["$or"] = [
             {"owner.employee_id": mine_employee_id},
             {"assignees.employee_id": mine_employee_id},
+            {"requested_by.employee_id": mine_employee_id},
         ]
     if project_id:
         query["project_id"] = project_id
@@ -414,6 +422,39 @@ def update_task_status(task_id: str, status: str, remark: Optional[str], changed
             {"$set": {"status": status, "updated_at": now}, "$push": {"status_history": change}},
             return_document=ReturnDocument.AFTER,
         )
+    except PyMongoError as exc:
+        raise mongo_error(exc) from exc
+
+
+def claim_task(
+    task_id: str,
+    owner: dict,
+    *,
+    status: Optional[str] = None,
+    remark: Optional[str] = None,
+) -> Optional[dict]:
+    """Takes an unowned task (a user's request) — atomic: the filter requires owner to
+    still be null, so two people can never both claim it. The new owner is pulled out
+    of assignees (owner is never also an assignee).
+
+    Without status (POST /ops/tasks/{id}/claim) the task must also not be Done/Reject.
+    With status (PATCH /ops/tasks/{id}/status on an unowned task) the status change is
+    recorded in the same update. None = nothing matched (already claimed, closed, or gone)."""
+    now = _now()
+    query: Dict[str, Any] = {"_id": task_id, "owner": None}
+    update: Dict[str, Any] = {
+        "$set": {"owner": owner, "updated_at": now},
+        "$pull": {"assignees": {"employee_id": owner["employee_id"]}},
+    }
+    if status is None:
+        query["status"] = {"$nin": list(CLOSED_STATUSES)}
+    else:
+        update["$set"]["status"] = status
+        update["$push"] = {
+            "status_history": {"status": status, "changed_at": now, "changed_by": owner, "remark": remark}
+        }
+    try:
+        return _col(TASKS).find_one_and_update(query, update, return_document=ReturnDocument.AFTER)
     except PyMongoError as exc:
         raise mongo_error(exc) from exc
 
@@ -457,6 +498,18 @@ def add_task_attachment(task_id: str, attachment: dict) -> Optional[dict]:
         return _col(TASKS).find_one_and_update(
             {"_id": task_id},
             {"$push": {"attachments": attachment}, "$set": {"updated_at": _now()}},
+            return_document=ReturnDocument.AFTER,
+        )
+    except PyMongoError as exc:
+        raise mongo_error(exc) from exc
+
+
+def add_task_request_attachment(task_id: str, attachment: dict) -> Optional[dict]:
+    """The requester's files (POST /ops/attachments ref_type=task) — not the capped note pictures."""
+    try:
+        return _col(TASKS).find_one_and_update(
+            {"_id": task_id},
+            {"$push": {"request_attachments": attachment}, "$set": {"updated_at": _now()}},
             return_document=ReturnDocument.AFTER,
         )
     except PyMongoError as exc:

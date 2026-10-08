@@ -5,9 +5,10 @@ with one deliberate change from the mock: management actions (status / assignees
 plan on projects, issues and tasks; task create/edit) are gated on "is this person a
 manager" instead of "is this person a project assignee / task owner" — assignees and
 task owners are now just labels of who works on it, per the backend contract §Identity
-& permissions. Everyone signed in may still read, create project requests / issues,
-comment (own edit/delete), like, submit a review while Review, and upload attachments
-to a project/issue they created.
+& permissions. Everyone signed in may still read, create project requests / issues /
+task requests (พัฒนาเพิ่ม, owner None until a manager takes it), comment (own edit/delete),
+like, submit a review while Review, and upload attachments to a project/issue/task
+request they created.
 """
 from __future__ import annotations
 
@@ -78,8 +79,8 @@ MSG_CHANGES_REQUESTED_NOTE_REQUIRED = "กรุณาระบุรายล�
 MSG_ASSIGNEE_INVALID = "ผู้รับผิดชอบต้องเป็นสมาชิกทีม OPS เท่านั้น"
 MSG_ATTACHMENT_TOO_LARGE = "ไฟล์แนบต้องมีขนาดไม่เกิน 10 MB"
 MSG_ATTACHMENT_TYPE_INVALID = "ไม่รองรับไฟล์ประเภทนี้"
-MSG_ATTACHMENT_OWN_ONLY = "แนบไฟล์ได้เฉพาะโปรเจกต์/ปัญหาที่ตัวเองสร้าง"
-MSG_REF_TYPE_INVALID = "ref_type ต้องเป็น project หรือ issue"
+MSG_ATTACHMENT_OWN_ONLY = "แนบไฟล์ได้เฉพาะโปรเจกต์/ปัญหา/คำขอพัฒนาเพิ่มที่ตัวเองสร้าง"
+MSG_REF_TYPE_INVALID = "ref_type ต้องเป็น project, issue หรือ task"
 MSG_COMMENT_EMPTY = "กรุณาพิมพ์ความคิดเห็นหรือแนบรูปภาพ"
 MSG_COMMENT_BODY_TOO_LONG = "ความคิดเห็นต้องไม่เกิน 2000 ตัวอักษร"
 MSG_COMMENT_TOO_MANY_IMAGES = "แนบรูปได้สูงสุด 4 รูปต่อความคิดเห็น"
@@ -89,6 +90,11 @@ MSG_TASK_NOTE_FORBIDDEN = "แก้ไขโน้ตและรูปได�
 MSG_TASK_IMAGE_ONLY = "แนบได้เฉพาะไฟล์รูปภาพ (PNG, JPEG, GIF, WebP)"
 MSG_TASK_IMAGE_LIMIT = "แนบรูปได้สูงสุด 10 รูปต่อ Task"
 MSG_ATTACHMENT_NOT_FOUND = "ไม่พบไฟล์แนบ"
+MSG_TASK_REQUEST_PROJECT_OPEN = "โปรเจกต์นี้ยังไม่ได้รับเรื่อง กรุณาแก้ไขคำขอโปรเจกต์แทนการขอพัฒนาเพิ่ม"
+MSG_TASK_REQUEST_PROJECT_REJECTED = "โปรเจกต์นี้ไม่อนุมัติ ขอพัฒนาเพิ่มไม่ได้"
+MSG_TASK_DETAIL_TOO_SHORT = "รายละเอียดต้องมีอย่างน้อย 10 ตัวอักษร"
+MSG_TASK_ALREADY_CLAIMED = "Task นี้มีผู้รับผิดชอบแล้ว"
+MSG_TASK_CLOSED_CLAIM = "Task นี้ปิดแล้ว รับงานไม่ได้"
 
 
 # ---------------------------------------------------------------------------
@@ -289,6 +295,38 @@ def validate_task_title(title: Optional[str]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Task requests (พัฒนาเพิ่ม) — any signed-in user files a new task on an accepted
+# project; it starts with owner = None until an OPS team member takes it (claim,
+# or the first status move by a manager).
+# ---------------------------------------------------------------------------
+
+TASK_DETAIL_MIN = 10
+
+
+def check_task_request_allowed(project_status: str) -> None:
+    """Open = the OPS team hasn't accepted the project yet (edit the project request
+    instead); Reject = not approved. Every other status, Done included, is fine."""
+    if project_status == "Open":
+        raise OpsConflict(MSG_TASK_REQUEST_PROJECT_OPEN)
+    if project_status == "Reject":
+        raise OpsConflict(MSG_TASK_REQUEST_PROJECT_REJECTED)
+
+
+def validate_task_request_detail(detail: Optional[str]) -> str:
+    detail = (detail or "").strip()
+    if len(detail) < TASK_DETAIL_MIN:
+        raise OpsError(MSG_TASK_DETAIL_TOO_SHORT, field_errors={"detail": MSG_TASK_DETAIL_TOO_SHORT})
+    return detail
+
+
+def check_task_claimable(task: dict) -> None:
+    if task.get("owner") is not None:
+        raise OpsConflict(MSG_TASK_ALREADY_CLAIMED)
+    if task.get("status") in CLOSED_STATUSES:
+        raise OpsConflict(MSG_TASK_CLOSED_CLAIM)
+
+
+# ---------------------------------------------------------------------------
 # Task note + pictures — the people responsible for the task (owner / co-assignees)
 # and menaIT admin; any status except Done (Bew's call 2026-10-07).
 # ---------------------------------------------------------------------------
@@ -385,7 +423,7 @@ def validate_assignee_usernames(usernames: Iterable[str]) -> List[str]:
 
 
 def exclude_owner(usernames: Iterable[str], owner_username: Optional[str]) -> List[str]:
-    """Task owner is never in the assignees list."""
+    """Task owner is never in the assignees list (owner None = unclaimed request → nothing to drop)."""
     owner = (owner_username or "").strip().lower()
     return [u for u in usernames if u != owner]
 
@@ -460,7 +498,8 @@ def check_attachment_file(mime_type: str, size: int) -> None:
         raise OpsError(MSG_ATTACHMENT_TYPE_INVALID)
 
 
-def check_attachment_owner(owner_employee_id: str, caller_employee_id: str, is_mgr: bool) -> None:
+def check_attachment_owner(owner_employee_id: Optional[str], caller_employee_id: str, is_mgr: bool) -> None:
+    """owner_employee_id None (e.g. a task the OPS team created, no requester) → managers only."""
     if is_mgr:
         return
     if owner_employee_id != caller_employee_id:

@@ -225,6 +225,17 @@ class ProjectTaskInput(BaseModel):
     due_date: Optional[date] = None
 
 
+class TaskRequestInput(BaseModel):
+    """POST /ops/task-requests — any signed-in user asks for more work (พัฒนาเพิ่ม) on an
+    accepted project. detail's ">= 10 chars after strip" rule is in ops_logic.validate_task_request_detail."""
+    model_config = ConfigDict(extra="forbid")
+    project_id: str
+    title: str = Field(min_length=3, max_length=200)
+    detail: str = Field(max_length=5000)
+    priority: Priority
+    target_date: Optional[date] = None
+
+
 class TaskEditInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     title: Optional[str] = Field(default=None, min_length=1, max_length=200)
@@ -256,9 +267,16 @@ class ProjectTask(BaseModel):
 
     project_title: str
     status: Status
-    owner: Person
+    # null = requested by a user (TaskRequestInput) and nobody on the OPS team has taken it yet
+    owner: Optional[Person] = None
     assignees: List[Person] = Field(default_factory=list)
     status_history: List[StatusChange] = Field(default_factory=list)
+    # set only on a user's request (พัฒนาเพิ่ม); tasks created by the OPS team leave these empty
+    requested_by: Optional[Person] = None
+    detail: Optional[str] = None
+    priority: Optional[Priority] = None
+    target_date: Optional[date] = None
+    request_attachments: List[Attachment] = Field(default_factory=list)
     # the responsible people's work note + pictures (owner / co-assignees / admin edit them)
     note: Optional[str] = None
     note_updated_at: Optional[datetime] = None
