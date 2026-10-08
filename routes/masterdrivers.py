@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import List, Optional
@@ -111,7 +112,7 @@ def get_unique_dimensions(db: Session = Depends(get_db)):
         MasterDriver.plant_name.isnot(None)
     ).distinct().all()
 
-    return [
+    options = [
         {
             "client_name": r.client_name,
             "plant_code": r.plant_code,
@@ -119,6 +120,45 @@ def get_unique_dimensions(db: Session = Depends(get_db)):
         }
         for r in result
     ]
+
+    # plant_master plants with no drivers yet: client_name = most common client
+    # among drivers of the same fleet (fleet with no drivers -> skipped)
+    fleet_clients = db.query(
+        PlantMaster.fleet,
+        MasterDriver.client_name,
+        func.count().label("n")
+    ).join(
+        PlantMaster, PlantMaster.plant_code == MasterDriver.plant_code
+    ).filter(
+        MasterDriver.client_name.isnot(None)
+    ).group_by(
+        PlantMaster.fleet, MasterDriver.client_name
+    ).all()
+
+    fleet_client = {}
+    for r in sorted(fleet_clients, key=lambda r: (-r.n, r.client_name)):
+        fleet_client.setdefault(r.fleet, r.client_name)
+
+    known_codes = {o["plant_code"] for o in options}
+    added = set()
+    plants = db.query(PlantMaster).filter(
+        PlantMaster.plant_name.isnot(None)
+    ).order_by(PlantMaster.plant_code, PlantMaster.fleet).all()
+
+    for p in plants:
+        client_name = fleet_client.get(p.fleet)
+        if p.plant_code in known_codes or not client_name:
+            continue
+        if (client_name, p.plant_code) in added:
+            continue
+        added.add((client_name, p.plant_code))
+        options.append({
+            "client_name": client_name,
+            "plant_code": p.plant_code,
+            "plant_name": p.plant_name
+        })
+
+    return options
 
 
 @router.get("/{driver_id}", response_model=MasterDriverResponse)
