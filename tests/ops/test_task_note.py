@@ -134,7 +134,7 @@ def test_note_on_done_task_is_409(client):
     assert r.json()["error"] == ops_logic.MSG_TASK_DONE_NOTE
 
 
-def test_rename_in_progress_ok_but_move_needs_open(client, monkeypatch):
+def test_rename_and_move_in_progress_ok(client, monkeypatch):
     c, state = client
     monkeypatch.setattr(ops_routes.ops_repo, "update_task_fields", lambda task_id, ch: {**state["task"], **ch})
     r = c.patch("/ops/tasks/TSK-2026-001", json={"title": "ชื่อใหม่"})
@@ -142,4 +142,5 @@ def test_rename_in_progress_ok_but_move_needs_open(client, monkeypatch):
     assert r.json()["title"] == "ชื่อใหม่"
     monkeypatch.setattr(ops_routes.ops_repo, "get_project", lambda pid: {"project_id": pid, "title": "x", "status": "To-Do"})
     r = c.patch("/ops/tasks/TSK-2026-001", json={"project_id": "OPS-2026-002"})
-    assert r.status_code == 409
+    assert r.status_code == 200, r.text
+    assert r.json()["project_id"] == "OPS-2026-002" and r.json()["project_title"] == "x"

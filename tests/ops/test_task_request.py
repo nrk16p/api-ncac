@@ -676,9 +676,11 @@ def test_project_task_keys_unchanged():
     assert ops_files.task_request_attachment_key(ACTIVE, "TSK-1", "a", "f.pdf") == f"ops_project/{ACTIVE}/tasks/TSK-1/request/a-f.pdf"
 
 
-def test_attach_standalone_task_to_project_while_open(env):
+@pytest.mark.parametrize("status", ["Open", "To-Do", "In Progress", "Review"])
+def test_attach_standalone_task_to_project_until_closed(env, status):
     c, state, tasks = env
     task_id = _file_request(c, state, project_id=None)
+    tasks.docs[task_id]["status"] = status
     state["caller"] = OPS1
     r = c.patch(f"/ops/tasks/{task_id}", json={"project_id": ACTIVE})
     assert r.status_code == 200, r.text
@@ -686,14 +688,15 @@ def test_attach_standalone_task_to_project_while_open(env):
     assert tasks.docs[task_id]["project_id"] == ACTIVE
 
 
-def test_attach_standalone_refused_when_task_not_open(env):
+@pytest.mark.parametrize("status", ["Done", "Reject"])
+def test_attach_standalone_refused_when_task_closed(env, status):
     c, state, tasks = env
     task_id = _file_request(c, state, project_id=None)
-    tasks.docs[task_id]["status"] = "In Progress"
+    tasks.docs[task_id]["status"] = status
     state["caller"] = OPS1
     r = c.patch(f"/ops/tasks/{task_id}", json={"project_id": ACTIVE})
     assert r.status_code == 409
-    assert r.json()["error"] == ops_logic.MSG_TASK_NOT_OPEN
+    assert r.json()["error"] == ops_logic.MSG_TASK_CLOSED_MOVE
     assert tasks.docs[task_id]["project_id"] is None
 
 
@@ -763,14 +766,26 @@ def test_omitted_project_id_does_not_detach(env):
     assert r.json()["project_id"] == ACTIVE and r.json()["project_title"] == "ระบบ A"
 
 
-def test_detach_refused_when_task_not_open(env):
+@pytest.mark.parametrize("status", ["To-Do", "In Progress", "Review"])
+def test_detach_ok_until_closed(env, status):
     c, state, tasks = env
     task_id = _ops_task()["task_id"]
-    tasks.docs[task_id]["status"] = "In Progress"
+    tasks.docs[task_id]["status"] = status
+    state["caller"] = OPS1
+    r = c.patch(f"/ops/tasks/{task_id}", json={"project_id": None})
+    assert r.status_code == 200, r.text
+    assert r.json()["project_id"] is None and r.json()["status"] == status
+
+
+@pytest.mark.parametrize("status", ["Done", "Reject"])
+def test_detach_refused_when_task_closed(env, status):
+    c, state, tasks = env
+    task_id = _ops_task()["task_id"]
+    tasks.docs[task_id]["status"] = status
     state["caller"] = OPS1
     r = c.patch(f"/ops/tasks/{task_id}", json={"project_id": None})
     assert r.status_code == 409
-    assert r.json()["error"] == ops_logic.MSG_TASK_NOT_OPEN
+    assert r.json()["error"] == ops_logic.MSG_TASK_CLOSED_MOVE
     assert tasks.docs[task_id]["project_id"] == ACTIVE
 
 
@@ -783,14 +798,30 @@ def test_detach_by_non_manager_refused(env):
 
 
 def test_detach_standalone_is_noop(env):
-    """Already standalone → nothing to check, even when no longer Open."""
+    """Already standalone → nothing to check, even once Done."""
     c, state, tasks = env
     task_id = _file_request(c, state, project_id=None)
-    tasks.docs[task_id]["status"] = "In Progress"
+    tasks.docs[task_id]["status"] = "Done"
     state["caller"] = OPS1
     r = c.patch(f"/ops/tasks/{task_id}", json={"project_id": None})
     assert r.status_code == 200, r.text
-    assert r.json()["project_id"] is None and r.json()["status"] == "In Progress"
+    assert r.json()["project_id"] is None and r.json()["status"] == "Done"
+
+
+@pytest.mark.parametrize("status,ok", [("Review", True), ("Done", False), ("Reject", False)])
+def test_move_between_projects_until_closed(env, status, ok):
+    c, state, tasks = env
+    other = "OPS-2026-004"
+    PROJECTS[other] = {"_id": other, "project_id": other, "title": "ระบบ D", "status": "To-Do"}
+    try:
+        task_id = _ops_task()["task_id"]
+        tasks.docs[task_id]["status"] = status
+        state["caller"] = OPS1
+        r = c.patch(f"/ops/tasks/{task_id}", json={"project_id": other})
+        assert r.status_code == (200 if ok else 409), r.text
+        assert tasks.docs[task_id]["project_id"] == (other if ok else ACTIVE)
+    finally:
+        del PROJECTS[other]
 
 
 def test_detach_then_reattach(env):

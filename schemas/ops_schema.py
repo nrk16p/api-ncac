@@ -241,7 +241,7 @@ class TaskRequestInput(BaseModel):
 
 class TaskEditInput(BaseModel):
     """PATCH /ops/tasks/{id} — OPS team. project_id: another project moves it, an explicit
-    null detaches it (standalone) — both only while the task is Open. detail / priority /
+    null detaches it (standalone) — both until the task is Done / Reject. detail / priority /
     target_date: an explicit null clears it (model_fields_set); detail (sanitized HTML) has no minimum here, unlike
     TaskRequestInput — no visible text stores null."""
     model_config = ConfigDict(extra="forbid")

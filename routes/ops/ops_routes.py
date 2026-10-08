@@ -660,11 +660,11 @@ def update_task(
         changes["title"] = ops_logic.validate_task_title(body.title)
     sent = body.model_fields_set
     # project_id: move to another project, attach a standalone task, or an explicit null
-    # (or blank) detaches it — all only while the task is Open; unchanged = no-op
+    # (or blank) detaches it — all until the task is Done / Reject; unchanged = no-op
     if "project_id" in sent:
         target = (body.project_id or "").strip() or None
         if target != task.get("project_id"):
-            ops_logic.check_task_editable(task["status"])
+            ops_logic.check_task_project_movable(task["status"])
             if target is None:
                 changes["project_id"] = None
                 changes["project_title"] = None

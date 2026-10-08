@@ -69,7 +69,7 @@ MSG_SURVEY_NOT_READY = "ประเมินได้เมื่อโปร�
 MSG_SURVEY_INCOMPLETE = "กรุณาให้คะแนนให้ครบทุกข้อ"
 MSG_PROJECT_REJECTED_TASK_CREATE = "โปรเจกต์นี้ไม่อนุมัติ สร้าง Task ไม่ได้"
 MSG_PROJECT_REJECTED_TASK_MOVE = "โปรเจกต์นี้ไม่อนุมัติ ย้าย Task เข้าไม่ได้"
-MSG_TASK_NOT_OPEN = "ย้ายโปรเจกต์ได้เฉพาะ Task ที่ยัง Open"
+MSG_TASK_CLOSED_MOVE = "Task ที่ Done / Reject แล้ว ย้ายโปรเจกต์ไม่ได้"
 MSG_TASK_DONE_TITLE = "Task นี้ Done แล้ว แก้ไขชื่อไม่ได้"
 MSG_TASK_DONE_NOTE = "Task นี้ Done แล้ว แก้ไขโน้ตและรูปไม่ได้"
 MSG_TASK_CLOSED = "Task นี้ปิดแล้ว แก้ไขไม่ได้"
@@ -268,10 +268,10 @@ def check_task_move_target(project_status: str) -> None:
         raise OpsConflict(MSG_PROJECT_REJECTED_TASK_MOVE)
 
 
-def check_task_editable(task_status: str) -> None:
-    """Moving it to another project: only while the task is Open."""
-    if task_status != "Open":
-        raise OpsConflict(MSG_TASK_NOT_OPEN)
+def check_task_project_movable(task_status: str) -> None:
+    """Moving it to another project / attaching / detaching: any status except Done / Reject."""
+    if task_status in CLOSED_STATUSES:
+        raise OpsConflict(MSG_TASK_CLOSED_MOVE)
 
 
 def check_task_title_editable(task_status: str) -> None:
