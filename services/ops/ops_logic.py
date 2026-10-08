@@ -12,6 +12,7 @@ request they created.
 """
 from __future__ import annotations
 
+import html
 import re
 from urllib.parse import urlparse
 from typing import Iterable, List, Optional
@@ -302,7 +303,19 @@ def validate_task_title(title: Optional[str]) -> str:
 # or the first status move by a manager).
 # ---------------------------------------------------------------------------
 
+# detail is rich-text HTML from the same TipTap editor as a project's requirement —
+# sanitized with sanitize_requirement_html; length rules count the visible text only.
+# Old plain-text details are left as they are (no migration).
 TASK_DETAIL_MIN = 10
+
+_TAG_RE = re.compile(r"<[^>]*>")
+_SPACE_RE = re.compile(r"\s+")
+
+
+def visible_text(html_text: Optional[str]) -> str:
+    """Tags stripped, entities unescaped, whitespace collapsed — what the reader actually sees."""
+    text = html.unescape(_TAG_RE.sub(" ", html_text or ""))
+    return _SPACE_RE.sub(" ", text).strip()
 
 
 def check_task_request_allowed(project_status: str) -> None:
@@ -315,8 +328,10 @@ def check_task_request_allowed(project_status: str) -> None:
 
 
 def validate_task_request_detail(detail: Optional[str]) -> str:
-    detail = (detail or "").strip()
-    if len(detail) < TASK_DETAIL_MIN:
+    """Sanitized HTML; refused unless its visible text is >= TASK_DETAIL_MIN chars
+    (so "<p></p>" or "<p>abc</p>" doesn't pass)."""
+    detail = (sanitize_requirement_html(detail or "") or "").strip()
+    if len(visible_text(detail)) < TASK_DETAIL_MIN:
         raise OpsError(MSG_TASK_DETAIL_TOO_SHORT, field_errors={"detail": MSG_TASK_DETAIL_TOO_SHORT})
     return detail
 
@@ -328,8 +343,9 @@ def check_task_detail_editable(task_status: str) -> None:
 
 
 def clean_task_detail(detail: Optional[str]) -> Optional[str]:
-    """OPS edit: stripped, empty → None (no 10-char minimum, unlike a user's request)."""
-    return (detail or "").strip() or None
+    """OPS edit: sanitized HTML; no visible text → None (no 10-char minimum, unlike a user's request)."""
+    detail = (sanitize_requirement_html(detail or "") or "").strip()
+    return detail if visible_text(detail) else None
 
 
 def check_task_request_files_editable(task_status: str) -> None:

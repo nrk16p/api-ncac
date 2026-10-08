@@ -227,22 +227,24 @@ class ProjectTaskInput(BaseModel):
 
 class TaskRequestInput(BaseModel):
     """POST /ops/task-requests — any signed-in user asks for more work (พัฒนาเพิ่ม) on an
-    accepted project. detail's ">= 10 chars after strip" rule is in ops_logic.validate_task_request_detail."""
+    accepted project. detail is rich-text HTML; it's sanitized and its ">= 10 visible chars" rule
+    is checked in ops_logic.validate_task_request_detail."""
     model_config = ConfigDict(extra="forbid")
     project_id: str
     title: str = Field(min_length=3, max_length=200)
-    detail: str = Field(max_length=5000)
+    detail: str = Field(max_length=20000)  # sanitized HTML (TipTap), like Project.requirement
     priority: Priority
     target_date: Optional[date] = None
 
 
 class TaskEditInput(BaseModel):
     """PATCH /ops/tasks/{id} — OPS team. detail / priority / target_date: an explicit null
-    clears it (model_fields_set); detail has no minimum here, unlike TaskRequestInput."""
+    clears it (model_fields_set); detail (sanitized HTML) has no minimum here, unlike
+    TaskRequestInput — no visible text stores null."""
     model_config = ConfigDict(extra="forbid")
     title: Optional[str] = Field(default=None, min_length=1, max_length=200)
     project_id: Optional[str] = None
-    detail: Optional[str] = Field(default=None, max_length=5000)
+    detail: Optional[str] = Field(default=None, max_length=20000)
     priority: Optional[Priority] = None
     target_date: Optional[date] = None
 
@@ -278,7 +280,7 @@ class ProjectTask(BaseModel):
     status_history: List[StatusChange] = Field(default_factory=list)
     # set only on a user's request (พัฒนาเพิ่ม); tasks created by the OPS team leave these empty
     requested_by: Optional[Person] = None
-    detail: Optional[str] = None
+    detail: Optional[str] = None  # sanitized HTML (older tasks may hold plain text)
     priority: Optional[Priority] = None
     target_date: Optional[date] = None
     request_attachments: List[Attachment] = Field(default_factory=list)

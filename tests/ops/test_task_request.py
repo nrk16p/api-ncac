@@ -533,7 +533,7 @@ def test_detail_edit_on_done_task_refused(env):
 @pytest.mark.parametrize("payload", [
     {},
     {"priority": "Urgent"},
-    {"detail": "x" * 5001},
+    {"detail": "x" * 20001},
     {"target_date": "not-a-date"},
 ])
 def test_detail_edit_validation(env, payload):
@@ -541,3 +541,73 @@ def test_detail_edit_validation(env, payload):
     task_id = _file_request(c, state)
     state["caller"] = OPS1
     assert c.patch(f"/ops/tasks/{task_id}", json=payload).status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# detail is sanitized rich-text HTML (same TipTap editor / sanitizer as requirement)
+# ---------------------------------------------------------------------------
+
+def test_visible_text():
+    assert ops_logic.visible_text("<p>a&nbsp;&amp;<br>  b</p>\n<ul><li>c</li></ul>") == "a & b c"
+    assert ops_logic.visible_text("<p></p><p><br></p>") == ""
+    assert ops_logic.visible_text(None) == ""
+    assert ops_logic.visible_text("plain old text") == "plain old text"
+
+
+def test_request_detail_html_is_sanitized(env):
+    c, state, tasks = env
+    html_in = ('<script>alert(1)</script><p onclick="x()">ขอรายงาน <strong>สรุป</strong>รายเดือน</p>'
+               '<img src=x onerror=alert(1)><a href="javascript:alert(1)">ลิงก์</a>')
+    task_id = _file_request(c, state, detail=html_in)
+    stored = tasks.docs[task_id]["detail"]
+    assert "<script" not in stored and "alert" not in stored
+    assert "onclick" not in stored and "<img" not in stored and "javascript:" not in stored
+    assert "<p>ขอรายงาน <strong>สรุป</strong>รายเดือน</p>" in stored
+    [out] = c.get("/ops/tasks", params={"project_id": ACTIVE}).json()
+    assert out["detail"] == stored
+
+
+@pytest.mark.parametrize("detail", [
+    "<p></p>",
+    "<p>abc</p>",
+    "<p><br></p><p>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</p>",
+    "<p>   a    b   c   </p>",
+    "<script>this text is long but never visible</script><p>สั้น</p>",
+])
+def test_request_detail_counts_visible_text(env, detail):
+    c, _, tasks = env
+    r = c.post("/ops/task-requests", json={**REQUEST, "detail": detail})
+    assert r.status_code == 400, r.text
+    assert r.json()["field_errors"] == {"detail": ops_logic.MSG_TASK_DETAIL_TOO_SHORT}
+    assert tasks.docs == {}
+
+
+def test_request_detail_long_html_accepted(env):
+    c, state, tasks = env
+    detail = "<p>" + "ก" * 15000 + "</p>"  # over the old 5000 cap, under 20000
+    task_id = _file_request(c, state, detail=detail)
+    assert tasks.docs[task_id]["detail"] == detail
+    r = c.post("/ops/task-requests", json={**REQUEST, "detail": "x" * 20001})
+    assert r.status_code == 400
+
+
+def test_patch_detail_html_sanitized_and_empty_is_null(env):
+    c, state, tasks = env
+    task_id = _ops_task()["task_id"]
+    state["caller"] = OPS1
+    r = c.patch(f"/ops/tasks/{task_id}", json={"detail": "<p>สั้น</p><script>alert(1)</script>"})
+    assert r.status_code == 200, r.text
+    assert r.json()["detail"] == "<p>สั้น</p>"
+    for empty in ("<p></p>", "<p><br></p>", "<p>&nbsp; </p>"):
+        r = c.patch(f"/ops/tasks/{task_id}", json={"detail": empty})
+        assert r.status_code == 200, r.text
+        assert r.json()["detail"] is None
+        assert tasks.docs[task_id]["detail"] is None
+
+
+def test_old_plain_text_detail_reads_as_is(env):
+    c, state, tasks = env
+    task_id = _file_request(c, state)
+    tasks.docs[task_id]["detail"] = "ข้อความเดิม a < b & c\nบรรทัดสอง"  # written before HTML, never migrated
+    [out] = c.get("/ops/tasks", params={"project_id": ACTIVE}).json()
+    assert out["detail"] == "ข้อความเดิม a < b & c\nบรรทัดสอง"
