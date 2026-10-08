@@ -267,6 +267,12 @@ async def startup_event():
     #   (รอบ light ใช้เวลาจริง ~20 วินาที)
     scheduler.add_job(_run, CronTrigger(hour=22, minute=0), args=["atms_stockmovement"], id="sched_atms_stockmovement")
     scheduler.add_job(_run, CronTrigger(hour="1,5,9,13", minute=30), args=["atms_stockmovement_light"], id="sched_atms_stockmovement_light")
+    # Jobs tab (fuel-control-center spec §10) — BKK→UTC −7:
+    # overspeed 04:30 BKK → 21:30 UTC: reads the day engine-on (21:00) has just read, done before
+    #   atms_stockmovement's heavy writes at 22:00; rmc_compensation 09:00 BKK → 02:00 UTC: talks only
+    #   to CPAC fleetlink + the push API (moved off the Mac launchd job com.cpac.rmc-daily)
+    scheduler.add_job(_run, CronTrigger(hour=21, minute=30), args=["overspeed"], id="sched_overspeed")                # 04:30 BKK
+    scheduler.add_job(_run, CronTrigger(hour=2, minute=0), args=["rmc_compensation"], id="sched_rmc_compensation")   # 09:00 BKK
     # finance advance: overdue clearing reminder, daily 09:00 BKK (no-op unless FINANCE_EMAIL_ENABLED=true)
     from database import SessionLocal
     from services.finance.overdue_reminder import run_overdue_reminders
