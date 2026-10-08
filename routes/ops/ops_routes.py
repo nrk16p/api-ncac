@@ -641,7 +641,7 @@ def update_task_status(
 ):
     ops_logic.require_manager(caller.is_manager)
     _require_task(task_id)
-    remark = ops_logic.validate_status_input(body.status, body.remark)
+    remark = ops_logic.validate_status_input(body.status, body.remark, require_reject_remark=False)
     updated = ops_repo.update_task_status(task_id, body.status, remark, caller.person)
     return _task_out(updated, caller)
 

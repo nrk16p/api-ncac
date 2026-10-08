@@ -214,12 +214,13 @@ def require_project_editable(project: dict, caller_employee_id: str, caller_user
 # Status / review state rules
 # ---------------------------------------------------------------------------
 
-def validate_status_input(status: str, remark: Optional[str]) -> Optional[str]:
-    """Returns the cleaned remark (stripped, or None). Raises if Reject has no remark."""
+def validate_status_input(status: str, remark: Optional[str], require_reject_remark: bool = True) -> Optional[str]:
+    """Returns the cleaned remark (stripped, or None). Raises if Reject has no remark,
+    unless require_reject_remark is False (a task's Reject = cancelled, no reason asked)."""
     if status not in STATUSES:
         raise OpsError(f"สถานะไม่ถูกต้อง: {status}")
     remark = (remark or "").strip() or None
-    if status == "Reject" and not remark:
+    if status == "Reject" and require_reject_remark and not remark:
         raise OpsError(MSG_REJECT_REMARK_REQUIRED, field_errors={"remark": MSG_REJECT_REMARK_REQUIRED})
     return remark
 
