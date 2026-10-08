@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from tanks import fit_tank, observed_tank, pair_minutes, parse_capacity, resolve_tank
+from tanks import fit_tank, high_reading, observed_tank, pair_minutes, parse_capacity, resolve_tank
 
 
 @pytest.mark.parametrize("raw,expected", [
@@ -47,3 +47,9 @@ def test_resolve_priority():
     assert resolve_tank(fit=(183.0, 0.7, 400), observed_l=200.0)["tank_from"] == "observed"
     assert resolve_tank(fit=(183.0, 0.95, 50))["tank_from"] == "default"
     assert resolve_tank() == {"tank_l": 200.0, "tank_from": "default"}
+
+
+def test_high_reading_ignores_a_short_spike():
+    readings = np.array([150.0] * 995 + [199.0] * 400 + [410.0] * 3 + [-1.0] * 50)   # 3 spike minutes; -1 = missing
+    assert high_reading(readings) == 199.0
+    assert high_reading(np.array([-1.0, np.nan])) is None

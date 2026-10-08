@@ -5,6 +5,7 @@ import re
 import numpy as np
 
 MIN_TANK_L, MAX_TANK_L = 40.0, 1000.0
+OBSERVED_PCT = 99.5
 DEFAULT_TANK_L = 200.0
 CALIB_MIN_R2, CALIB_MIN_PAIRS = 0.9, 200
 PARKED_KMH = 5
@@ -53,8 +54,16 @@ def fit_tank(pairs: list[tuple[float, float]]) -> tuple[float, float, int] | Non
     return 100.0 * k, r2, len(pairs)
 
 
+def high_reading(litres, pct: float = OBSERVED_PCT) -> float | None:
+    """The p99.5 of the valid litre readings: the level a full tank shows, without the few minutes a
+    spike or a stuck-high value adds (a raw maximum of fuel_hi oversizes tanks)."""
+    values = np.asarray(litres, dtype="float64")
+    values = values[np.isfinite(values) & (values >= 0)]
+    return float(np.percentile(values, pct)) if values.size else None
+
+
 def observed_tank(max_litres: float | None) -> float | None:
-    """Largest litre reading → tank size rounded up to 10 L (Terminus maxima cluster at ~80/200/390)."""
+    """High litre reading (high_reading) → tank size rounded up to 10 L (Terminus levels cluster at ~80/200/390)."""
     if max_litres is None or not math.isfinite(max_litres) or max_litres <= 0:
         return None
     value = math.ceil(max_litres / 10.0) * 10.0

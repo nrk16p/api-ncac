@@ -94,3 +94,9 @@ class BesttechClient:
         body = {"vehicle_no": vehicle_no, "start_time": start.strftime(TIME_FMT), "end_time": end.strftime(TIME_FMT)}
         payload = self._post("history", body)
         return (payload.get("info") or {}).get("points") or []
+
+    def location(self, since: str | None = None) -> list[dict]:
+        """POI / geofence master of the organisation (`since` = YYYY-MM-DD to fetch only changes)."""
+        payload = self._post("location", {"since_modified_date": since} if since else {})
+        info = payload.get("info")
+        return info if isinstance(info, list) else []

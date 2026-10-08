@@ -1,8 +1,8 @@
 """fuel_tanks — tank size per plate and re-stamp of tank_l / tank_from on gps_series (spec §3.4).
 
 Order: ATMS ความจุถังน้ำมัน → calibrated (Besttech % vs Terminus litres in the same minute, both
-parked, CALIB_FROM..CALIB_TO, default 2026-06-01..2026-08-31) → observed (largest litre reading in
-the last 30 days, rounded up to 10 L) → 200 L default. Only metadata is updated; columns stay as-is.
+parked, CALIB_FROM..CALIB_TO, default 2026-06-01..2026-08-31) → observed (p99.5 of the minute-median
+litre readings in the last 30 days, rounded up to 10 L) → 200 L default. Only metadata is updated; columns stay as-is.
 """
 import os
 import sys
@@ -12,12 +12,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "engineon"))
 from common import MONGODB_URI, JobLog, log, now_bkk  # noqa: E402
+import numpy as np  # noqa: E402
 from pymongo import MongoClient, ReplaceOne  # noqa: E402
 
 from plates import normalize_plate  # noqa: E402
 from series_codec import decode_column, decode_columns  # noqa: E402
 from series_store import SERIES, TANKS  # noqa: E402
-from tanks import fit_tank, observed_tank, pair_minutes, parse_capacity, resolve_tank  # noqa: E402
+from tanks import fit_tank, high_reading, observed_tank, pair_minutes, parse_capacity, resolve_tank  # noqa: E402
 
 OBSERVED_DAYS = 30
 
@@ -44,14 +45,21 @@ def calibration_pairs(db, date_from: str, date_to: str) -> dict[str, list[tuple[
 
 
 def observed_maxima(db, since: str) -> dict[str, float]:
-    best: dict[str, float] = {}
+    """Per plate: the p99.5 (tanks.high_reading) of every valid minute-median `fuel` reading since
+    `since`, in litres — pooled over the days, so a spike or a stuck-high stretch cannot size the tank."""
+    minutes: dict[str, list] = defaultdict(list)
     query = {"fuel_unit": "dl", "n": {"$gt": 0}, "date_key": {"$gte": since}}
-    for doc in db[SERIES].find(query, {"plate": 1, "n": 1, "cols.fuel_hi": 1}):
-        high = decode_column(doc["cols"]["fuel_hi"], "fuel_hi", doc["n"])
-        high = high[high >= 0]
-        if high.size:
-            best[doc["plate"]] = max(best.get(doc["plate"], 0.0), float(high.max()) / 10.0)
-    return best
+    for doc in db[SERIES].find(query, {"plate": 1, "n": 1, "cols.fuel": 1}):
+        fuel = decode_column(doc["cols"]["fuel"], "fuel", doc["n"])
+        fuel = fuel[fuel >= 0]
+        if fuel.size:
+            minutes[doc["plate"]].append(fuel)   # int16 deci-litres: ≤ 90 KB per plate for 30 days
+    out = {}
+    for plate, parts in minutes.items():
+        high = high_reading(np.concatenate(parts))
+        if high is not None:
+            out[plate] = high / 10.0
+    return out
 
 
 def main() -> None:
