@@ -95,6 +95,8 @@ MSG_TASK_REQUEST_PROJECT_REJECTED = "โปรเจกต์นี้ไม่�
 MSG_TASK_DETAIL_TOO_SHORT = "รายละเอียดต้องมีอย่างน้อย 10 ตัวอักษร"
 MSG_TASK_ALREADY_CLAIMED = "Task นี้มีผู้รับผิดชอบแล้ว"
 MSG_TASK_CLOSED_CLAIM = "Task นี้ปิดแล้ว รับงานไม่ได้"
+MSG_TASK_DONE_DETAIL = "Task นี้ Done แล้ว แก้ไขรายละเอียดไม่ได้"
+MSG_TASK_DONE_REQUEST_FILES = "Task นี้ Done แล้ว แก้ไขไฟล์แนบไม่ได้"
 
 
 # ---------------------------------------------------------------------------
@@ -317,6 +319,23 @@ def validate_task_request_detail(detail: Optional[str]) -> str:
     if len(detail) < TASK_DETAIL_MIN:
         raise OpsError(MSG_TASK_DETAIL_TOO_SHORT, field_errors={"detail": MSG_TASK_DETAIL_TOO_SHORT})
     return detail
+
+
+def check_task_detail_editable(task_status: str) -> None:
+    """OPS team editing detail / priority / target_date (any task): any status except Done."""
+    if task_status == "Done":
+        raise OpsConflict(MSG_TASK_DONE_DETAIL)
+
+
+def clean_task_detail(detail: Optional[str]) -> Optional[str]:
+    """OPS edit: stripped, empty → None (no 10-char minimum, unlike a user's request)."""
+    return (detail or "").strip() or None
+
+
+def check_task_request_files_editable(task_status: str) -> None:
+    """Adding / removing the request files (requester or OPS team): not once the task is Done."""
+    if task_status == "Done":
+        raise OpsConflict(MSG_TASK_DONE_REQUEST_FILES)
 
 
 def check_task_claimable(task: dict) -> None:

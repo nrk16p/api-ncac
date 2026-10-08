@@ -654,6 +654,16 @@ def update_task(
         ops_logic.check_task_move_target(proj["status"])
         changes["project_id"] = body.project_id
         changes["project_title"] = proj["title"]
+    # the request-style detail sheet, on any task — an explicit null clears a field
+    sent = body.model_fields_set
+    if not sent.isdisjoint({"detail", "priority", "target_date"}):
+        ops_logic.check_task_detail_editable(task["status"])
+    if "detail" in sent:
+        changes["detail"] = ops_logic.clean_task_detail(body.detail)
+    if "priority" in sent:
+        changes["priority"] = body.priority
+    if "target_date" in sent:
+        changes["target_date"] = _date_str(body.target_date)
     updated = ops_repo.update_task_fields(task_id, changes)
     return _task_out(updated, caller)
 
@@ -780,6 +790,24 @@ def delete_task_image(task_id: str, attachment_id: str, caller: Caller = Depends
     return _task_out(updated, caller)
 
 
+@router.delete("/tasks/{task_id}/request-attachments/{attachment_id}", response_model=schemas.ProjectTask)
+def delete_task_request_attachment(task_id: str, attachment_id: str, caller: Caller = Depends(get_caller)):
+    """A file from the task request (พัฒนาเพิ่ม) — the requester or the OPS team; not once Done."""
+    task = _require_task(task_id)
+    ops_logic.check_task_request_files_editable(task["status"])
+    requester_id = (task.get("requested_by") or {}).get("employee_id")
+    ops_logic.check_attachment_owner(requester_id, caller.employee_id, caller.is_manager)
+    found = next((a for a in task.get("request_attachments") or [] if a["attachment_id"] == attachment_id), None)
+    if found is None:
+        raise ops_logic.OpsNotFound(ops_logic.MSG_ATTACHMENT_NOT_FOUND)
+    updated = ops_repo.remove_task_request_attachment(task_id, attachment_id)
+    try:
+        ops_files.delete_objects([found["s3_key"]])
+    except Exception:  # the record is gone already; a stray object in S3 is harmless
+        logger.warning("ops: failed to delete S3 object for task %s request file", task_id, exc_info=True)
+    return _task_out(updated, caller)
+
+
 # ---------------------------------------------------------------------------
 # Satisfaction surveys (menaIT /survey-ops)
 # ---------------------------------------------------------------------------
@@ -885,7 +913,7 @@ def upload_attachment(
     caller: Caller = Depends(get_caller),
 ):
     """ref_type=task → the requester's files on a task request (พัฒนาเพิ่ม), stored in the
-    task's request_attachments (any allowed doc type) — not the note pictures."""
+    task's request_attachments (any allowed doc type, not once the task is Done) — not the note pictures."""
     data = file.file.read()
     size = len(data)
     mime_type = file.content_type or "application/octet-stream"
@@ -905,6 +933,7 @@ def upload_attachment(
         doc = ops_repo.get_task(ref_id)
         if doc is None:
             raise ops_logic.OpsNotFound(ops_logic.MSG_TASK_NOT_FOUND)
+        ops_logic.check_task_request_files_editable(doc["status"])
         # a task the OPS team created has no requester → managers only
         owner_employee_id = (doc.get("requested_by") or {}).get("employee_id")
 

@@ -99,7 +99,7 @@ class FakeTasks:
 @pytest.fixture
 def env(monkeypatch):
     tasks = FakeTasks()
-    state = {"caller": REQUESTER, "uploads": [], "seq": 0}
+    state = {"caller": REQUESTER, "uploads": [], "deleted": [], "seq": 0}
 
     def next_task_id():
         state["seq"] += 1
@@ -121,6 +121,7 @@ def env(monkeypatch):
     monkeypatch.setattr(ops_repo, "get_project", lambda pid: PROJECTS.get(pid))
     monkeypatch.setattr(ops_routes.ops_files, "upload_bytes", lambda key, data, ct: state["uploads"].append(key))
     monkeypatch.setattr(ops_routes.ops_files, "presigned_get_url", lambda key: f"https://s3/{key}")
+    monkeypatch.setattr(ops_routes.ops_files, "delete_objects", lambda keys: state["deleted"].extend(keys))
 
     app = FastAPI()
     app.include_router(ops_routes.router)
@@ -388,3 +389,155 @@ def test_task_without_requester_is_manager_only(env):
 def test_upload_to_missing_task_is_404(env):
     c, _, _ = env
     assert _upload(c, "TSK-2026-999").status_code == 404
+
+
+def test_upload_on_done_task_refused(env):
+    c, state, tasks = env
+    task_id = _file_request(c, state)
+    tasks.docs[task_id]["status"] = "Done"
+    r = _upload(c, task_id)
+    assert r.status_code == 409
+    assert r.json()["error"] == ops_logic.MSG_TASK_DONE_REQUEST_FILES
+    assert state["uploads"] == []
+
+
+# ---------------------------------------------------------------------------
+# removing a request file
+# ---------------------------------------------------------------------------
+
+def _uploaded(c, state, as_who=REQUESTER):
+    task_id = _file_request(c, state)
+    state["caller"] = as_who
+    r = _upload(c, task_id)
+    assert r.status_code == 201, r.text
+    return task_id, r.json()["attachment_id"]
+
+
+@pytest.mark.parametrize("who", [REQUESTER, OPS1])
+def test_delete_request_file_by_requester_or_manager(env, who):
+    c, state, tasks = env
+    task_id, att_id = _uploaded(c, state)
+    key = tasks.docs[task_id]["request_attachments"][0]["s3_key"]
+    state["caller"] = who
+    r = c.delete(f"/ops/tasks/{task_id}/request-attachments/{att_id}")
+    assert r.status_code == 200, r.text
+    assert r.json()["request_attachments"] == []
+    assert tasks.docs[task_id]["request_attachments"] == []
+    assert state["deleted"] == [key]
+
+
+def test_delete_request_file_by_stranger_refused(env):
+    c, state, tasks = env
+    task_id, att_id = _uploaded(c, state)
+    state["caller"] = STRANGER
+    r = c.delete(f"/ops/tasks/{task_id}/request-attachments/{att_id}")
+    assert r.status_code == 403
+    assert len(tasks.docs[task_id]["request_attachments"]) == 1
+    assert state["deleted"] == []
+
+
+def test_delete_request_file_missing_is_404(env):
+    c, state, _ = env
+    task_id, _ = _uploaded(c, state)
+    r = c.delete(f"/ops/tasks/{task_id}/request-attachments/nope")
+    assert r.status_code == 404
+    assert r.json()["error"] == ops_logic.MSG_ATTACHMENT_NOT_FOUND
+
+
+def test_delete_request_file_on_done_task_refused(env):
+    c, state, tasks = env
+    task_id, att_id = _uploaded(c, state)
+    tasks.docs[task_id]["status"] = "Done"
+    state["caller"] = OPS1
+    r = c.delete(f"/ops/tasks/{task_id}/request-attachments/{att_id}")
+    assert r.status_code == 409
+    assert r.json()["error"] == ops_logic.MSG_TASK_DONE_REQUEST_FILES
+    assert state["deleted"] == []
+
+
+def test_s3_delete_failure_does_not_fail_request(env, monkeypatch):
+    c, state, tasks = env
+    task_id, att_id = _uploaded(c, state)
+
+    def boom(keys):
+        raise RuntimeError("s3 down")
+
+    monkeypatch.setattr(ops_routes.ops_files, "delete_objects", boom)
+    r = c.delete(f"/ops/tasks/{task_id}/request-attachments/{att_id}")
+    assert r.status_code == 200, r.text
+    assert tasks.docs[task_id]["request_attachments"] == []
+
+
+# ---------------------------------------------------------------------------
+# OPS team edits detail / priority / target_date on any task
+# ---------------------------------------------------------------------------
+
+def test_ops_edits_detail_sheet_on_old_task(env):
+    c, state, tasks = env
+    task_id = _ops_task()["task_id"]
+    state["caller"] = OPS2
+    r = c.patch(f"/ops/tasks/{task_id}", json={"detail": "  สั้น  ", "priority": "Critical", "target_date": "2026-12-31"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["detail"] == "สั้น"  # no 10-char minimum for the OPS team
+    assert body["priority"] == "Critical"
+    assert body["target_date"] == "2026-12-31"
+    assert tasks.docs[task_id]["target_date"] == "2026-12-31"
+    assert body["title"] == "งานทีม"
+
+
+def test_explicit_null_clears_and_omitted_fields_stay(env):
+    c, state, tasks = env
+    task_id = _file_request(c, state)
+    state["caller"] = OPS1
+    r = c.patch(f"/ops/tasks/{task_id}", json={"priority": None, "target_date": None})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["priority"] is None and body["target_date"] is None
+    assert body["detail"] == "ขอรายงานสรุปรายเดือน"
+
+    r = c.patch(f"/ops/tasks/{task_id}", json={"detail": "   "})
+    assert r.status_code == 200, r.text
+    assert r.json()["detail"] is None
+    assert tasks.docs[task_id]["detail"] is None
+
+
+def test_title_only_edit_leaves_detail_sheet(env):
+    c, state, tasks = env
+    task_id = _file_request(c, state)
+    state["caller"] = OPS1
+    r = c.patch(f"/ops/tasks/{task_id}", json={"title": "ชื่อใหม่"})
+    assert r.status_code == 200, r.text
+    assert r.json()["priority"] == "High" and r.json()["target_date"] == "2026-11-01"
+
+
+def test_detail_edit_by_non_manager_refused(env):
+    c, state, tasks = env
+    task_id = _file_request(c, state)
+    r = c.patch(f"/ops/tasks/{task_id}", json={"detail": "แก้เองได้ไหม"})
+    assert r.status_code == 403
+    assert tasks.docs[task_id]["detail"] == "ขอรายงานสรุปรายเดือน"
+
+
+def test_detail_edit_on_done_task_refused(env):
+    c, state, tasks = env
+    task_id = _file_request(c, state)
+    tasks.docs[task_id]["status"] = "Done"
+    state["caller"] = OPS1
+    r = c.patch(f"/ops/tasks/{task_id}", json={"priority": "Low"})
+    assert r.status_code == 409
+    assert r.json()["error"] == ops_logic.MSG_TASK_DONE_DETAIL
+    assert tasks.docs[task_id]["priority"] == "High"
+
+
+@pytest.mark.parametrize("payload", [
+    {},
+    {"priority": "Urgent"},
+    {"detail": "x" * 5001},
+    {"target_date": "not-a-date"},
+])
+def test_detail_edit_validation(env, payload):
+    c, state, _ = env
+    task_id = _file_request(c, state)
+    state["caller"] = OPS1
+    assert c.patch(f"/ops/tasks/{task_id}", json=payload).status_code == 400

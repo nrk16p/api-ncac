@@ -237,13 +237,18 @@ class TaskRequestInput(BaseModel):
 
 
 class TaskEditInput(BaseModel):
+    """PATCH /ops/tasks/{id} — OPS team. detail / priority / target_date: an explicit null
+    clears it (model_fields_set); detail has no minimum here, unlike TaskRequestInput."""
     model_config = ConfigDict(extra="forbid")
     title: Optional[str] = Field(default=None, min_length=1, max_length=200)
     project_id: Optional[str] = None
+    detail: Optional[str] = Field(default=None, max_length=5000)
+    priority: Optional[Priority] = None
+    target_date: Optional[date] = None
 
     @model_validator(mode="after")
     def _at_least_one(self) -> "TaskEditInput":
-        if self.model_fields_set.isdisjoint({"title", "project_id"}):
+        if self.model_fields_set.isdisjoint({"title", "project_id", "detail", "priority", "target_date"}):
             raise ValueError("ต้องระบุอย่างน้อย 1 ฟิลด์")
         return self
 

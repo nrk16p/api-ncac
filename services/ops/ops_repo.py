@@ -516,6 +516,17 @@ def add_task_request_attachment(task_id: str, attachment: dict) -> Optional[dict
         raise mongo_error(exc) from exc
 
 
+def remove_task_request_attachment(task_id: str, attachment_id: str) -> Optional[dict]:
+    try:
+        return _col(TASKS).find_one_and_update(
+            {"_id": task_id},
+            {"$pull": {"request_attachments": {"attachment_id": attachment_id}}, "$set": {"updated_at": _now()}},
+            return_document=ReturnDocument.AFTER,
+        )
+    except PyMongoError as exc:
+        raise mongo_error(exc) from exc
+
+
 def remove_task_attachment(task_id: str, attachment_id: str) -> Optional[dict]:
     try:
         return _col(TASKS).find_one_and_update(
