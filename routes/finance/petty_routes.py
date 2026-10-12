@@ -99,10 +99,20 @@ def _claim_dict(c, items) -> dict:
     }
 
 
+def _reject_incomplete_rows(db: Session, expense_type: str, items: list[dict]) -> None:
+    """ช่องที่ spec บังคับ (เลขที่บัตรชั่ง รถ ฯลฯ) ต้องครบตั้งแต่บันทึก ไม่ปล่อยให้ค้างถึงด่านอนุมัติ"""
+    type_row = repo.get_expense_type(db, expense_type)
+    spec = (type_row.spec if type_row else None) or {}
+    missing = validate.missing_item_fields(items, spec)
+    if missing:
+        raise HTTPException(status_code=422, detail={"error": "กรอกรายการไม่ครบ", "missing": missing})
+
+
 @router.post("/claims", status_code=201)
 def create_claim(payload: ClaimIn, db: Session = Depends(get_db)):
     body = payload.model_dump()
     items = body.pop("items")
+    _reject_incomplete_rows(db, payload.expense_type, items)
     try:
         claim = repo.create_claim(db, body, items, actor=payload.created_by)
     except LookupError as exc:
@@ -229,6 +239,7 @@ def update_claim(form_id: str, payload: ClaimIn, db: Session = Depends(get_db)):
         raise HTTPException(status_code=403, detail="แก้ได้เฉพาะใบที่ตัวเองเปิด")
     body = payload.model_dump(exclude={"created_by", "fund_id", "expense_type"})
     items = body.pop("items")
+    _reject_incomplete_rows(db, claim.expense_type, items)
     try:
         out = repo.update_draft(db, claim, body, items, actor=payload.created_by)
     except L.PettyRuleError as exc:
@@ -349,6 +360,7 @@ def _snapshot_dd(db: Session, claim) -> None:
         }
         db.commit()
     except Exception as exc:  # noqa: BLE001
+        db.rollback()  # ไม่งั้น session ค้างสถานะ PendingRollback แล้วคำตอบที่ส่งกลับพังทั้งที่สถานะเปลี่ยนไปแล้ว
         logger.warning("DD snapshot failed for %s: %s", claim.form_id, exc)
 
 

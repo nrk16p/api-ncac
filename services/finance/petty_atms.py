@@ -18,11 +18,9 @@ _MAX_TIME_MS = 2500
 _MAX_LINES = 500
 _CENT = Decimal("0.01")
 
-PROJECTION = {
-    "_id": 0, "DD": 1, "วันที่": 1, "คลังสินค้า": 1, "ซัพพลายเออร์": 1, "รหัสสินค้า": 1,
-    "ชื่อสินค้า": 1, "กลุ่มสินค้า": 1, "รับ": 1, "ราคาทุน": 1, "ยอดเงิน": 1,
-    "เลขรถ": 1, "ทะเบียน": 1, "พจส.": 1, "หมายเหตุ": 1, "หมายเหตุย่อย": 1, "PR": 1, "PO": 1,
-}
+# ชื่อฟิลด์ใน v5 มีตัวที่ลงท้ายด้วยจุด ("พจส.") ซึ่ง MongoDB ไม่ยอมให้อยู่ใน projection
+# (FieldPath must not end with a '.') และปฏิเสธทั้งคำสั่ง — ตัดแค่ _id แล้วอ่านจากเอกสารเต็ม
+PROJECTION = {"_id": 0}
 
 
 @lru_cache(maxsize=1)
@@ -36,6 +34,15 @@ def _collection():
     return client["atms"]["stockmovement_v5"]
 
 
+def _day(value) -> Optional[str]:
+    """วันที่จาก Mongo เป็น datetime — คืนเป็น YYYY-MM-DD ให้เก็บลง jsonb ได้และพิมพ์ได้ตรง ๆ"""
+    if value is None or value == "":
+        return None
+    if hasattr(value, "strftime"):
+        return value.strftime("%Y-%m-%d")
+    return str(value)[:10]
+
+
 def _money(value) -> Decimal:
     try:
         return Decimal(str(value or 0)).quantize(_CENT)
@@ -43,7 +50,12 @@ def _money(value) -> Decimal:
         return Decimal("0.00")
 
 
-def fetch_dd(dd_no: str, atms_spec: Optional[dict] = None) -> dict:
+def _find(number: str) -> list[dict]:
+    return list(_collection().find({"DD": number}, PROJECTION).limit(_MAX_LINES)
+                .max_time_ms(_MAX_TIME_MS))
+
+
+def fetch_dd(dd_no: str, atms_spec: Optional[dict] = None, finder=None) -> dict:
     """คืนรูปทรงเดียวกันเสมอ ไม่ว่าจะเจอ ไม่เจอ หรือ Mongo ล่ม — หน้าจอจึงไม่ต้องเดา"""
     spec = atms_spec or {}
     empty = {"found": False, "dd_no": dd_no, "received_date": None, "warehouse": None,
@@ -53,8 +65,7 @@ def fetch_dd(dd_no: str, atms_spec: Optional[dict] = None) -> dict:
     if not number:
         return empty
     try:
-        rows = list(_collection().find({"DD": number}, PROJECTION).limit(_MAX_LINES)
-                    .max_time_ms(_MAX_TIME_MS))
+        rows = (finder or _find)(number)
     except Exception as exc:
         logger.warning("DD lookup failed for %s: %s", number, exc)
         return {**empty, "error": "ดึงข้อมูล DD จาก ATMS ไม่ได้ ลองใหม่อีกครั้ง"}
@@ -77,7 +88,7 @@ def fetch_dd(dd_no: str, atms_spec: Optional[dict] = None) -> dict:
     # PR/PO อยู่ระดับเอกสาร แต่ ATMS ลงไว้รายบรรทัด และบางบรรทัดเว้นว่าง — หยิบค่าแรกที่มี
     pick = lambda key: next((str(r.get(key)).strip() for r in rows if str(r.get(key) or "").strip()), None)
     return {
-        "found": True, "dd_no": number, "received_date": first.get("วันที่"),
+        "found": True, "dd_no": number, "received_date": _day(first.get("วันที่")),
         "warehouse": first.get("คลังสินค้า"), "supplier": first.get("ซัพพลายเออร์"),
         "pr": pick("PR"), "po": pick("PO"),
         "lines": lines, "total": total.quantize(_CENT),

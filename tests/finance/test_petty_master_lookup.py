@@ -1,3 +1,9 @@
+"""ค้นรถจาก atms.truck_master_monthly
+
+ชื่อฟิลด์จริง (ดูจาก Mongo 2026-10-13): truck_no เช่น "TH1093" · plate เช่น "สบ.71-1325" ·
+customer เช่น "Scco S" / "Cpac L" (L = โม่ใหญ่, S = โม่เล็ก) · month_year เป็น "M-YY" ปี พ.ศ. สองหลัก
+รถหนึ่งคันมีหลายแถว (เดือนละแถว) — ต้องยุบเหลือแถวล่าสุด
+"""
 import pytest
 
 from services.finance import petty_master
@@ -21,63 +27,58 @@ def _patch(monkeypatch, rows):
     return coll
 
 
-def test_finds_by_internal_code(monkeypatch):
-    _patch(monkeypatch, [{"เลขรถ": "161", "ทะเบียน": "71-4285", "ประเภทรถ": "โม่ใหญ่"}])
-    found = petty_master.search_trucks("161")
-    assert found[0]["truck_plate"] == "71-4285" and found[0]["truck_type"] == "โม่ใหญ่"
+TH1093 = {"truck_no": "TH1093", "plate": "สบ.71-1325", "customer": "Scco S", "month_year": "9-68"}
 
 
-def test_finds_by_plate(monkeypatch):
-    coll = _patch(monkeypatch, [{"เลขรถ": "161", "ทะเบียน": "71-4285"}])
+def test_finds_by_truck_number(monkeypatch):
+    _patch(monkeypatch, [TH1093])
+    found = petty_master.search_trucks("1093")
+    assert found == [{"truck_code": "TH1093", "truck_plate": "สบ.71-1325", "truck_type": "โม่เล็ก"}]
+
+
+def test_large_mixer_from_customer_suffix_l(monkeypatch):
+    _patch(monkeypatch, [{**TH1093, "truck_no": "TH0161", "customer": "Cpac L"}])
+    assert petty_master.search_trucks("0161")[0]["truck_type"] == "โม่ใหญ่"
+
+
+def test_unknown_customer_leaves_type_blank(monkeypatch):
+    _patch(monkeypatch, [{**TH1093, "customer": "Trailer"}])
+    assert petty_master.search_trucks("1093")[0]["truck_type"] == ""
+
+
+def test_query_searches_both_real_fields(monkeypatch):
+    coll = _patch(monkeypatch, [])
     petty_master.search_trucks("4285")
-    assert "$or" in coll.last_filter
+    assert coll.last_filter == {"$or": [{"truck_no": {"$regex": "4285", "$options": "i"}},
+                                        {"plate": {"$regex": "4285", "$options": "i"}}]}
 
 
-def test_query_always_has_a_filter(monkeypatch):
+def test_projection_uses_the_real_field_names(monkeypatch):
     coll = _patch(monkeypatch, [])
-    petty_master.search_trucks("161")
-    assert "$or" in coll.last_filter  # ห้ามยิง find({}) กับ cluster นี้
+    petty_master.search_trucks("1093")
+    assert set(coll.last_projection) >= {"truck_no", "plate", "customer", "month_year"}
 
 
-def test_projection_asks_for_three_fields_only(monkeypatch):
-    coll = _patch(monkeypatch, [])
-    petty_master.search_trucks("161")
-    assert set(coll.last_projection) >= {"เลขรถ", "ทะเบียน", "ประเภทรถ"}
+def test_one_row_per_truck_and_the_newest_month_wins(monkeypatch):
+    # เดือน "12-67" ต้องแพ้ "1-68" แม้เรียงตัวอักษรจะกลับกัน
+    _patch(monkeypatch, [{**TH1093, "month_year": "12-67", "plate": "เก่า"},
+                         {**TH1093, "month_year": "1-68", "plate": "ใหม่"},
+                         {**TH1093, "month_year": "9-67", "plate": "เก่ากว่า"}])
+    found = petty_master.search_trucks("1093")
+    assert len(found) == 1 and found[0]["truck_plate"] == "ใหม่"
 
 
 def test_short_query_does_not_hit_mongo(monkeypatch):
-    def _boom():
-        raise AssertionError("ไม่ควรเรียก Mongo")
-    monkeypatch.setattr(petty_master, "_collection", _boom)
-    assert petty_master.search_trucks("1") == []
-    assert petty_master.search_trucks("") == []
+    coll = _patch(monkeypatch, [TH1093])
+    assert petty_master.search_trucks("1") == [] and coll.last_filter is None
 
 
-def test_duplicate_months_collapse_to_one_truck(monkeypatch):
-    _patch(monkeypatch, [{"เลขรถ": "161", "ทะเบียน": "71-4285"},
-                         {"เลขรถ": "161", "ทะเบียน": "71-4285"}])
-    assert len(petty_master.search_trucks("161")) == 1
-
-
-def test_rows_without_a_code_are_skipped(monkeypatch):
-    _patch(monkeypatch, [{"ทะเบียน": "71-4285"}, {"เลขรถ": "161", "ทะเบียน": "71-4285"}])
-    assert [t["truck_code"] for t in petty_master.search_trucks("161")] == ["161"]
-
-
-def test_mongo_failure_is_not_raised_to_the_caller(monkeypatch):
-    class _Boom:
-        def find(self, *_a, **_k):
-            raise TimeoutError("server selection timeout")
-    monkeypatch.setattr(petty_master, "_collection", lambda: _Boom())
-    assert petty_master.search_trucks("161") == []
+def test_mongo_failure_returns_empty(monkeypatch):
+    def boom(): raise RuntimeError("down")
+    monkeypatch.setattr(petty_master, "_collection", boom)
+    assert petty_master.search_trucks("1093") == []
 
 
 def test_truck_by_code_matches_exactly(monkeypatch):
-    _patch(monkeypatch, [{"เลขรถ": "1610", "ทะเบียน": "71-0000"},
-                         {"เลขรถ": "161", "ทะเบียน": "71-4285"}])
-    assert petty_master.truck_by_code("161")["truck_plate"] == "71-4285"
-
-
-def test_truck_by_code_returns_none_when_absent(monkeypatch):
-    _patch(monkeypatch, [{"เลขรถ": "999", "ทะเบียน": "71-9999"}])
-    assert petty_master.truck_by_code("161") is None
+    _patch(monkeypatch, [TH1093, {**TH1093, "truck_no": "TH10930"}])
+    assert petty_master.truck_by_code("TH1093")["truck_plate"] == "สบ.71-1325"

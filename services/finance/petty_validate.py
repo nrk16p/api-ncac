@@ -50,6 +50,20 @@ def _dedupe(rows: list[dict]) -> list[dict]:
     return out
 
 
+def missing_item_fields(items: list[Mapping], spec: Mapping) -> list[dict]:
+    """ช่องบังคับของรายการที่ยังว่าง — ใช้ทั้งตอนเปิดใบ/แก้ใบ และซ้ำอีกครั้งในด่านอนุมัติ"""
+    missing: list[dict] = []
+    for field in spec.get("item_fields", []) or []:
+        if not field.get("required"):
+            continue
+        key = field["key"]
+        for index, item in enumerate(items, start=1):
+            if not _item_filled(item, key):
+                missing.append({"kind": "item_field", "key": key, "line_no": index,
+                                "label": f"{field.get('label', key)} (แถวที่ {index})"})
+    return missing
+
+
 def validate_claim(claim: Mapping, items: list[Mapping], spec: Mapping, stage: str,
                    attachments: Mapping[str, int]) -> dict:
     """คืน {"missing": [...], "warnings": [...]} — missing ไม่ว่าง = ห้ามผ่านด่านนี้"""
@@ -63,14 +77,7 @@ def validate_claim(claim: Mapping, items: list[Mapping], spec: Mapping, stage: s
                 missing.append({"kind": "attachment", "key": att["key"],
                                 "label": att.get("label", att["key"])})
         # ช่องบังคับของรายการ
-        for field in spec.get("item_fields", []) or []:
-            if not field.get("required"):
-                continue
-            key = field["key"]
-            for index, item in enumerate(items, start=1):
-                if not _item_filled(item, key):
-                    missing.append({"kind": "item_field", "key": key, "line_no": index,
-                                    "label": f"{field.get('label', key)} (แถวที่ {index})"})
+        missing.extend(missing_item_fields(items, spec))
 
     # กฎเฉพาะของประเภท
     for rule in spec.get("rules", []) or []:

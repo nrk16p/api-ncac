@@ -17,7 +17,10 @@ _TIMEOUT_MS = 3000
 _MAX_TIME_MS = 2000
 _MIN_QUERY = 2
 
-PROJECTION = {"_id": 0, "เลขรถ": 1, "ทะเบียน": 1, "ประเภทรถ": 1}
+PROJECTION = {"_id": 0, "truck_no": 1, "plate": 1, "customer": 1, "month_year": 1}
+
+# customer ลงท้าย " L" = โม่ใหญ่, " S" = โม่เล็ก (ดูจาก Mongo 2026-10-13: "Cpac L", "Scco S") · อื่น ๆ เว้นว่าง
+_TYPE_BY_SUFFIX = {"L": "โม่ใหญ่", "S": "โม่เล็ก"}
 
 
 @lru_cache(maxsize=1)
@@ -31,8 +34,22 @@ def _collection():
     return client["atms"]["truck_master_monthly"]
 
 
+def _truck_type(customer) -> str:
+    parts = str(customer or "").strip().split()
+    return _TYPE_BY_SUFFIX.get(parts[-1], "") if parts else ""
+
+
+def _month_key(month_year) -> tuple[int, int]:
+    """"12-67" → (67, 12) เรียงเป็นตัวเลข ไม่ใช่ตัวอักษร (ไม่งั้น "9-68" จะชนะ "12-68")"""
+    try:
+        month, year = str(month_year or "").split("-", 1)
+        return (int(year), int(month))
+    except Exception:
+        return (0, 0)
+
+
 def search_trucks(query: str, limit: int = 20) -> list[dict]:
-    """ค้นได้ทั้งรหัสรถภายใน (161, F014) และทะเบียน (71-4285) ตามที่ใบจริงเขียนสองแบบ
+    """ค้นได้ทั้งเบอร์รถ (พิมพ์ 1093 เจอ TH1093) และทะเบียน · รถหนึ่งคันมีแถวรายเดือน คืนแถวล่าสุดคันละหนึ่ง
 
     Mongo ล่มหรือช้าไม่ทำให้ฟอร์มใช้ไม่ได้ — คืนลิสต์ว่างแล้ว log ไว้
     """
@@ -42,23 +59,25 @@ def search_trucks(query: str, limit: int = 20) -> list[dict]:
     pattern = {"$regex": q, "$options": "i"}
     try:
         rows = list(_collection()
-                    .find({"$or": [{"เลขรถ": pattern}, {"ทะเบียน": pattern}]}, PROJECTION)
-                    .limit(limit)
+                    .find({"$or": [{"truck_no": pattern}, {"plate": pattern}]}, PROJECTION)
+                    .limit(limit * 24)  # รถละไม่เกิน ~24 เดือน
                     .max_time_ms(_MAX_TIME_MS))
     except Exception as exc:
         logger.warning("truck master lookup failed for %r: %s", q, exc)
         return []
 
-    seen, out = set(), []
+    newest: dict[str, dict] = {}
     for row in rows:
-        code = str(row.get("เลขรถ") or "").strip()
-        if not code or code in seen:
+        code = str(row.get("truck_no") or "").strip()
+        if not code:
             continue
-        seen.add(code)
-        out.append({"truck_code": code,
-                    "truck_plate": str(row.get("ทะเบียน") or "").strip(),
-                    "truck_type": str(row.get("ประเภทรถ") or "").strip()})
-    return out
+        if code not in newest or _month_key(row.get("month_year")) > _month_key(newest[code].get("month_year")):
+            newest[code] = row
+    out = [{"truck_code": code,
+            "truck_plate": str(row.get("plate") or "").strip(),
+            "truck_type": _truck_type(row.get("customer"))}
+           for code, row in newest.items()]
+    return out[:limit]
 
 
 def truck_by_code(code: str) -> Optional[dict]:

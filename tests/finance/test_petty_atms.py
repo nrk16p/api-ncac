@@ -118,3 +118,43 @@ class TestCompare:
     def test_missing_dd_never_claims_a_match(self):
         assert petty_atms.compare_total({"found": False, "total": Decimal("0")},
                                         Decimal("1640.00"))["match"] is False
+
+
+class TestTheProjectionIsLegal:
+    """เจอจากการลองกับ Mongo จริง 2026-10-13: ชื่อฟิลด์ "พจส." ลงท้ายด้วยจุด
+    ใส่ใน projection แล้ว MongoDB ปฏิเสธทั้งคำสั่งด้วย FieldPath must not end with a '.'
+    ฉะนั้นใบนี้เลิกเลือกฟิลด์ทีละตัว ตัดแค่ _id ออกแล้วอ่านจากเอกสารเต็ม
+    """
+
+    def test_no_projected_path_ends_with_a_dot(self):
+        assert [k for k in petty_atms.PROJECTION if k.endswith(".")] == []
+
+    def test_the_projection_only_excludes_the_mongo_id(self):
+        assert petty_atms.PROJECTION == {"_id": 0}
+
+    def test_the_driver_name_still_comes_through(self):
+        row = {"DD": "LBDD26090931", "ยอดเงิน": 1200, "พจส.": "กฤตบุญ ลายเงิน"}
+        out = petty_atms.fetch_dd("LBDD26090931", {"unit": "เส้น"},
+                                  finder=lambda number: [row])
+        assert out["lines"][0]["driver"] == "กฤตบุญ ลายเงิน"
+
+
+class TestTheResultIsJsonSafe:
+    """dd_snapshot เก็บเป็น jsonb — ค่าที่ fetch_dd คืนต้อง json.dumps ได้ทั้งก้อน
+    (เจอ 2026-10-13: วันที่จาก Mongo เป็น datetime ทำให้ UPDATE dd_snapshot ล้ม
+    และทิ้ง session ค้างในสถานะต้อง rollback)"""
+
+    def test_received_date_is_a_plain_string(self):
+        from datetime import datetime
+        row = {"DD": "LBDD26090931", "วันที่": datetime(2026, 9, 25), "ยอดเงิน": 80}
+        out = petty_atms.fetch_dd("LBDD26090931", {}, finder=lambda n: [row])
+        assert out["received_date"] == "2026-09-25"
+
+    def test_the_whole_result_serialises(self):
+        import json
+        from datetime import datetime
+        row = {"DD": "LBDD26090931", "วันที่": datetime(2026, 9, 25), "ยอดเงิน": 80,
+               "ราคาทุน": 80, "รับ": 1}
+        out = petty_atms.fetch_dd("LBDD26090931", {}, finder=lambda n: [row])
+        json.dumps(out, default=str)  # default=str คือสิ่งที่ _snapshot_dd ใช้
+        assert isinstance(out["received_date"], str)

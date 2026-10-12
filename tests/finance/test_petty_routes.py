@@ -181,3 +181,39 @@ class TestProjectCodeTravelsWithTheClaim:
     def test_the_detail_response_carries_it(self, db_session, claim):
         body = R.get_claim(claim.form_id, db=db_session)
         assert body["project_code"] == "PJ-LB-B02-2610-001"
+
+
+class TestCreateRejectsIncompleteRows:
+    """ผู้ใช้สั่ง: เลขที่บัตรชั่งต้องกรอกเสมอ — ต้องกันตั้งแต่ตอนเปิดใบ ไม่ใช่รอถึงตอนอนุมัติ
+    (เจอจากการรันจริง 2026-10-13: แถวที่ ref_no ว่างเปิดใบผ่าน)"""
+
+    def _payload(self, fund, items):
+        from datetime import date
+        from schemas.finance_petty_schema import ClaimIn
+        return ClaimIn(fund_id=fund.id, expense_type="WEIGH", expense_date=date(2026, 9, 30),
+                       payee_name="x", created_by="55555", items=items)
+
+    def test_a_blank_ticket_number_cannot_be_saved(self, db_session, fund, weigh_type, weigh_items,
+                                                  seq_stub, frozen_bkk):
+        bad = [dict(weigh_items[0], ref_no="   ")]
+        with pytest.raises(HTTPException) as exc:
+            R.create_claim(self._payload(fund, bad), db=db_session)
+        assert exc.value.status_code == 422
+        assert exc.value.detail["missing"][0]["key"] == "ref_no"
+        assert exc.value.detail["missing"][0]["line_no"] == 1
+
+    def test_a_complete_row_still_saves(self, db_session, fund, weigh_type, weigh_items,
+                                        seq_stub, frozen_bkk):
+        out = R.create_claim(self._payload(fund, weigh_items[:1]), db=db_session)
+        assert out["status"] == "PENDING_APPROVAL"
+
+    def test_editing_cannot_blank_the_ticket_either(self, db_session, fund, weigh_type, weigh_items,
+                                                    seq_stub, frozen_bkk):
+        claim = repo.create_claim(db_session, {"fund_id": fund.id, "expense_type": "WEIGH",
+                                               "expense_date": __import__("datetime").date(2026, 9, 30),
+                                               "payee_name": "x", "created_by": "55555"},
+                                  weigh_items[:1], actor="55555")
+        with pytest.raises(HTTPException) as exc:
+            R.update_claim(claim.form_id, self._payload(fund, [dict(weigh_items[0], ref_no="")]),
+                           db=db_session)
+        assert exc.value.status_code == 422

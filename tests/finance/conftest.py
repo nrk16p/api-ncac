@@ -59,3 +59,17 @@ def claim_payload(fund):
         base.update(over)
         return base
     return _make
+
+
+@pytest.fixture(autouse=True)
+def no_real_mongo(monkeypatch):
+    """เทสต์ต้องไม่แตะ Mongo จริง — load_dotenv() ของ database.py ไต่ขึ้นไปเจอ project/ncac/.env
+    ที่มี MONGODB_URI จึงเคยมีเทสต์หลุดไปสแกน stockmovement_v5 ของจริง (2026-10-13)
+    เทสต์ที่ต้องการข้อมูลให้ monkeypatch _collection ของตัวเองทับอีกชั้น"""
+    from services.finance import petty_atms, petty_master
+
+    def _blocked():
+        raise RuntimeError("เทสต์ห้ามต่อ Mongo จริง")
+
+    monkeypatch.setattr(petty_atms, "_collection", _blocked)
+    monkeypatch.setattr(petty_master, "_collection", _blocked)
