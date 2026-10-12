@@ -317,7 +317,37 @@ def submit_to_accounting(form_id: str, payload: SubmitAccIn, db: Session = Depen
                               fields=fields)
     except L.PettyRuleError as exc:
         raise _rule_error(exc)
+    _snapshot_dd(db, out)
     return _claim_dict(out, repo.claim_items(db, out.id))
+
+
+def _snapshot_dd(db: Session, claim) -> None:
+    """เก็บรายละเอียด DD ที่ดึงได้ตอนส่งบัญชี เพื่อให้ใบที่ส่งไปแล้วไม่เปลี่ยนตามที่ ATMS แก้ย้อนหลัง
+
+    ล้มเหลวไม่ทำให้การส่งบัญชีล้ม — DD เป็นข้อมูลอ้างอิง ไม่ใช่เงื่อนไขของการส่ง
+    """
+    if not claim.dd_no:
+        return
+    try:
+        from datetime import datetime as _dt
+
+        from services.finance import petty_atms
+        type_row = repo.get_expense_type(db, claim.expense_type)
+        spec = ((type_row.spec if type_row else None) or {}).get("atms", {})
+        dd = petty_atms.fetch_dd(claim.dd_no, atms_spec=spec)
+        if not dd.get("found"):
+            return
+        claim.dd_snapshot = {
+            "fetched_at": _dt.now(timezone.utc).isoformat(),
+            "dd_no": dd["dd_no"], "received_date": dd["received_date"],
+            "warehouse": dd["warehouse"], "supplier": dd["supplier"],
+            "total": float(dd["total"]), "unit": dd["unit"], "vat": dd["vat"],
+            "lines": [{k: (float(v) if isinstance(v, Decimal) else v) for k, v in line.items()}
+                      for line in dd["lines"]],
+        }
+        db.commit()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("DD snapshot failed for %s: %s", claim.form_id, exc)
 
 
 @router.post("/claims/{form_id}/review")
@@ -393,3 +423,23 @@ def search_trucks(q: str = Query(default=""), limit: int = Query(default=20, le=
     """ค้นรถจาก master ATMS — ค้นได้ทั้งเบอร์รถและทะเบียน · Mongo ล่มคืนลิสต์ว่าง ไม่ทำให้ฟอร์มพัง"""
     from services.finance import petty_master
     return petty_master.search_trucks(q, limit=limit)
+
+
+@router.get("/dd/{dd_no}")
+def get_dd(dd_no: str, expense_type: Optional[str] = None, claim_amount: Optional[float] = None,
+           db: Session = Depends(get_db)):
+    """รายละเอียด DD จาก ATMS — อ่านอย่างเดียว · ไม่พบ/Mongo ล่ม ก็คืนรูปทรงเดิมพร้อมเหตุผล"""
+    from services.finance import petty_atms
+    spec = {}
+    if expense_type:
+        row = repo.get_expense_type(db, expense_type)
+        spec = ((row.spec if row else None) or {}).get("atms", {})
+    dd = petty_atms.fetch_dd(dd_no, atms_spec=spec)
+    body = {k: (float(v) if isinstance(v, Decimal) else v) for k, v in dd.items() if k != "lines"}
+    body["lines"] = [{k: (float(v) if isinstance(v, Decimal) else v) for k, v in line.items()}
+                     for line in dd["lines"]]
+    if claim_amount is not None:
+        cmp_result = petty_atms.compare_total(dd, Decimal(str(claim_amount)))
+        body["total_match"] = cmp_result["match"]
+        body["total_difference"] = float(cmp_result["difference"])
+    return body
