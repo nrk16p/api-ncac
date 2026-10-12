@@ -76,9 +76,11 @@ class TestRepair:
     def test_prints_the_receipt_substitute(self, specs):
         assert "RECEIPT_SUBSTITUTE" in specs["REPAIR"]["prints"]
 
-    def test_photo_is_optional_like_weigh(self, specs):
+    def test_photo_is_required_per_requirement_3_4(self, specs):
+        # เดิมเคยปล่อยไม่บังคับตามคำสั่ง "ซ่อมฉุกเฉินใช้แบบค่าชั่ง" แต่ REQUIREMENT §3.4 ระบุรูปหลักฐานการซ่อม
+        # ตรวจกับ requirement ฉบับแรกแล้ว (2026-10-13) จึงบังคับเหมือนค่าปะยาง
         photo = next(a for a in specs["REPAIR"]["attachments"] if a["key"] == "photo")
-        assert not photo.get("required")
+        assert photo.get("required") is True
 
 
 class TestTravel:
@@ -173,3 +175,41 @@ class TestDriverPerRow:
         body = text.split("-- spec:WEIGH")[1].split("-- /spec")[0].strip().strip("'")
         keys = [f["key"] for f in json.loads(body)["item_fields"]]
         assert keys.index("driver_name") == keys.index("truck_type") + 1
+
+
+class TestRequirementGaps:
+    """ตรวจกับ REQUIREMENT.md ฉบับแรก 2026-10-13 — ที่เคยขาด"""
+
+    @pytest.mark.parametrize("code", ["TIRE", "REPAIR"])
+    def test_shop_types_ask_how_it_was_paid_and_to_whom(self, specs, code):
+        keys = {h["key"]: h for h in specs[code]["header_fields"]}
+        assert keys["payment_method"]["options"] == ["โอนเงิน", "เงินสด"]
+        assert keys["payee_type"]["options"] == ["ร้านจดทะเบียน", "บุคคล/ร้านเงินสด"]
+
+    @pytest.mark.parametrize("code", ["TIRE", "REPAIR"])
+    def test_id_card_is_required_only_for_transfer_to_a_person(self, specs, code):
+        rule = next(r for r in specs[code]["rules"] if r.get("require_attachment") == "id_card")
+        out = V.validate_claim({"detail": {"payment_method": "โอนเงิน", "payee_type": "บุคคล/ร้านเงินสด"}}, [],
+                               specs[code], V.STAGE_APPROVE, {"receipt": 1, "transfer": 1, "photo": 1})
+        assert "id_card" in [m["key"] for m in out["missing"]]
+        out = V.validate_claim({"detail": {"payment_method": "โอนเงิน", "payee_type": "ร้านจดทะเบียน"}}, [],
+                               specs[code], V.STAGE_APPROVE, {"receipt": 1, "transfer": 1, "photo": 1})
+        assert "id_card" not in [m["key"] for m in out["missing"]]
+        assert rule["at"] == "BEFORE_APPROVE"
+
+    @pytest.mark.parametrize("code", ["TIRE", "REPAIR"])
+    def test_photo_evidence_is_required(self, specs, code):
+        photo = next(a for a in specs[code]["attachments"] if a["key"] == "photo")
+        assert photo["required"] is True
+
+    @pytest.mark.parametrize("code", ["TOLL", "TRAVEL"])
+    def test_road_types_can_attach_a_map(self, specs, code):
+        assert any(a["key"] == "map" for a in specs[code]["attachments"])
+
+    def test_travel_splits_grab_from_taxi_and_takes_a_toll(self, specs):
+        keys = {h["key"]: h for h in specs["TRAVEL"]["header_fields"]}
+        assert keys["service"]["options"] == ["Grab", "Taxi"]
+        assert keys["toll_amount"]["type"] == "money" and not keys["toll_amount"].get("required")
+
+    def test_travel_prints_the_request_form(self, specs):
+        assert "REQUEST_FORM" in specs["TRAVEL"]["prints"]

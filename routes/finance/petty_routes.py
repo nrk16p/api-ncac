@@ -128,7 +128,12 @@ def create_claim(payload: ClaimIn, db: Session = Depends(get_db)):
 
 def _out(db: Session, claim) -> dict:
     names = repo.employee_names(db, [claim.created_by, claim.approved_by])
-    return _claim_dict(claim, repo.claim_items(db, claim.id), names)
+    items = repo.claim_items(db, claim.id)
+    body = _claim_dict(claim, items, names)
+    seq = repo.month_sequence(db, claim, items)  # ใบที่เท่าไรของรถคันนั้นในเดือน (เฉพาะรายละเอียดใบ)
+    for row in body["items"]:
+        row["month_seq"] = seq.get(row["id"])
+    return body
 
 
 @router.get("/claims")
@@ -193,7 +198,8 @@ def _gate(db: Session, claim, items, stage: str, attachments: dict) -> dict:
                    "remark": i.remark} for i in items]
     result = validate.validate_claim(
         {"amount": claim.amount, "dd_no": claim.dd_no, "receipt_no": claim.receipt_no,
-         "expense_type": claim.expense_type},
+         "expense_type": claim.expense_type, "detail": claim.detail or {},
+         "payee_name": claim.payee_name, "driver_name": claim.driver_name},
         item_dicts, spec, stage, attachments or {})
     hard_days = int(((spec.get("duplicate_check") or {}).get("hard") or {}).get("days", 365))
     prior = repo.find_prior_items(db, expense_type=claim.expense_type, keys=item_dicts,

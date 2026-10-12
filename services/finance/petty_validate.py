@@ -25,7 +25,18 @@ def _item_filled(item: Mapping, key: str) -> bool:
     return all(str(item.get(k) or "").strip() != "" for k in _ITEM_ALIASES.get(key, (key,)))
 
 
+def _field_value(claim: Mapping, key: str):
+    """ค่าช่องหัวใบ: คอลัมน์ของใบก่อน แล้วค่อยดูใน detail (ช่องตาม spec.header_fields)"""
+    if key in claim and claim.get(key) not in (None, ""):
+        return claim.get(key)
+    detail = claim.get("detail") or {}
+    return detail.get(key) if isinstance(detail, Mapping) else None
+
+
 def _rule_applies(when: str, claim: Mapping) -> bool:
+    """เงื่อนไขที่รองรับ: always · total >= N · total < N · ช่อง == ค่า (ต่อกันด้วย &&)
+    เช่น "payment_method == โอนเงิน && payee_type == บุคคล/ร้านเงินสด" (REQUIREMENT §3.3 บัตรประชาชน)
+    เงื่อนไขที่อ่านไม่ออก = ไม่บังคับ ดีกว่าบล็อกใบด้วยกฎที่ผิด"""
     if not when or when == "always":
         return True
     amount = Decimal(str(claim.get("amount") or 0))
@@ -34,9 +45,18 @@ def _rule_applies(when: str, claim: Mapping) -> bool:
             return amount >= Decimal(when.split(">=")[1].strip())
         if when.startswith("total <"):
             return amount < Decimal(when.split("<")[1].strip())
+        if "==" in when:
+            for clause in when.split("&&"):
+                key, _, wanted = clause.partition("==")
+                key, wanted = key.strip(), wanted.strip()
+                if not key or not wanted:
+                    return False
+                if str(_field_value(claim, key) or "").strip() != wanted:
+                    return False
+            return True
     except Exception:
         return False
-    return False  # เงื่อนไขที่ยังไม่รองรับ = ไม่บังคับ ดีกว่าบล็อกใบด้วยกฎที่อ่านไม่ออก
+    return False
 
 
 def _dedupe(rows: list[dict]) -> list[dict]:
@@ -113,6 +133,8 @@ def split_duplicates(items: Iterable[Mapping], prior: Iterable[Mapping], spec: M
         if matched_hard is not None:
             hard.append({"line_no": index, "form_id": matched_hard.get("form_id"),
                          "ref_no": item.get("ref_no"), "truck_code": item.get("truck_code"),
+                         "event_date": str(matched_hard.get("event_date") or ""),
+                         "payee_name": matched_hard.get("payee_name"), "amount": matched_hard.get("amount"),
                          "message": "บัตรชั่งใบนี้ของรถคันนี้เบิกไปแล้ว"})
         else:
             for other in pool:
@@ -121,7 +143,8 @@ def split_duplicates(items: Iterable[Mapping], prior: Iterable[Mapping], spec: M
                 here, there = item.get("event_date"), other.get("event_date")
                 if here and there and abs((here - there).days) <= soft_days:
                     soft.append({"line_no": index, "form_id": other.get("form_id"),
-                                 "event_date": str(here), "truck_code": item.get("truck_code"),
+                                 "event_date": str(there), "truck_code": item.get("truck_code"),
+                                 "payee_name": other.get("payee_name"), "amount": other.get("amount"),
                                  "message": f"รถคันนี้มีรายการใน {soft_days} วันที่ผ่านมา"})
                     break
         pool.append(dict(item, form_id=item.get("form_id")))

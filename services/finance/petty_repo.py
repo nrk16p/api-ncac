@@ -67,7 +67,7 @@ def update_fund(db: Session, fund_id: int, payload: dict, actor: str) -> FinPett
 
 # ---------------------------- claims ----------------------------
 
-from datetime import date as _date  # noqa: E402
+from datetime import date, date as _date  # noqa: E402
 from decimal import Decimal  # noqa: E402
 
 from sqlalchemy import func  # noqa: E402
@@ -329,7 +329,7 @@ def find_prior_items(db: Session, *, expense_type: str, keys: list[dict], days: 
     plates = {L.normalize_plate(k.get("truck_plate")) for k in keys}
     refs = {str(k.get("ref_no") or "").strip() for k in keys if k.get("ref_no")}
 
-    rows = (db.query(FinPettyClaimItem, FinPettyClaim.form_id)
+    rows = (db.query(FinPettyClaimItem, FinPettyClaim.form_id, FinPettyClaim.payee_name, FinPettyClaim.amount)
             .join(FinPettyClaim, FinPettyClaim.id == FinPettyClaimItem.claim_id)
             .filter(FinPettyClaim.expense_type == expense_type,
                     FinPettyClaim.status != L.RETURNED,
@@ -340,14 +340,46 @@ def find_prior_items(db: Session, *, expense_type: str, keys: list[dict], days: 
             .all())
 
     out = []
-    for item, form_id in rows:
+    for item, form_id, payee_name, amount in rows:
         same_truck = (L.normalize_code(item.truck_code) in codes
                       or L.normalize_plate(item.truck_plate) in plates)
         same_ref = (item.ref_no or "").strip() in refs
         if not same_truck and not same_ref:
             continue
         out.append({"event_date": item.event_date, "truck_code": item.truck_code,
-                    "truck_plate": item.truck_plate, "ref_no": item.ref_no, "form_id": form_id})
+                    "truck_plate": item.truck_plate, "ref_no": item.ref_no, "form_id": form_id,
+                    "payee_name": payee_name, "amount": float(amount) if amount is not None else None})
+    return out
+
+
+def month_sequence(db: Session, claim, items) -> dict[int, int]:
+    """ใบชั่งเป็นใบที่เท่าไรของรถคันนั้นในเดือน (REQUIREMENT §3.1) — นับทุกใบของประเภทเดียวกันที่ไม่ถูกตีกลับ
+    เรียงตามวันที่ชั่งแล้วลำดับแถว · คืน {item.id: ลำดับ}"""
+    if not items:
+        return {}
+    months = {(i.event_date.year, i.event_date.month) for i in items if i.event_date}
+    codes = {L.normalize_code(i.truck_code) for i in items if i.truck_code}
+    if not months or not codes:
+        return {}
+    lows = [date(y, m, 1) for y, m in months]
+    highs = [date(y + (m == 12), (m % 12) + 1, 1) - timedelta(days=1) for y, m in months]
+    rows = (db.query(FinPettyClaimItem.id, FinPettyClaimItem.truck_code, FinPettyClaimItem.event_date,
+                     FinPettyClaimItem.claim_id)
+            .join(FinPettyClaim, FinPettyClaim.id == FinPettyClaimItem.claim_id)
+            .filter(FinPettyClaim.expense_type == claim.expense_type,
+                    FinPettyClaim.status != L.RETURNED,
+                    FinPettyClaimItem.event_date >= min(lows),
+                    FinPettyClaimItem.event_date <= max(highs))
+            .limit(5000).all())
+    counters: dict[tuple, int] = {}
+    out: dict[int, int] = {}
+    for row in sorted(rows, key=lambda r: (r.event_date, r.claim_id, r.id)):
+        code = L.normalize_code(row.truck_code)
+        if code not in codes:
+            continue
+        key = (code, row.event_date.year, row.event_date.month)
+        counters[key] = counters.get(key, 0) + 1
+        out[row.id] = counters[key]
     return out
 
 

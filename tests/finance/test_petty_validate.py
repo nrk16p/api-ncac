@@ -223,3 +223,36 @@ class TestItemFieldsThatLiveInTwoColumns:
 
     def test_the_remark_is_read_not_assumed_missing(self):
         assert "remark" in self._missing({**self.ROW, "remark": "  "})
+
+
+class TestRuleConditionsOnFields:
+    """REQUIREMENT §0/§3.3/§6.5: บิลร้านแต่โอนเข้าชื่อบุคคล ต้องแนบบัตรประชาชน — ร้านจดทะเบียน/จ่ายเงินสด ไม่ต้อง
+    กฎเขียนใน spec เป็นเงื่อนไขเทียบค่าช่องหัวใบ (ใน detail หรือคอลัมน์ของใบ)"""
+    SPEC = {"attachments": [{"key": "id_card", "label": "สำเนาบัตรประชาชนผู้รับเงิน", "required": False}],
+            "rules": [{"when": "payment_method == TRANSFER && payee_type == PERSON",
+                       "require_attachment": "id_card", "at": "BEFORE_APPROVE"}]}
+
+    def _missing(self, detail, attachments=None):
+        out = V.validate_claim({"amount": 1200, "detail": detail}, [], self.SPEC, V.STAGE_APPROVE, attachments or {})
+        return [m["key"] for m in out["missing"]]
+
+    def test_transfer_to_a_person_needs_the_id_card(self):
+        assert self._missing({"payment_method": "TRANSFER", "payee_type": "PERSON"}) == ["id_card"]
+
+    def test_transfer_to_a_registered_shop_does_not(self):
+        assert self._missing({"payment_method": "TRANSFER", "payee_type": "REGISTERED_SHOP"}) == []
+
+    def test_cash_to_a_person_does_not(self):
+        assert self._missing({"payment_method": "CASH", "payee_type": "PERSON"}) == []
+
+    def test_attached_id_card_satisfies_it(self):
+        assert self._missing({"payment_method": "TRANSFER", "payee_type": "PERSON"}, {"id_card": 1}) == []
+
+    def test_condition_can_read_a_claim_column_too(self):
+        spec = {"rules": [{"when": "expense_type == TIRE", "require_field": "receipt_no", "at": "BEFORE_APPROVE"}]}
+        out = V.validate_claim({"expense_type": "TIRE", "receipt_no": ""}, [], spec, V.STAGE_APPROVE, {})
+        assert [m["key"] for m in out["missing"]] == ["receipt_no"]
+
+    def test_unknown_condition_never_blocks(self):
+        spec = {"rules": [{"when": "moon_phase == FULL", "require_attachment": "id_card", "at": "BEFORE_APPROVE"}]}
+        assert V.validate_claim({}, [], spec, V.STAGE_APPROVE, {})["missing"] == []

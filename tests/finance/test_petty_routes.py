@@ -262,3 +262,46 @@ def claim_payload_for(fund):
     from datetime import date
     return {"fund_id": fund.id, "expense_type": "WEIGH", "expense_date": date(2026, 9, 30),
             "payee_name": "อัญชัญ น่วมมี", "created_by": "55555"}
+
+
+class TestDuplicateHintsSayWhoAndHowMuch:
+    """REQUIREMENT §4.1: หน้าจอต้องโชว์ว่าซ้ำกับใบไหน — เลขที่ · วันที่ · ผู้เบิก · จำนวนเงิน"""
+
+    def test_soft_duplicate_carries_payee_and_amount_of_the_other_claim(self, db_session, fund, weigh_type,
+                                                                       weigh_items, seq_stub, frozen_bkk):
+        first = repo.create_claim(db_session, dict(claim_payload_for(fund), payee_name="อัญชัญ น่วมมี"),
+                                  [weigh_items[0]], actor="55555")
+        repo.set_status(db_session, first, L.APPROVED, "12345", "APPROVE")
+        again = repo.create_claim(db_session, claim_payload_for(fund),
+                                  [dict(weigh_items[0], ref_no="OTHER")], actor="55555")
+        with pytest.raises(HTTPException) as exc:
+            R.approve_claim(again.form_id, ApproveIn(employee_id="12345", attachments=FULL), db=db_session)
+        dup = exc.value.detail["duplicates"][0]
+        assert dup["form_id"] == first.form_id
+        assert dup["payee_name"] == "อัญชัญ น่วมมี" and float(dup["amount"]) == 100.0
+
+
+class TestWeighTicketSequenceInTheMonth:
+    """REQUIREMENT §3.1: ใบชั่งต้องระบุว่าเป็นใบที่เท่าไรของรถคันนั้นในรอบเดือน"""
+
+    def test_each_row_knows_its_order_within_the_month(self, db_session, fund, weigh_type, weigh_items,
+                                                       seq_stub, frozen_bkk):
+        from datetime import date
+        earlier = repo.create_claim(db_session, claim_payload_for(fund),
+                                    [dict(weigh_items[0], event_date=date(2026, 9, 3), ref_no="A1")], actor="55555")
+        repo.set_status(db_session, earlier, L.APPROVED, "12345", "APPROVE")
+        now = repo.create_claim(db_session, claim_payload_for(fund),
+                                [dict(weigh_items[0], event_date=date(2026, 9, 17), ref_no="A2"),
+                                 dict(weigh_items[0], event_date=date(2026, 9, 20), ref_no="A3"),
+                                 dict(weigh_items[1], event_date=date(2026, 9, 20), ref_no="B1")], actor="55555")
+        body = R.get_claim(now.form_id, db=db_session)
+        assert [i["month_seq"] for i in body["items"]] == [2, 3, 1]
+
+    def test_returned_claims_do_not_count(self, db_session, fund, weigh_type, weigh_items, seq_stub, frozen_bkk):
+        from datetime import date
+        gone = repo.create_claim(db_session, claim_payload_for(fund),
+                                 [dict(weigh_items[0], event_date=date(2026, 9, 3), ref_no="A1")], actor="55555")
+        repo.set_status(db_session, gone, L.RETURNED, "12345", "RETURN")
+        now = repo.create_claim(db_session, claim_payload_for(fund),
+                                [dict(weigh_items[0], event_date=date(2026, 9, 17), ref_no="A2")], actor="55555")
+        assert R.get_claim(now.form_id, db=db_session)["items"][0]["month_seq"] == 1
