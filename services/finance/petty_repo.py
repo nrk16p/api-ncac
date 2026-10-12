@@ -160,3 +160,58 @@ def list_claims(db: Session, *, fund_ids: Optional[list[int]], created_by: Optio
     total = q.with_entities(func.count(FinPettyClaim.id)).scalar() or 0
     rows = q.order_by(FinPettyClaim.id.desc()).limit(limit).offset(offset).all()
     return rows, total
+
+
+# ---------------------------- transitions ----------------------------
+
+from datetime import datetime, timezone  # noqa: E402
+
+_NOW_FIELDS = {
+    "APPROVED": "approved_at",
+    "TRANSFERRED": "transfer_slip_at",
+    "AWAITING_REVIEW": "submitted_to_acc_at",
+}
+
+
+def set_status(db: Session, claim: FinPettyClaim, target: str, actor: str, action: str,
+               fields: Optional[dict] = None, remark: Optional[str] = None) -> FinPettyClaim:
+    """จังหวะเดียวที่สถานะเปลี่ยนได้ — ทุก endpoint ต้องผ่านทางนี้ จึงมี log และกฎครบเสมอ"""
+    L.assert_transition(claim.status, target)
+    before = claim.status
+    for key, value in (fields or {}).items():
+        setattr(claim, key, value)
+    stamp = _NOW_FIELDS.get(target)
+    if stamp and getattr(claim, stamp) is None:
+        setattr(claim, stamp, datetime.now(timezone.utc))
+    if target in ("CLOSED", "SENT_BACK") and claim.reviewed_at is None:
+        claim.reviewed_at, claim.reviewed_by = datetime.now(timezone.utc), actor
+    claim.status = target
+    changes = {"from": before, "to": target}
+    changes.update({k: str(v) for k, v in (fields or {}).items()})
+    log(db, claim.id, action, actor, changes=changes, remark=remark)
+    db.commit()
+    db.refresh(claim)
+    return claim
+
+
+_EDITABLE = ("PENDING_APPROVAL", "RETURNED")
+
+
+def update_draft(db: Session, claim: FinPettyClaim, payload: dict, items: list[dict],
+                 actor: str) -> FinPettyClaim:
+    """แก้ได้เฉพาะตอนรออนุมัติหรือถูกตีกลับ · แก้แล้วกลับเข้าคิวอนุมัติเสมอ"""
+    if claim.status not in _EDITABLE:
+        raise L.PettyRuleError(
+            f"แก้ไขไม่ได้ ใบนี้สถานะ {L.STATUS_LABELS.get(claim.status, claim.status)} แล้ว", 409)
+    was_returned = claim.status == "RETURNED"
+    for key, value in payload.items():
+        setattr(claim, key, value)
+    if items:
+        replace_items(db, claim.id, items)
+        db.refresh(claim)
+    claim.status = L.PENDING_APPROVAL
+    log(db, claim.id, "RESUBMIT" if was_returned else "UPDATE", actor,
+        changes={"amount": str(claim.amount)})
+    db.commit()
+    db.refresh(claim)
+    return claim

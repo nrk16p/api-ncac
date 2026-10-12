@@ -124,3 +124,120 @@ def get_claim(form_id: str, db: Session = Depends(get_db)):
     if claim is None:
         raise HTTPException(status_code=404, detail="ไม่พบใบเบิก")
     return _claim_dict(claim, repo.claim_items(db, claim.id))
+
+
+# ---------------------------- transitions ----------------------------
+
+from datetime import datetime, timezone  # noqa: E402
+
+from schemas.finance_petty_schema import ApproveIn, ReturnIn, ReviewIn, SubmitAccIn, TransferIn  # noqa: E402
+from services.finance import petty_logic as L  # noqa: E402
+
+
+def _claim_or_404(db: Session, form_id: str):
+    claim = repo.get_claim(db, form_id)
+    if claim is None:
+        raise HTTPException(status_code=404, detail="ไม่พบใบเบิก")
+    return claim
+
+
+def _require_holder(db: Session, claim, employee_id: str):
+    fund = repo.get_fund(db, claim.fund_id)
+    if fund is None or fund.holder_employee_id != employee_id:
+        raise HTTPException(status_code=403, detail="เฉพาะผู้อนุมัติของกองทุนนี้เท่านั้น")
+    return fund
+
+
+def _rule_error(exc: L.PettyRuleError) -> HTTPException:
+    return HTTPException(status_code=exc.http_status, detail=str(exc))
+
+
+@router.put("/claims/{form_id}")
+def update_claim(form_id: str, payload: ClaimIn, db: Session = Depends(get_db)):
+    claim = _claim_or_404(db, form_id)
+    if claim.created_by != payload.created_by:
+        raise HTTPException(status_code=403, detail="แก้ได้เฉพาะใบที่ตัวเองเปิด")
+    body = payload.model_dump(exclude={"created_by", "fund_id", "expense_type"})
+    items = body.pop("items")
+    try:
+        out = repo.update_draft(db, claim, body, items, actor=payload.created_by)
+    except L.PettyRuleError as exc:
+        raise _rule_error(exc)
+    return _claim_dict(out, repo.claim_items(db, out.id))
+
+
+@router.post("/claims/{form_id}/approve")
+def approve_claim(form_id: str, payload: ApproveIn, db: Session = Depends(get_db)):
+    claim = _claim_or_404(db, form_id)
+    _require_holder(db, claim, payload.employee_id)
+    fields = {"approved_by": payload.employee_id}
+    if payload.dup_override_reason:
+        fields["dup_override_reason"] = payload.dup_override_reason
+    try:
+        out = repo.set_status(db, claim, L.APPROVED, payload.employee_id, "APPROVE", fields=fields)
+    except L.PettyRuleError as exc:
+        raise _rule_error(exc)
+    return _claim_dict(out, repo.claim_items(db, out.id))
+
+
+@router.post("/claims/{form_id}/return")
+def return_claim(form_id: str, payload: ReturnIn, db: Session = Depends(get_db)):
+    claim = _claim_or_404(db, form_id)
+    _require_holder(db, claim, payload.employee_id)
+    try:
+        out = repo.set_status(db, claim, L.RETURNED, payload.employee_id, "RETURN",
+                              fields={"return_reason": payload.reason}, remark=payload.reason)
+    except L.PettyRuleError as exc:
+        raise _rule_error(exc)
+    return _claim_dict(out, repo.claim_items(db, out.id))
+
+
+@router.post("/claims/{form_id}/transfer")
+def transfer_claim(form_id: str, payload: TransferIn, db: Session = Depends(get_db)):
+    claim = _claim_or_404(db, form_id)
+    _require_holder(db, claim, payload.employee_id)
+    try:
+        out = repo.set_status(db, claim, L.TRANSFERRED, payload.employee_id, "TRANSFER",
+                              fields={"transfer_date": payload.transfer_date})
+    except L.PettyRuleError as exc:
+        raise _rule_error(exc)
+    return _claim_dict(out, repo.claim_items(db, out.id))
+
+
+@router.post("/claims/{form_id}/submit-accounting")
+def submit_to_accounting(form_id: str, payload: SubmitAccIn, db: Session = Depends(get_db)):
+    claim = _claim_or_404(db, form_id)
+    _require_holder(db, claim, payload.employee_id)
+    fields = {"dd_no": payload.dd_no} if payload.dd_no else {}
+    try:
+        out = repo.set_status(db, claim, L.AWAITING_REVIEW, payload.employee_id, "SUBMIT_ACC",
+                              fields=fields)
+    except L.PettyRuleError as exc:
+        raise _rule_error(exc)
+    return _claim_dict(out, repo.claim_items(db, out.id))
+
+
+@router.post("/claims/{form_id}/review")
+def review_claim(form_id: str, payload: ReviewIn, db: Session = Depends(get_db)):
+    """บัญชีตรวจ — ผ่านแล้วรอการเงินปิดรอบ (ยังไม่ CLOSED) หรือส่งกลับให้ผู้อนุมัติแก้"""
+    claim = _claim_or_404(db, form_id)
+    if payload.action == "SEND_BACK":
+        if not payload.remark:
+            raise HTTPException(status_code=422, detail="ส่งกลับต้องระบุเหตุผล")
+        try:
+            out = repo.set_status(db, claim, L.SENT_BACK, payload.employee_id, "SEND_BACK",
+                                  fields={"review_remark": payload.remark}, remark=payload.remark)
+        except L.PettyRuleError as exc:
+            raise _rule_error(exc)
+        return _claim_dict(out, repo.claim_items(db, out.id))
+    if claim.status != L.AWAITING_REVIEW:
+        raise HTTPException(status_code=409,
+                            detail=f"ตรวจได้เฉพาะใบที่รอบัญชีตรวจ ใบนี้สถานะ "
+                                   f"{L.STATUS_LABELS.get(claim.status, claim.status)}")
+    # PASS: ทำเครื่องหมายว่าบัญชีตรวจแล้ว ใบยังอยู่ AWAITING_REVIEW จนการเงินปิดรอบ
+    claim.reviewed_by, claim.review_remark = payload.employee_id, payload.remark
+    claim.reviewed_at = datetime.now(timezone.utc)
+    repo.log(db, claim.id, "ACC_PASS", payload.employee_id, remark=payload.remark)
+    db.commit()
+    db.refresh(claim)
+    return _claim_dict(claim, repo.claim_items(db, claim.id))
