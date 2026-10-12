@@ -241,3 +241,45 @@ def review_claim(form_id: str, payload: ReviewIn, db: Session = Depends(get_db))
     db.commit()
     db.refresh(claim)
     return _claim_dict(claim, repo.claim_items(db, claim.id))
+
+
+# ---------------------------- ยอดคงเหลือ และรอบคืนยอด ----------------------------
+
+from decimal import Decimal  # noqa: E402
+
+from models.finance_petty_model import FinPettyBatch  # noqa: E402
+from schemas.finance_petty_schema import BatchIn  # noqa: E402
+
+
+@router.get("/funds/{fund_id}/balance")
+def fund_balance(fund_id: int, db: Session = Depends(get_db)):
+    try:
+        bal = repo.fund_balance(db, fund_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return {k: (float(v) if isinstance(v, Decimal) else v) for k, v in bal.items()}
+
+
+@router.post("/batches", status_code=201)
+def create_batch(payload: BatchIn, db: Session = Depends(get_db)):
+    try:
+        batch = repo.close_batch(db, payload.fund_id, payload.claim_ids, payload.employee_id,
+                                 payload.remark)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except L.PettyRuleError as exc:
+        raise _rule_error(exc)
+    return {"id": batch.id, "batch_no": batch.batch_no, "fund_id": batch.fund_id,
+            "total_amount": float(batch.total_amount), "closed_at": batch.closed_at.isoformat()}
+
+
+@router.get("/batches")
+def list_batches(fund_id: Optional[int] = None, limit: int = Query(default=50, le=200),
+                 db: Session = Depends(get_db)):
+    q = db.query(FinPettyBatch)
+    if fund_id:
+        q = q.filter(FinPettyBatch.fund_id == fund_id)
+    rows = q.order_by(FinPettyBatch.id.desc()).limit(limit).all()
+    return [{"id": b.id, "batch_no": b.batch_no, "fund_id": b.fund_id,
+             "total_amount": float(b.total_amount), "closed_by": b.closed_by,
+             "closed_at": b.closed_at.isoformat(), "remark": b.remark} for b in rows]

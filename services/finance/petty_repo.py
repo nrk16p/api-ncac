@@ -215,3 +215,91 @@ def update_draft(db: Session, claim: FinPettyClaim, payload: dict, items: list[d
     db.commit()
     db.refresh(claim)
     return claim
+
+
+# ---------------------------- ยอด Advance และรอบคืนยอด ----------------------------
+
+from models.finance_model import FinAdvance  # noqa: E402
+from models.finance_petty_model import FinPettyBatch  # noqa: E402
+
+# ยอดที่ Advance จ่ายออกไปแล้วและยังไม่ปิด — petty หักจากยอดนี้ (spec §6)
+OUTSTANDING_FIN_STATUSES = ("PAID", "CLEARING_SUBMITTED", "SENT_BACK")
+# สถานะที่ถือเงินไว้ของ petty
+COMMITTED_STATUSES = ("APPROVED", "TRANSFERRED", "AWAITING_REVIEW", "SENT_BACK")
+
+_ZERO = Decimal("0.00")
+
+
+def advance_outstanding(db: Session, employee_id: str) -> Decimal:
+    """อ่าน fin_advances เท่านั้น ไม่เขียน — ค่าที่บัญชี/การเงินกรอกคือค่าจริง
+
+    ผูกคนด้วย form_submissions.created_by ของใบ ADV นั้น (fin_advances ไม่มีคอลัมน์ employee_id)
+    """
+    from models.master_model import FormSubmission
+    total = (db.query(func.coalesce(func.sum(FinAdvance.amount_paid), 0))
+             .join(FormSubmission, FormSubmission.form_id == FinAdvance.form_id)
+             .filter(FinAdvance.fin_status.in_(OUTSTANDING_FIN_STATUSES),
+                     FormSubmission.created_by == employee_id)
+             .scalar())
+    return Decimal(str(total or 0)).quantize(Decimal("0.01"))
+
+
+def petty_committed(db: Session, employee_id: str) -> Decimal:
+    """ยอดที่ใบ petty ของกองทุนที่คนนี้ถือกินไว้อยู่"""
+    total = (db.query(func.coalesce(func.sum(FinPettyClaim.amount), 0))
+             .join(FinPettyFund, FinPettyFund.id == FinPettyClaim.fund_id)
+             .filter(FinPettyFund.holder_employee_id == employee_id,
+                     FinPettyClaim.status.in_(COMMITTED_STATUSES))
+             .scalar())
+    return Decimal(str(total or 0)).quantize(Decimal("0.01"))
+
+
+def fund_balance(db: Session, fund_id: int) -> dict:
+    fund = get_fund(db, fund_id)
+    if fund is None:
+        raise LookupError("ไม่พบกองทุน")
+    outstanding = advance_outstanding(db, fund.holder_employee_id)
+    committed = petty_committed(db, fund.holder_employee_id)
+    return {
+        "fund_id": fund.id,
+        "holder_employee_id": fund.holder_employee_id,
+        "advance_outstanding": outstanding,
+        "petty_committed": committed,
+        "available": (outstanding - committed).quantize(Decimal("0.01")),
+        "fund_limit": fund.fund_limit,
+    }
+
+
+def close_batch(db: Session, fund_id: int, claim_ids: list[int], actor: str,
+                remark: Optional[str]) -> FinPettyBatch:
+    """การเงินปิดรอบ: ใบที่บัญชีตรวจผ่านแล้ว → CLOSED ทีละรอบ แล้วยอดคืนเข้า available เอง"""
+    fund = get_fund(db, fund_id)
+    if fund is None:
+        raise LookupError("ไม่พบกองทุน")
+    claims = db.query(FinPettyClaim).filter(FinPettyClaim.id.in_(claim_ids)).all()
+    if len(claims) != len(set(claim_ids)):
+        raise L.PettyRuleError("มีใบที่หาไม่พบในรายการที่เลือก", 404)
+    for claim in claims:
+        if claim.fund_id != fund_id:
+            raise L.PettyRuleError(f"ใบ {claim.form_id} ไม่ได้อยู่ในกองทุนนี้", 409)
+        if claim.status != L.AWAITING_REVIEW:
+            raise L.PettyRuleError(
+                f"ใบ {claim.form_id} สถานะ {L.STATUS_LABELS.get(claim.status)} ยังปิดรอบไม่ได้", 409)
+
+    yymm = int(datetime.now(timezone.utc).astimezone().strftime("%y%m"))
+    used = (db.query(func.count(FinPettyBatch.id))
+            .filter(FinPettyBatch.fund_id == fund_id,
+                    FinPettyBatch.batch_no.like(f"%-{yymm:04d}-B%"))
+            .scalar() or 0)
+    batch = FinPettyBatch(
+        fund_id=fund_id, closed_by=actor, remark=remark,
+        batch_no=L.batch_no(fund.branch_code, fund.division_code, yymm, used + 1),
+        total_amount=sum((c.amount for c in claims), _ZERO),
+    )
+    db.add(batch)
+    db.flush()
+    for claim in claims:
+        set_status(db, claim, L.CLOSED, actor, "CLOSE", fields={"batch_id": batch.id})
+    db.commit()
+    db.refresh(batch)
+    return batch
