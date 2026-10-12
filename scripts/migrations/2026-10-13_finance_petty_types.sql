@@ -52,6 +52,7 @@ UPDATE fin_petty_expense_types SET spec =
     {"key":"event_date","label":"วันที่ตามบิล","type":"date","required":true},
     {"key":"truck","label":"รถ","type":"truck","required":true,"search":["code","plate"]},
     {"key":"truck_type","label":"ประเภทรถ","type":"select","options":["โม่ใหญ่","โม่เล็ก","12 ตัน","หัวลาก","อื่นๆ"],"required":true,"auto_from":"truck"},
+    {"key":"driver_name","label":"พจส.","type":"text","required":false},
     {"key":"ref_no","label":"เลขที่บิล/ใบเสร็จร้าน","type":"text","required":true},
     {"key":"remark","label":"รายการที่ทำ","type":"text","required":true},
     {"key":"qty","label":"จำนวน (เส้น)","type":"number","required":true},
@@ -93,6 +94,7 @@ UPDATE fin_petty_expense_types SET spec =
   "item_fields": [
     {"key":"event_date","label":"วันที่ซ่อม","type":"date","required":true},
     {"key":"truck","label":"รถ","type":"truck","required":true,"search":["code","plate"]},
+    {"key":"driver_name","label":"พจส.","type":"text","required":false},
     {"key":"ref_no","label":"เลขที่ใบเสร็จ/ใบแจ้งซ่อม","type":"text","required":true},
     {"key":"remark","label":"อาการ/งานที่ทำ","type":"text","required":true},
     {"key":"rate","label":"จำนวนเงิน","type":"money","required":true}

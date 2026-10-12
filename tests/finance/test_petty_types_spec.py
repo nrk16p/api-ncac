@@ -153,3 +153,23 @@ class TestPrintUnit:
                 "scripts/migrations/2026-10-12_finance_petty_cash.sql").read_text(encoding="utf-8")
         body = text.split("-- spec:WEIGH")[1].split("-- /spec")[0].strip().strip("'")
         assert json.loads(body)["print"]["unit"] == "คัน"
+
+
+class TestDriverPerRow:
+    """ผู้ใช้สั่ง 2026-10-13: ใบสรุปรายการต้องมี พจส. ต่อแถว — ประเภทที่กรอกเป็นรายการรถมีช่อง driver (ไม่บังคับ)"""
+
+    @pytest.mark.parametrize("code", ["TIRE", "REPAIR"])
+    def test_item_types_have_an_optional_driver_field(self, specs, code):
+        driver = next((f for f in specs[code]["item_fields"] if f["key"] == "driver_name"), None)
+        assert driver and not driver.get("required") and driver["label"] == "พจส."
+        keys = [f["key"] for f in specs[code]["item_fields"]]
+        after = "truck_type" if "truck_type" in keys else "truck"
+        assert keys.index("driver_name") == keys.index(after) + 1
+
+    def test_weigh_has_it_right_after_the_truck_type(self):
+        import json, pathlib
+        text = (pathlib.Path(__file__).resolve().parents[2] /
+                "scripts/migrations/2026-10-12_finance_petty_cash.sql").read_text(encoding="utf-8")
+        body = text.split("-- spec:WEIGH")[1].split("-- /spec")[0].strip().strip("'")
+        keys = [f["key"] for f in json.loads(body)["item_fields"]]
+        assert keys.index("driver_name") == keys.index("truck_type") + 1

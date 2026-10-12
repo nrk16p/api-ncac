@@ -123,6 +123,7 @@ INSERT INTO fin_petty_expense_types (code, name_th, atms_sku, sort_order, spec) 
     {"key":"event_date","label":"วันที่ชั่ง","type":"date","required":true},
     {"key":"truck","label":"รถ","type":"truck","required":true,"search":["code","plate"]},
     {"key":"truck_type","label":"ประเภทรถ","type":"select","options":["โม่ใหญ่","โม่เล็ก"],"required":true,"auto_from":"truck"},
+    {"key":"driver_name","label":"พจส.","type":"text","required":false},
     {"key":"ref_no","label":"เลขที่บัตรชั่ง","type":"text","required":true},
     {"key":"rate","label":"ราคา/ครั้ง","type":"money","required":true}
   ],

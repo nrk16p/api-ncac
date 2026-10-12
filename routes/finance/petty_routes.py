@@ -75,7 +75,7 @@ def _item_dict(i) -> dict:
     return {"id": i.id, "line_no": i.line_no, "event_date": str(i.event_date),
             "truck_code": i.truck_code, "truck_plate": i.truck_plate, "truck_type": i.truck_type,
             "ref_no": i.ref_no, "qty": float(i.qty), "rate": float(i.rate),
-            "amount": float(i.amount), "remark": i.remark}
+            "amount": float(i.amount), "remark": i.remark, "driver_name": i.driver_name}
 
 
 def _claim_dict(c, items) -> dict:
@@ -86,7 +86,7 @@ def _claim_dict(c, items) -> dict:
         "period_to": str(c.period_to) if c.period_to else None,
         "driver_employee_id": c.driver_employee_id, "driver_name": c.driver_name,
         "payee_name": c.payee_name, "amount": float(c.amount), "dd_no": c.dd_no,
-        "receipt_no": c.receipt_no, "status": c.status, "created_by": c.created_by,
+        "receipt_no": c.receipt_no, "detail": c.detail or {}, "status": c.status, "created_by": c.created_by,
         "approved_by": c.approved_by, "approved_at": c.approved_at.isoformat() if c.approved_at else None,
         "transfer_date": str(c.transfer_date) if c.transfer_date else None,
         "review_remark": c.review_remark, "return_reason": c.return_reason,

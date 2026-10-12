@@ -124,6 +124,7 @@ class FinPettyClaimItem(Base):
     rate = Column(Numeric(12, 2), nullable=False)
     amount = Column(Numeric(12, 2), nullable=False)
     remark = Column(String(255))
+    driver_name = Column(String(150))  # พจส. ต่อแถว — ใบสรุปรายการ (ผู้ใช้สั่ง 2026-10-13)
 
     __table_args__ = (
         Index("ix_fin_petty_items_claim", "claim_id"),

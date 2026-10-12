@@ -181,3 +181,34 @@ class TestTheNumberIsTheOnlyNumber:
     def test_the_detail_response_has_no_project_code(self, db_session, claim):
         body = R.get_claim(claim.form_id, db=db_session)
         assert "project_code" not in body and body["form_id"] == "LB-B02-2610-001"
+
+
+class TestWhatTheScreenNeedsComesBack:
+    """เจอ 2026-10-13: ช่องหัวใบ (เส้นทาง เหตุผล) เก็บใน detail แต่ไม่เคยส่งกลับไปให้หน้าจอ/ใบพิมพ์"""
+
+    def test_detail_is_returned(self, db_session, fund, weigh_type, weigh_items, seq_stub, frozen_bkk):
+        from datetime import date
+        claim = repo.create_claim(db_session, {"fund_id": fund.id, "expense_type": "WEIGH",
+                                               "expense_date": date(2026, 9, 30), "payee_name": "x",
+                                               "created_by": "55555",
+                                               "detail": {"route_from": "คลองตัน", "route_to": "เมกาบางนา"}},
+                                  weigh_items[:1], actor="55555")
+        body = R.get_claim(claim.form_id, db=db_session)
+        assert body["detail"] == {"route_from": "คลองตัน", "route_to": "เมกาบางนา"}
+
+    def test_driver_per_row_is_stored_and_returned(self, db_session, fund, weigh_type, weigh_items,
+                                                   seq_stub, frozen_bkk):
+        # ผู้ใช้สั่ง 2026-10-13: ใบสรุปรายการค่าชั่งต้องมี พจส. ต่อแถว
+        from datetime import date
+        rows = [dict(weigh_items[0], driver_name="สมชาย ใจดี")]
+        claim = repo.create_claim(db_session, {"fund_id": fund.id, "expense_type": "WEIGH",
+                                               "expense_date": date(2026, 9, 30), "payee_name": "x",
+                                               "created_by": "55555"}, rows, actor="55555")
+        body = R.get_claim(claim.form_id, db=db_session)
+        assert body["items"][0]["driver_name"] == "สมชาย ใจดี"
+
+    def test_driver_can_come_through_the_schema(self):
+        from datetime import date
+        from schemas.finance_petty_schema import ClaimItemIn
+        row = ClaimItemIn(event_date=date(2026, 9, 17), rate=100, driver_name="วิชัย")
+        assert row.driver_name == "วิชัย"

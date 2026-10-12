@@ -36,7 +36,7 @@ def test_claim_columns_match_migration():
 def test_item_columns_match_migration():
     expected = {
         "id", "claim_id", "line_no", "event_date", "truck_code", "truck_plate", "truck_type",
-        "ref_no", "qty", "rate", "amount", "remark",
+        "ref_no", "qty", "rate", "amount", "remark", "driver_name",
     }
     assert set(FinPettyClaimItem.__table__.columns.keys()) == expected
 

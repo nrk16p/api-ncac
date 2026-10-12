@@ -59,6 +59,7 @@ class ClaimItemIn(BaseModel):
     qty: Decimal = Field(default=Decimal("1"), gt=0)
     rate: Decimal = Field(ge=0)
     remark: Optional[str] = Field(default=None, max_length=255)
+    driver_name: Optional[str] = Field(default=None, max_length=150)
 
 
 class ClaimIn(BaseModel):
