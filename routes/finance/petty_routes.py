@@ -386,3 +386,10 @@ def list_batches(fund_id: Optional[int] = None, limit: int = Query(default=50, l
     return [{"id": b.id, "batch_no": b.batch_no, "fund_id": b.fund_id,
              "total_amount": float(b.total_amount), "closed_by": b.closed_by,
              "closed_at": b.closed_at.isoformat(), "remark": b.remark} for b in rows]
+
+
+@router.get("/trucks")
+def search_trucks(q: str = Query(default=""), limit: int = Query(default=20, le=50)):
+    """ค้นรถจาก master ATMS — ค้นได้ทั้งเบอร์รถและทะเบียน · Mongo ล่มคืนลิสต์ว่าง ไม่ทำให้ฟอร์มพัง"""
+    from services.finance import petty_master
+    return petty_master.search_trucks(q, limit=limit)
