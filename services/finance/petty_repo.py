@@ -351,6 +351,22 @@ def find_prior_items(db: Session, *, expense_type: str, keys: list[dict], days: 
     return out
 
 
+def employee_names(db: Session, employee_ids) -> dict[str, str]:
+    """ชื่อ-สกุลของพนักงานหลายคนในคำสั่งเดียว — ใบพิมพ์และหน้าจอขึ้นชื่อ ไม่ใช่รหัส · ไม่พบ = ไม่มีคีย์"""
+    from models.user_model import User
+    wanted = sorted({str(i) for i in employee_ids if i})
+    if not wanted:
+        return {}
+    rows = (db.query(User.employee_id, User.firstname, User.lastname)
+            .filter(User.employee_id.in_(wanted)).all())
+    out: dict[str, str] = {}
+    for emp, first, last in rows:
+        name = " ".join(part for part in (first, last) if part and str(part).strip()).strip()
+        if emp and name:
+            out[str(emp)] = name
+    return out
+
+
 def employee_email(db: Session, employee_id: Optional[str]) -> Optional[str]:
     """อีเมลของพนักงานจาก users — ไม่มีก็คืน None แล้วให้ตัวส่งข้ามไป ไม่ใช่ส่งที่อยู่ว่าง"""
     if not employee_id:

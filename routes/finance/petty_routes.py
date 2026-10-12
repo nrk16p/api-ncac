@@ -22,9 +22,10 @@ def _type_dict(t) -> dict:
             "sort_order": t.sort_order, "is_active": t.is_active, "spec": t.spec}
 
 
-def _fund_dict(f) -> dict:
+def _fund_dict(f, names: dict | None = None) -> dict:
     return {"id": f.id, "branch_code": f.branch_code, "division_code": f.division_code,
             "holder_employee_id": f.holder_employee_id,
+            "holder_name": (names or {}).get(f.holder_employee_id),
             "fund_limit": float(f.fund_limit) if f.fund_limit is not None else None,
             "is_active": f.is_active}
 
@@ -44,14 +45,17 @@ def put_expense_type(code: str, payload: ExpenseTypeUpdate, db: Session = Depend
 @router.get("/funds")
 def list_funds(holder: Optional[str] = Query(default=None), active: bool = True,
                db: Session = Depends(get_db)):
-    return [_fund_dict(f) for f in repo.list_funds(db, holder=holder, active_only=active)]
+    rows = repo.list_funds(db, holder=holder, active_only=active)
+    names = repo.employee_names(db, [f.holder_employee_id for f in rows])
+    return [_fund_dict(f, names) for f in rows]
 
 
 @router.post("/funds", status_code=201)
 def create_fund(payload: FundCreate, db: Session = Depends(get_db)):
     data = payload.model_dump(exclude={"updated_by"})
     try:
-        return _fund_dict(repo.create_fund(db, data, payload.updated_by or ""))
+        fund = repo.create_fund(db, data, payload.updated_by or "")
+        return _fund_dict(fund, repo.employee_names(db, [fund.holder_employee_id]))
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=409, detail="สาขาและแผนกนี้มีกองทุนอยู่แล้ว")
@@ -61,7 +65,8 @@ def create_fund(payload: FundCreate, db: Session = Depends(get_db)):
 def update_fund(fund_id: int, payload: FundUpdate, db: Session = Depends(get_db)):
     data = payload.model_dump(exclude_unset=True, exclude={"updated_by"})
     try:
-        return _fund_dict(repo.update_fund(db, fund_id, data, payload.updated_by or ""))
+        fund = repo.update_fund(db, fund_id, data, payload.updated_by or "")
+        return _fund_dict(fund, repo.employee_names(db, [fund.holder_employee_id]))
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
@@ -78,7 +83,8 @@ def _item_dict(i) -> dict:
             "amount": float(i.amount), "remark": i.remark, "driver_name": i.driver_name}
 
 
-def _claim_dict(c, items) -> dict:
+def _claim_dict(c, items, names: dict | None = None) -> dict:
+    names = names or {}
     return {
         "id": c.id, "form_id": c.form_id, "fund_id": c.fund_id, "expense_type": c.expense_type,
         "expense_date": str(c.expense_date),
@@ -87,6 +93,7 @@ def _claim_dict(c, items) -> dict:
         "driver_employee_id": c.driver_employee_id, "driver_name": c.driver_name,
         "payee_name": c.payee_name, "amount": float(c.amount), "dd_no": c.dd_no,
         "receipt_no": c.receipt_no, "detail": c.detail or {}, "status": c.status, "created_by": c.created_by,
+        "created_by_name": names.get(c.created_by), "approved_by_name": names.get(c.approved_by),
         "approved_by": c.approved_by, "approved_at": c.approved_at.isoformat() if c.approved_at else None,
         "transfer_date": str(c.transfer_date) if c.transfer_date else None,
         "review_remark": c.review_remark, "return_reason": c.return_reason,
@@ -116,7 +123,12 @@ def create_claim(payload: ClaimIn, db: Session = Depends(get_db)):
         claim = repo.create_claim(db, body, items, actor=payload.created_by)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-    return _claim_dict(claim, repo.claim_items(db, claim.id))
+    return _out(db, claim)
+
+
+def _out(db: Session, claim) -> dict:
+    names = repo.employee_names(db, [claim.created_by, claim.approved_by])
+    return _claim_dict(claim, repo.claim_items(db, claim.id), names)
 
 
 @router.get("/claims")
@@ -128,7 +140,8 @@ def list_claims(employee_id: Optional[str] = None, holder: Optional[str] = None,
     fund_ids = [f.id for f in repo.list_funds(db, holder=holder)] if holder else None
     rows, total = repo.list_claims(db, fund_ids=fund_ids, created_by=employee_id, status=status,
                                    month=month, limit=limit, offset=offset)
-    return {"total": total, "items": [_claim_dict(c, repo.claim_items(db, c.id)) for c in rows]}
+    names = repo.employee_names(db, [x for c in rows for x in (c.created_by, c.approved_by)])
+    return {"total": total, "items": [_claim_dict(c, repo.claim_items(db, c.id), names) for c in rows]}
 
 
 @router.get("/claims/duplicate-check")
@@ -156,7 +169,7 @@ def get_claim(form_id: str, db: Session = Depends(get_db)):
     claim = repo.get_claim(db, form_id)
     if claim is None:
         raise HTTPException(status_code=404, detail="ไม่พบใบเบิก")
-    return _claim_dict(claim, repo.claim_items(db, claim.id))
+    return _out(db, claim)
 
 
 # ---------------------------- transitions ----------------------------
@@ -243,7 +256,7 @@ def update_claim(form_id: str, payload: ClaimIn, db: Session = Depends(get_db)):
         out = repo.update_draft(db, claim, body, items, actor=payload.created_by)
     except L.PettyRuleError as exc:
         raise _rule_error(exc)
-    return _claim_dict(out, repo.claim_items(db, out.id))
+    return _out(db, out)
 
 
 @router.post("/claims/{form_id}/approve")
@@ -275,7 +288,7 @@ def approve_claim(form_id: str, payload: ApproveIn, db: Session = Depends(get_db
         out = repo.set_status(db, claim, L.APPROVED, payload.employee_id, "APPROVE", fields=fields)
     except L.PettyRuleError as exc:
         raise _rule_error(exc)
-    return _claim_dict(out, repo.claim_items(db, out.id))
+    return _out(db, out)
 
 
 @router.post("/claims/{form_id}/return")
@@ -293,7 +306,7 @@ def return_claim(form_id: str, payload: ReturnIn, db: Session = Depends(get_db),
         background.add_task(mail.notify_returned, out.form_id, payload.reason, clerk_email)
     else:
         mail.notify_returned(out.form_id, payload.reason, clerk_email)
-    return _claim_dict(out, repo.claim_items(db, out.id))
+    return _out(db, out)
 
 
 @router.post("/claims/{form_id}/transfer")
@@ -305,7 +318,7 @@ def transfer_claim(form_id: str, payload: TransferIn, db: Session = Depends(get_
                               fields={"transfer_date": payload.transfer_date})
     except L.PettyRuleError as exc:
         raise _rule_error(exc)
-    return _claim_dict(out, repo.claim_items(db, out.id))
+    return _out(db, out)
 
 
 @router.post("/claims/{form_id}/submit-accounting")
@@ -330,7 +343,7 @@ def submit_to_accounting(form_id: str, payload: SubmitAccIn, db: Session = Depen
     except L.PettyRuleError as exc:
         raise _rule_error(exc)
     _snapshot_dd(db, out)
-    return _claim_dict(out, repo.claim_items(db, out.id))
+    return _out(db, out)
 
 
 def _snapshot_dd(db: Session, claim) -> None:
@@ -375,7 +388,7 @@ def review_claim(form_id: str, payload: ReviewIn, db: Session = Depends(get_db))
                                   fields={"review_remark": payload.remark}, remark=payload.remark)
         except L.PettyRuleError as exc:
             raise _rule_error(exc)
-        return _claim_dict(out, repo.claim_items(db, out.id))
+        return _out(db, out)
     if claim.status != L.AWAITING_REVIEW:
         raise HTTPException(status_code=409,
                             detail=f"ตรวจได้เฉพาะใบที่รอบัญชีตรวจ ใบนี้สถานะ "
@@ -386,7 +399,7 @@ def review_claim(form_id: str, payload: ReviewIn, db: Session = Depends(get_db))
     repo.log(db, claim.id, "ACC_PASS", payload.employee_id, remark=payload.remark)
     db.commit()
     db.refresh(claim)
-    return _claim_dict(claim, repo.claim_items(db, claim.id))
+    return _out(db, claim)
 
 
 # ---------------------------- ยอดคงเหลือ และรอบคืนยอด ----------------------------

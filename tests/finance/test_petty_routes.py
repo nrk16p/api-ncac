@@ -212,3 +212,53 @@ class TestWhatTheScreenNeedsComesBack:
         from schemas.finance_petty_schema import ClaimItemIn
         row = ClaimItemIn(event_date=date(2026, 9, 17), rate=100, driver_name="วิชัย")
         assert row.driver_name == "วิชัย"
+
+
+def _user(db, employee_id, first, last):
+    from models.user_model import User
+    row = User(username=f"u{employee_id}", password_hash="x", email=f"{employee_id}@test.local",
+               employee_id=employee_id, firstname=first, lastname=last)
+    db.add(row); db.commit()
+    return row
+
+
+class TestNamesTravelWithTheData:
+    """ผู้ใช้สั่ง 2026-10-13 (ทำให้ครบ): ใบพิมพ์/หน้าจอต้องขึ้นชื่อพนักงาน ไม่ใช่รหัส"""
+
+    def test_employee_names_is_one_lookup_for_many_ids(self, db_session):
+        _user(db_session, "680043", "กฤตบุญ", "ลายเงิน")
+        _user(db_session, "670108", "ณรงค์กรณ์", "อัจฉริยญาติ")
+        names = repo.employee_names(db_session, ["680043", "670108", "999999", None])
+        assert names == {"680043": "กฤตบุญ ลายเงิน", "670108": "ณรงค์กรณ์ อัจฉริยญาติ"}
+
+    def test_claim_carries_clerk_and_approver_names(self, db_session, fund, weigh_type, weigh_items,
+                                                     seq_stub, frozen_bkk):
+        _user(db_session, "55555", "สายใจ", "ทองดี")
+        _user(db_session, "12345", "ณรงค์กรณ์", "อัจฉริยญาติ")
+        claim = repo.create_claim(db_session, claim_payload_for(fund), weigh_items[:1], actor="55555")
+        body = R.get_claim(claim.form_id, db=db_session)
+        assert body["created_by_name"] == "สายใจ ทองดี" and body["approved_by_name"] is None
+        out = R.approve_claim(claim.form_id, ApproveIn(employee_id="12345", attachments=FULL), db=db_session)
+        assert out["approved_by_name"] == "ณรงค์กรณ์ อัจฉริยญาติ"
+
+    def test_list_carries_names_too(self, db_session, fund, weigh_type, weigh_items, seq_stub, frozen_bkk):
+        _user(db_session, "55555", "สายใจ", "ทองดี")
+        repo.create_claim(db_session, claim_payload_for(fund), weigh_items[:1], actor="55555")
+        body = R.list_claims(employee_id="55555", holder=None, status=None, month=None, limit=50, offset=0, db=db_session)
+        assert body["items"][0]["created_by_name"] == "สายใจ ทองดี"
+
+    def test_fund_carries_holder_name(self, db_session, fund):
+        _user(db_session, "12345", "ณรงค์กรณ์", "อัจฉริยญาติ")
+        body = R.list_funds(holder=None, active=True, db=db_session)
+        assert body[0]["holder_name"] == "ณรงค์กรณ์ อัจฉริยญาติ"
+
+    def test_unknown_employee_gives_none_not_crash(self, db_session, fund, weigh_type, weigh_items,
+                                                   seq_stub, frozen_bkk):
+        claim = repo.create_claim(db_session, claim_payload_for(fund), weigh_items[:1], actor="55555")
+        assert R.get_claim(claim.form_id, db=db_session)["created_by_name"] is None
+
+
+def claim_payload_for(fund):
+    from datetime import date
+    return {"fund_id": fund.id, "expense_type": "WEIGH", "expense_date": date(2026, 9, 30),
+            "payee_name": "อัญชัญ น่วมมี", "created_by": "55555"}
