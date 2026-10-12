@@ -65,7 +65,6 @@ class FinPettyClaim(Base):
 
     id = Column(Integer, primary_key=True)
     form_id = Column(String(80), nullable=False, unique=True)
-    project_code = Column(String(40))
     fund_id = Column(Integer, ForeignKey("fin_petty_funds.id"), nullable=False)
     expense_type = Column(String(20), ForeignKey("fin_petty_expense_types.code"), nullable=False)
     expense_date = Column(Date, nullable=False)

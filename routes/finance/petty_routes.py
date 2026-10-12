@@ -80,8 +80,7 @@ def _item_dict(i) -> dict:
 
 def _claim_dict(c, items) -> dict:
     return {
-        "id": c.id, "form_id": c.form_id, "project_code": c.project_code,
-        "fund_id": c.fund_id, "expense_type": c.expense_type,
+        "id": c.id, "form_id": c.form_id, "fund_id": c.fund_id, "expense_type": c.expense_type,
         "expense_date": str(c.expense_date),
         "period_from": str(c.period_from) if c.period_from else None,
         "period_to": str(c.period_to) if c.period_to else None,

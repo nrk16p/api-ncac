@@ -105,10 +105,9 @@ def create_claim(db: Session, payload: dict, items: list[dict], actor: str) -> F
         raise LookupError("ไม่พบกองทุน หรือกองทุนถูกปิดอยู่")
 
     form_id = generate_form_id(db, L.petty_form_code(fund.branch_code, fund.division_code))
-    project_code = generate_form_id(db, L.project_form_code(fund.branch_code, fund.division_code))
     period_from, period_to = L.period_of(items)
     claim = FinPettyClaim(
-        form_id=form_id, project_code=project_code, status=L.PENDING_APPROVAL,
+        form_id=form_id, status=L.PENDING_APPROVAL,
         amount=L.claim_total(items), period_from=period_from, period_to=period_to,
         **payload,
     )

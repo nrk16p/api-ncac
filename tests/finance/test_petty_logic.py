@@ -97,10 +97,10 @@ class TestDocNumbers:
         assert L.petty_form_code("03", "B02") == "PC-03-B02"
 
     def test_form_id_format(self):
-        assert L.format_form_id("03", "B02", 2610, 1) == "03-B02-2610-001"
+        assert L.format_form_id("03", "B02", 2610, 1) == "LB-B02-2610-001"
 
     def test_form_id_grows_past_999(self):
-        assert L.format_form_id("03", "B02", 2610, 1000) == "03-B02-2610-1000"
+        assert L.format_form_id("03", "B02", 2610, 1000) == "LB-B02-2610-1000"
 
     def test_form_id_matches_frontend_pattern(self):
         import re
@@ -108,7 +108,7 @@ class TestDocNumbers:
         assert pattern.match(L.format_form_id("03", "B02", 2610, 7))
 
     def test_batch_no_format(self):
-        assert L.batch_no("03", "B02", 2610, 2) == "03-B02-2610-B2"
+        assert L.batch_no("03", "B02", 2610, 2) == "LB-B02-2610-B2"
 
 
 class TestHardDupKey:

@@ -98,11 +98,10 @@ class TestOpeningTheThreeClaims:
 
     def test_each_claim_gets_its_own_form_id(self, three_claims):
         assert [three_claims[k].form_id for k in ("TIRE", "WEIGH", "TRAVEL")] == \
-            ["03-B02-2610-001", "03-B02-2610-002", "03-B02-2610-003"]
+            ["LB-B02-2610-001", "LB-B02-2610-002", "LB-B02-2610-003"]
 
-    def test_project_codes_run_on_the_branch_letters(self, three_claims):
-        assert [three_claims[k].project_code for k in ("TIRE", "WEIGH", "TRAVEL")] == \
-            ["PJ-LB-B02-2610-001", "PJ-LB-B02-2610-002", "PJ-LB-B02-2610-003"]
+    def test_no_claim_carries_a_project_code(self, three_claims):
+        assert all(not hasattr(c, "project_code") for c in three_claims.values())
 
     def test_kittaboon_is_recorded_as_the_clerk(self, three_claims):
         assert all(c.created_by == CLERK for c in three_claims.values())
@@ -182,8 +181,8 @@ class TestTheHolderApprovesAllThree:
     def test_the_fund_now_holds_three_thousand_and_eighty_three(self, db_session, master, approved):
         assert repo.petty_committed(db_session, HOLDER) == Decimal("3083.00")
 
-    def test_the_project_code_travels_in_the_response(self, approved):
-        assert approved["TRAVEL"]["project_code"] == "PJ-LB-B02-2610-003"
+    def test_the_response_carries_the_lettered_number_only(self, approved):
+        assert approved["TRAVEL"]["form_id"] == "LB-B02-2610-003" and "project_code" not in approved["TRAVEL"]
 
     def test_the_whole_round_trip_reaches_accounting(self, db_session, approved):
         claim = approved["TIRE"]

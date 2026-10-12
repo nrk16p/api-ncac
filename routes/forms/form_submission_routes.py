@@ -63,7 +63,6 @@ def log_status_change(
 # ----------------------------
 ADVANCE_FORM_CODE = "ADV"
 PETTY_FORM_PREFIX = "PC-"  # เบิกเงินสดย่อย: form_code = PC-{branch}-{division}
-PROJECT_FORM_PREFIX = "PJ-"  # Project Code บนใบสำคัญจ่าย: form_code = PJ-{LB|SB}-{division}
 
 
 def _now_bkk() -> datetime:
@@ -109,17 +108,15 @@ def generate_form_id(db: Session, form_code: str) -> str:
     """
     advance = form_code == ADVANCE_FORM_CODE
     petty = form_code.startswith(PETTY_FORM_PREFIX)
-    project = form_code.startswith(PROJECT_FORM_PREFIX)
-    monthly = advance or petty or project
+    monthly = advance or petty
     year = int(_now_bkk().strftime("%y%m")) if monthly else datetime.utcnow().year
     seq = _locked_sequence(db, form_code, year)
 
     seq.last_number += 1
-    if project:
-        return f"{form_code}-{year:04d}-{seq.last_number:03d}"  # PJ- ติดไปบนกระดาษด้วย
     if petty:
-        branch_division = form_code[len(PETTY_FORM_PREFIX):]  # "03-B02"
-        return f"{branch_division}-{year:04d}-{seq.last_number:03d}"
+        from services.finance.petty_logic import format_form_id  # คีย์ตัวนับยังเป็น PC-03-B02 แต่บนกระดาษสาขาเป็น LB/SB
+        branch, division = form_code[len(PETTY_FORM_PREFIX):].split("-", 1)  # "03-B02"
+        return format_form_id(branch, division, year, seq.last_number)
     if advance:
         return f"{ADVANCE_FORM_CODE}-{year:04d}-{seq.last_number:03d}"  # > 999 simply grows to 4 digits
     return f"{form_code}-{year}-{str(seq.last_number).zfill(4)}"

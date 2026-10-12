@@ -102,16 +102,13 @@ def branch_letters(branch: str) -> str:
     return BRANCH_LETTERS.get(code, code)
 
 
-def project_form_code(branch: str, division: str) -> str:
-    return f"PJ-{branch_letters(branch)}-{division}"
-
-
 def format_form_id(branch: str, division: str, yymm: int, number: int) -> str:
-    return f"{branch}-{division}-{yymm:04d}-{number:03d}"
+    """เลขที่ใบ: สาขาเป็นตัวอักษรแบบ ATMS (LB/SB) ตามที่ผู้ใช้สั่ง 2026-10-13 — ไม่มี Project Code แยกอีก"""
+    return f"{branch_letters(branch)}-{division}-{yymm:04d}-{number:03d}"
 
 
 def batch_no(branch: str, division: str, yymm: int, number: int) -> str:
-    return f"{branch}-{division}-{yymm:04d}-B{number}"
+    return f"{branch_letters(branch)}-{division}-{yymm:04d}-B{number}"
 
 
 def hard_dup_key(item: Mapping) -> tuple[str, str, str] | None:
