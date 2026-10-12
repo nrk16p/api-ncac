@@ -24,7 +24,7 @@ def test_claim_has_no_submission_id():
 
 def test_claim_columns_match_migration():
     expected = {
-        "id", "form_id", "fund_id", "expense_type", "expense_date", "period_from", "period_to",
+        "id", "form_id", "project_code", "fund_id", "expense_type", "expense_date", "period_from", "period_to",
         "driver_employee_id", "driver_name", "payee_name", "amount", "detail", "dd_no", "dd_snapshot",
         "receipt_no", "wht_applicable", "created_by", "source", "dup_override_reason", "return_reason",
         "approved_by", "approved_at", "transfer_date", "transfer_slip_at", "submitted_to_acc_at",

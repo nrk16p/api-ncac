@@ -63,6 +63,7 @@ def log_status_change(
 # ----------------------------
 ADVANCE_FORM_CODE = "ADV"
 PETTY_FORM_PREFIX = "PC-"  # เบิกเงินสดย่อย: form_code = PC-{branch}-{division}
+PROJECT_FORM_PREFIX = "PJ-"  # Project Code บนใบสำคัญจ่าย: form_code = PJ-{LB|SB}-{division}
 
 
 def _now_bkk() -> datetime:
@@ -108,11 +109,14 @@ def generate_form_id(db: Session, form_code: str) -> str:
     """
     advance = form_code == ADVANCE_FORM_CODE
     petty = form_code.startswith(PETTY_FORM_PREFIX)
-    monthly = advance or petty
+    project = form_code.startswith(PROJECT_FORM_PREFIX)
+    monthly = advance or petty or project
     year = int(_now_bkk().strftime("%y%m")) if monthly else datetime.utcnow().year
     seq = _locked_sequence(db, form_code, year)
 
     seq.last_number += 1
+    if project:
+        return f"{form_code}-{year:04d}-{seq.last_number:03d}"  # PJ- ติดไปบนกระดาษด้วย
     if petty:
         branch_division = form_code[len(PETTY_FORM_PREFIX):]  # "03-B02"
         return f"{branch_division}-{year:04d}-{seq.last_number:03d}"

@@ -175,3 +175,9 @@ class TestReviewGate:
             R.review_claim(claim.form_id, ReviewIn(employee_id="80001", action="SEND_BACK"),
                            db_session)
         assert exc.value.status_code == 422
+
+
+class TestProjectCodeTravelsWithTheClaim:
+    def test_the_detail_response_carries_it(self, db_session, claim):
+        body = R.get_claim(claim.form_id, db=db_session)
+        assert body["project_code"] == "PJ-LB-B02-2610-001"

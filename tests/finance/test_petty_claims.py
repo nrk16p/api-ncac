@@ -23,6 +23,15 @@ class TestCreateClaim:
         claim = repo.create_claim(db_session, claim_payload(), weigh_items, actor="55555")
         assert claim.form_id == "03-B02-2610-001"
 
+    def test_project_code_is_issued_with_the_claim(self, db_session, fund, claim_payload, weigh_items, seq_stub, frozen_bkk):
+        claim = repo.create_claim(db_session, claim_payload(), weigh_items, actor="55555")
+        assert claim.project_code == "PJ-LB-B02-2610-001"
+
+    def test_project_code_runs_on_its_own_series(self, db_session, fund, claim_payload, weigh_items, seq_stub, frozen_bkk):
+        repo.create_claim(db_session, claim_payload(), weigh_items, actor="55555")
+        second = repo.create_claim(db_session, claim_payload(), weigh_items, actor="55555")
+        assert (second.form_id, second.project_code) == ("03-B02-2610-002", "PJ-LB-B02-2610-002")
+
     def test_second_claim_gets_the_next_number(self, db_session, fund, claim_payload, weigh_items, seq_stub, frozen_bkk):
         repo.create_claim(db_session, claim_payload(), weigh_items, actor="55555")
         second = repo.create_claim(db_session, claim_payload(), weigh_items, actor="55555")

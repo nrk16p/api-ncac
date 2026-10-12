@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS fin_petty_batches (
 CREATE TABLE IF NOT EXISTS fin_petty_claims (
   id                  serial PRIMARY KEY,
   form_id             varchar(80) NOT NULL UNIQUE,
+  project_code        varchar(40),
   fund_id             int NOT NULL REFERENCES fin_petty_funds(id),
   expense_type        varchar(20) NOT NULL REFERENCES fin_petty_expense_types(code),
   expense_date        date NOT NULL,

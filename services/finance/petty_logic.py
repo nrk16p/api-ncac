@@ -93,6 +93,19 @@ def petty_form_code(branch: str, division: str) -> str:
     return f"PC-{branch}-{division}"
 
 
+BRANCH_LETTERS = {"02": "SB", "03": "LB"}
+
+
+def branch_letters(branch: str) -> str:
+    """ตัวอักษรสาขาแบบที่ ATMS ใช้ (LBDD / SBDD) · สาขาที่ยังไม่ยืนยัน ใช้เลขเดิมไปก่อน"""
+    code = (branch or "").strip()
+    return BRANCH_LETTERS.get(code, code)
+
+
+def project_form_code(branch: str, division: str) -> str:
+    return f"PJ-{branch_letters(branch)}-{division}"
+
+
 def format_form_id(branch: str, division: str, yymm: int, number: int) -> str:
     return f"{branch}-{division}-{yymm:04d}-{number:03d}"
 
