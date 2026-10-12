@@ -348,3 +348,14 @@ def find_prior_items(db: Session, *, expense_type: str, keys: list[dict], days: 
         out.append({"event_date": item.event_date, "truck_code": item.truck_code,
                     "truck_plate": item.truck_plate, "ref_no": item.ref_no, "form_id": form_id})
     return out
+
+
+def employee_email(db: Session, employee_id: Optional[str]) -> Optional[str]:
+    """อีเมลของพนักงานจาก users — ไม่มีก็คืน None แล้วให้ตัวส่งข้ามไป ไม่ใช่ส่งที่อยู่ว่าง"""
+    if not employee_id:
+        return None
+    from models.user_model import User
+    row = (db.query(User.email)
+           .filter(User.employee_id == employee_id)
+           .first())
+    return row[0] if row and row[0] else None

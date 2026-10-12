@@ -5,7 +5,7 @@ auth ยังเป็นแบบเดียวกับ advance_routes (ไ�
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -155,6 +155,7 @@ from datetime import datetime, timezone  # noqa: E402
 
 from schemas.finance_petty_schema import ApproveIn, ReturnIn, ReviewIn, SubmitAccIn, TransferIn  # noqa: E402
 from services.finance import petty_logic as L  # noqa: E402
+from services.finance import petty_mail as mail  # noqa: E402
 from services.finance import petty_validate as validate  # noqa: E402
 
 
@@ -177,17 +178,25 @@ def _gate(db: Session, claim, items, stage: str, attachments: dict) -> dict:
     return result
 
 
-def _raise_if_blocked(gate: dict, *, check_duplicates: bool, override_reason) -> None:
+def _raise_if_blocked(gate: dict, *, check_duplicates: bool, override_reason,
+                      notify=None) -> None:
+    """notify = callable(kind, payload) สำหรับแจ้งเจ้าหน้าที่ก่อนจะโยน error ออกไป"""
     if gate["missing"]:
+        if notify:
+            notify("missing", gate["missing"])
         raise HTTPException(status_code=403, detail={"error": "เอกสารไม่ครบ อนุมัติไม่ได้",
                                                      "missing": gate["missing"]})
     if not check_duplicates:
         return
     dups = gate["duplicates"]
     if dups["hard"]:
+        if notify:
+            notify("duplicate", dups["hard"])
         raise HTTPException(status_code=409, detail={"error": "มีรายการที่เบิกไปแล้ว",
                                                     "duplicates": dups["hard"]})
     if dups["soft"] and not override_reason:
+        if notify:
+            notify("duplicate", dups["soft"])
         raise HTTPException(status_code=422,
                             detail={"error": "มีรายการที่อาจซ้ำ ยืนยันทับได้แต่ต้องระบุเหตุผล",
                                     "duplicates": dups["soft"]})
@@ -226,12 +235,26 @@ def update_claim(form_id: str, payload: ClaimIn, db: Session = Depends(get_db)):
 
 
 @router.post("/claims/{form_id}/approve")
-def approve_claim(form_id: str, payload: ApproveIn, db: Session = Depends(get_db)):
+def approve_claim(form_id: str, payload: ApproveIn, db: Session = Depends(get_db),
+                  background: BackgroundTasks = None):
     claim = _claim_or_404(db, form_id)
     _require_holder(db, claim, payload.employee_id)
     items = repo.claim_items(db, claim.id)
     gate = _gate(db, claim, items, validate.STAGE_APPROVE, payload.attachments)
-    _raise_if_blocked(gate, check_duplicates=True, override_reason=payload.dup_override_reason)
+
+    clerk_email = repo.employee_email(db, claim.created_by)
+    approver_email = repo.employee_email(db, payload.employee_id)
+
+    def _notify(kind: str, rows):
+        # แจ้งทั้งเจ้าหน้าที่ผู้เปิดใบและผู้อนุมัติ — เจ้าหน้าที่คือคนที่ต้องแก้
+        send = (mail.notify_gate_blocked if kind == "missing" else mail.notify_duplicate)
+        if background is not None:
+            background.add_task(send, claim.form_id, rows, clerk_email, approver_email)
+        else:
+            send(claim.form_id, rows, clerk_email, approver_email)
+
+    _raise_if_blocked(gate, check_duplicates=True, override_reason=payload.dup_override_reason,
+                      notify=_notify)
 
     fields = {"approved_by": payload.employee_id}
     if payload.dup_override_reason:
@@ -244,14 +267,20 @@ def approve_claim(form_id: str, payload: ApproveIn, db: Session = Depends(get_db
 
 
 @router.post("/claims/{form_id}/return")
-def return_claim(form_id: str, payload: ReturnIn, db: Session = Depends(get_db)):
+def return_claim(form_id: str, payload: ReturnIn, db: Session = Depends(get_db),
+                 background: BackgroundTasks = None):
     claim = _claim_or_404(db, form_id)
     _require_holder(db, claim, payload.employee_id)
+    clerk_email = repo.employee_email(db, claim.created_by)
     try:
         out = repo.set_status(db, claim, L.RETURNED, payload.employee_id, "RETURN",
                               fields={"return_reason": payload.reason}, remark=payload.reason)
     except L.PettyRuleError as exc:
         raise _rule_error(exc)
+    if background is not None:
+        background.add_task(mail.notify_returned, out.form_id, payload.reason, clerk_email)
+    else:
+        mail.notify_returned(out.form_id, payload.reason, clerk_email)
     return _claim_dict(out, repo.claim_items(db, out.id))
 
 
@@ -276,6 +305,9 @@ def submit_to_accounting(form_id: str, payload: SubmitAccIn, db: Session = Depen
     gate = _gate(db, claim, repo.claim_items(db, claim.id), validate.STAGE_SUBMIT_ACC,
                  payload.attachments)
     if gate["missing"]:
+        mail.notify_gate_blocked(claim.form_id, gate["missing"],
+                                 repo.employee_email(db, claim.created_by),
+                                 repo.employee_email(db, payload.employee_id))
         raise HTTPException(status_code=403, detail={"error": "ส่งบัญชีไม่ได้ เอกสารยังไม่ครบ",
                                                      "missing": gate["missing"]})
 
