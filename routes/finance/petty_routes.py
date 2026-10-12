@@ -121,6 +121,26 @@ def list_claims(employee_id: Optional[str] = None, holder: Optional[str] = None,
     return {"total": total, "items": [_claim_dict(c, repo.claim_items(db, c.id)) for c in rows]}
 
 
+@router.get("/claims/duplicate-check")
+def duplicate_check(expense_type: str, event_date: str, truck_code: Optional[str] = None,
+                    truck_plate: Optional[str] = None, ref_no: Optional[str] = None,
+                    exclude_claim_id: Optional[int] = None, db: Session = Depends(get_db)):
+    """เตือนทันทีขณะกรอก — รับแถวเดียว คืน {hard, soft} ของแถวนั้น"""
+    from datetime import date as _d
+    try:
+        parsed = _d.fromisoformat(event_date)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="วันที่ไม่ถูกต้อง")
+    type_row = repo.get_expense_type(db, expense_type)
+    spec = (type_row.spec if type_row else None) or {}
+    row = {"event_date": parsed, "truck_code": truck_code, "truck_plate": truck_plate,
+           "ref_no": ref_no}
+    hard_days = int(((spec.get("duplicate_check") or {}).get("hard") or {}).get("days", 365))
+    prior = repo.find_prior_items(db, expense_type=expense_type, keys=[row], days=hard_days,
+                                  exclude_claim_id=exclude_claim_id)
+    return validate.split_duplicates([row], prior, spec)
+
+
 @router.get("/claims/{form_id}")
 def get_claim(form_id: str, db: Session = Depends(get_db)):
     claim = repo.get_claim(db, form_id)
@@ -135,6 +155,42 @@ from datetime import datetime, timezone  # noqa: E402
 
 from schemas.finance_petty_schema import ApproveIn, ReturnIn, ReviewIn, SubmitAccIn, TransferIn  # noqa: E402
 from services.finance import petty_logic as L  # noqa: E402
+from services.finance import petty_validate as validate  # noqa: E402
+
+
+
+def _gate(db: Session, claim, items, stage: str, attachments: dict) -> dict:
+    """ด่านของใบนี้ตาม spec ของประเภท — BE เป็นผู้ตัดสิน ไม่เชื่อ FE"""
+    type_row = repo.get_expense_type(db, claim.expense_type)
+    spec = (type_row.spec if type_row else None) or {}
+    item_dicts = [{"event_date": i.event_date, "truck_code": i.truck_code,
+                   "truck_plate": i.truck_plate, "ref_no": i.ref_no, "rate": i.rate,
+                   "qty": i.qty} for i in items]
+    result = validate.validate_claim(
+        {"amount": claim.amount, "dd_no": claim.dd_no, "receipt_no": claim.receipt_no,
+         "expense_type": claim.expense_type},
+        item_dicts, spec, stage, attachments or {})
+    hard_days = int(((spec.get("duplicate_check") or {}).get("hard") or {}).get("days", 365))
+    prior = repo.find_prior_items(db, expense_type=claim.expense_type, keys=item_dicts,
+                                  days=hard_days, exclude_claim_id=claim.id)
+    result["duplicates"] = validate.split_duplicates(item_dicts, prior, spec)
+    return result
+
+
+def _raise_if_blocked(gate: dict, *, check_duplicates: bool, override_reason) -> None:
+    if gate["missing"]:
+        raise HTTPException(status_code=403, detail={"error": "เอกสารไม่ครบ อนุมัติไม่ได้",
+                                                     "missing": gate["missing"]})
+    if not check_duplicates:
+        return
+    dups = gate["duplicates"]
+    if dups["hard"]:
+        raise HTTPException(status_code=409, detail={"error": "มีรายการที่เบิกไปแล้ว",
+                                                    "duplicates": dups["hard"]})
+    if dups["soft"] and not override_reason:
+        raise HTTPException(status_code=422,
+                            detail={"error": "มีรายการที่อาจซ้ำ ยืนยันทับได้แต่ต้องระบุเหตุผล",
+                                    "duplicates": dups["soft"]})
 
 
 def _claim_or_404(db: Session, form_id: str):
@@ -173,6 +229,10 @@ def update_claim(form_id: str, payload: ClaimIn, db: Session = Depends(get_db)):
 def approve_claim(form_id: str, payload: ApproveIn, db: Session = Depends(get_db)):
     claim = _claim_or_404(db, form_id)
     _require_holder(db, claim, payload.employee_id)
+    items = repo.claim_items(db, claim.id)
+    gate = _gate(db, claim, items, validate.STAGE_APPROVE, payload.attachments)
+    _raise_if_blocked(gate, check_duplicates=True, override_reason=payload.dup_override_reason)
+
     fields = {"approved_by": payload.employee_id}
     if payload.dup_override_reason:
         fields["dup_override_reason"] = payload.dup_override_reason
@@ -211,6 +271,14 @@ def transfer_claim(form_id: str, payload: TransferIn, db: Session = Depends(get_
 def submit_to_accounting(form_id: str, payload: SubmitAccIn, db: Session = Depends(get_db)):
     claim = _claim_or_404(db, form_id)
     _require_holder(db, claim, payload.employee_id)
+    if payload.dd_no:
+        claim.dd_no = payload.dd_no  # ให้ด่านเห็นเลข DD ที่เพิ่งกรอกมาพร้อมคำสั่งนี้
+    gate = _gate(db, claim, repo.claim_items(db, claim.id), validate.STAGE_SUBMIT_ACC,
+                 payload.attachments)
+    if gate["missing"]:
+        raise HTTPException(status_code=403, detail={"error": "ส่งบัญชีไม่ได้ เอกสารยังไม่ครบ",
+                                                     "missing": gate["missing"]})
+
     fields = {"dd_no": payload.dd_no} if payload.dd_no else {}
     try:
         out = repo.set_status(db, claim, L.AWAITING_REVIEW, payload.employee_id, "SUBMIT_ACC",

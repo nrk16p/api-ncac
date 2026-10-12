@@ -303,3 +303,48 @@ def close_batch(db: Session, fund_id: int, claim_ids: list[int], actor: str,
     db.commit()
     db.refresh(batch)
     return batch
+
+
+# ---------------------------- ด่านซ้ำ: ดึงรายการที่อาจซ้ำ ----------------------------
+
+from datetime import timedelta  # noqa: E402
+
+
+def find_prior_items(db: Session, *, expense_type: str, keys: list[dict], days: int,
+                     exclude_claim_id: Optional[int]) -> list[dict]:
+    """ดึงรายการของประเภทเดียวกันที่อาจซ้ำ — จำกัดด้วยช่วงวันและรถที่อยู่ในใบนี้เท่านั้น
+
+    ไม่ดึงทั้งตาราง: ช่วงวันมาจากรายการในใบ (ปกติไม่กี่วัน) แล้วปล่อยให้ index
+    (event_date, truck_code) กับ (ref_no, truck_code, truck_plate) ทำงาน
+    ด่านเข้มมองย้อนได้ไกลกว่าด่านอ่อน จึงขยายช่วงด้วย `days` ที่ผู้เรียกส่งมา
+    """
+    if not keys:
+        return []
+    dates = [k["event_date"] for k in keys if k.get("event_date")]
+    if not dates:
+        return []
+    low, high = min(dates) - timedelta(days=days), max(dates) + timedelta(days=days)
+    codes = {L.normalize_code(k.get("truck_code")) for k in keys}
+    plates = {L.normalize_plate(k.get("truck_plate")) for k in keys}
+    refs = {str(k.get("ref_no") or "").strip() for k in keys if k.get("ref_no")}
+
+    rows = (db.query(FinPettyClaimItem, FinPettyClaim.form_id)
+            .join(FinPettyClaim, FinPettyClaim.id == FinPettyClaimItem.claim_id)
+            .filter(FinPettyClaim.expense_type == expense_type,
+                    FinPettyClaim.status != L.RETURNED,
+                    FinPettyClaimItem.event_date >= low,
+                    FinPettyClaimItem.event_date <= high)
+            .filter(FinPettyClaim.id != exclude_claim_id if exclude_claim_id else True)
+            .limit(2000)  # ขอบเขตกันหลุด — ปกติได้ไม่กี่สิบแถว
+            .all())
+
+    out = []
+    for item, form_id in rows:
+        same_truck = (L.normalize_code(item.truck_code) in codes
+                      or L.normalize_plate(item.truck_plate) in plates)
+        same_ref = (item.ref_no or "").strip() in refs
+        if not same_truck and not same_ref:
+            continue
+        out.append({"event_date": item.event_date, "truck_code": item.truck_code,
+                    "truck_plate": item.truck_plate, "ref_no": item.ref_no, "form_id": form_id})
+    return out
