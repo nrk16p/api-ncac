@@ -256,3 +256,17 @@ class TestRuleConditionsOnFields:
     def test_unknown_condition_never_blocks(self):
         spec = {"rules": [{"when": "moon_phase == FULL", "require_attachment": "id_card", "at": "BEFORE_APPROVE"}]}
         assert V.validate_claim({}, [], spec, V.STAGE_APPROVE, {})["missing"] == []
+
+
+class TestHardDuplicateWordingFitsTheType:
+    """ค่าเดินทางซ้ำ Trip Code ไม่ใช่ "บัตรชั่ง" — ถ้อยคำต้องกลางพอสำหรับทุกประเภท"""
+    SPEC = {"duplicate_check": {"hard": {"keys": ["ref_no", "truck_code", "truck_plate"], "days": 365}}}
+
+    def test_with_a_truck(self):
+        out = V.split_duplicates([{"ref_no": "000055", "truck_code": "161", "truck_plate": "71-4285"}],
+                                 [{"ref_no": "000055", "truck_code": "161", "truck_plate": "71-4285", "form_id": "X"}], self.SPEC)
+        assert out["hard"][0]["message"] == "เลขอ้างอิงนี้ของรถคันนี้เบิกไปแล้ว"
+
+    def test_without_a_truck(self):
+        out = V.split_duplicates([{"ref_no": "TRIP-1"}], [{"ref_no": "TRIP-1", "form_id": "X"}], self.SPEC)
+        assert out["hard"][0]["message"] == "เลขอ้างอิงนี้เบิกไปแล้ว"

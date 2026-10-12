@@ -135,7 +135,8 @@ def split_duplicates(items: Iterable[Mapping], prior: Iterable[Mapping], spec: M
                          "ref_no": item.get("ref_no"), "truck_code": item.get("truck_code"),
                          "event_date": str(matched_hard.get("event_date") or ""),
                          "payee_name": matched_hard.get("payee_name"), "amount": matched_hard.get("amount"),
-                         "message": "บัตรชั่งใบนี้ของรถคันนี้เบิกไปแล้ว"})
+                         "message": ("เลขอ้างอิงนี้ของรถคันนี้เบิกไปแล้ว"
+                                     if (item.get("truck_code") or item.get("truck_plate")) else "เลขอ้างอิงนี้เบิกไปแล้ว")})
         else:
             for other in pool:
                 if _soft_key(other) != _soft_key(item):
