@@ -110,7 +110,9 @@ CREATE TABLE IF NOT EXISTS fin_petty_logs (
 CREATE INDEX IF NOT EXISTS ix_fin_petty_logs_claim ON fin_petty_logs (claim_id);
 
 INSERT INTO fin_petty_expense_types (code, name_th, atms_sku, sort_order, spec) VALUES
-('WEIGH', 'ค่าชั่งน้ำหนัก', 'LB00038', 1, '{
+('WEIGH', 'ค่าชั่งน้ำหนัก', 'LB00038', 1,
+-- spec:WEIGH
+'{
   "item_based": true,
   "item_label": "รายการชั่ง",
   "header_fields": [
@@ -142,7 +144,9 @@ INSERT INTO fin_petty_expense_types (code, name_th, atms_sku, sort_order, spec) 
   },
   "prints": ["PETTY_VOUCHER","RECEIPT_SUBSTITUTE","DD"],
   "atms": {"sku":"LB00038","product_group":"ค่าแรง","unit":"งาน","vat":0}
-}'::jsonb),
+}'
+-- /spec
+::jsonb),
 ('TOLL',   'ค่าทางด่วน',      NULL,       2, '{}'::jsonb),
 ('TIRE',   'ค่าปะ-เปลี่ยนยาง', 'LB00009',  3, '{}'::jsonb),
 ('REPAIR', 'ค่าซ่อมฉุกเฉิน',   NULL,       4, '{}'::jsonb),

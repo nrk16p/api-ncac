@@ -16,6 +16,14 @@ STAGE_SUBMIT_ACC = "BEFORE_SUBMIT_TO_ACCOUNTING"
 
 _FIELD_LABELS = {"dd_no": "เลขที่ใบรับสินค้า (DD)", "receipt_no": "เลขที่ใบเสร็จ"}
 
+# spec เรียกรถว่าช่องเดียว แต่ตารางเก็บเป็นเบอร์รถ + ทะเบียน และผู้ใช้สั่งว่าด่านซ้ำต้องใช้ทั้งคู่
+# ฉะนั้นช่อง truck ถือว่าครบเมื่อมีทั้งสองค่า
+_ITEM_ALIASES = {"truck": ("truck_code", "truck_plate")}
+
+
+def _item_filled(item: Mapping, key: str) -> bool:
+    return all(str(item.get(k) or "").strip() != "" for k in _ITEM_ALIASES.get(key, (key,)))
+
 
 def _rule_applies(when: str, claim: Mapping) -> bool:
     if not when or when == "always":
@@ -60,8 +68,7 @@ def validate_claim(claim: Mapping, items: list[Mapping], spec: Mapping, stage: s
                 continue
             key = field["key"]
             for index, item in enumerate(items, start=1):
-                value = item.get(key)
-                if value is None or str(value).strip() == "":
+                if not _item_filled(item, key):
                     missing.append({"kind": "item_field", "key": key, "line_no": index,
                                     "label": f"{field.get('label', key)} (แถวที่ {index})"})
 

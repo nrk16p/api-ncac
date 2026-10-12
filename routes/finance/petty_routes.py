@@ -166,8 +166,9 @@ def _gate(db: Session, claim, items, stage: str, attachments: dict) -> dict:
     type_row = repo.get_expense_type(db, claim.expense_type)
     spec = (type_row.spec if type_row else None) or {}
     item_dicts = [{"event_date": i.event_date, "truck_code": i.truck_code,
-                   "truck_plate": i.truck_plate, "ref_no": i.ref_no, "rate": i.rate,
-                   "qty": i.qty} for i in items]
+                   "truck_plate": i.truck_plate, "truck_type": i.truck_type,
+                   "ref_no": i.ref_no, "rate": i.rate, "qty": i.qty,
+                   "remark": i.remark} for i in items]
     result = validate.validate_claim(
         {"amount": claim.amount, "dd_no": claim.dd_no, "receipt_no": claim.receipt_no,
          "expense_type": claim.expense_type},

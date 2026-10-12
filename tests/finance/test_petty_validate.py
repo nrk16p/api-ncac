@@ -186,3 +186,40 @@ class TestFindPriorItems:
         prior = repo.find_prior_items(db_session, expense_type="WEIGH", keys=far, days=7,
                                       exclude_claim_id=None)
         assert prior == []
+
+
+class TestItemFieldsThatLiveInTwoColumns:
+    """spec ของจริงบังคับช่อง `truck` `truck_type` `remark` — ด่านต้องอ่านให้ตรงกับที่เก็บจริง
+
+    เจอจากการซ้อมใช้งาน 2026-10-13: ด่านเคยบล็อกทุกใบว่า 'รถ (แถวที่ 1)' ไม่ครบ
+    ทั้งที่กรอกรถมาแล้ว เพราะ spec เรียกช่องว่า truck แต่ตารางเก็บเป็น truck_code + truck_plate
+    """
+    SPEC = {
+        "item_fields": [
+            {"key": "truck", "label": "รถ", "required": True},
+            {"key": "truck_type", "label": "ประเภทรถ", "required": True},
+            {"key": "remark", "label": "รายการที่ทำ", "required": True},
+        ],
+    }
+    ROW = {"truck_code": "6604", "truck_plate": "72-8179", "truck_type": "โม่ใหญ่",
+           "remark": "เปลี่ยนยาง 6 เส้น"}
+
+    def _missing(self, row):
+        out = V.validate_claim({}, [row], self.SPEC, V.STAGE_APPROVE, {})
+        return {m["key"] for m in out["missing"]}
+
+    def test_a_complete_row_passes(self):
+        assert self._missing(self.ROW) == set()
+
+    def test_a_row_with_no_truck_number_is_caught(self):
+        assert "truck" in self._missing({**self.ROW, "truck_code": ""})
+
+    def test_a_row_with_no_plate_is_caught(self):
+        # ทะเบียนเป็นส่วนหนึ่งของคีย์ด่านซ้ำเข้ม ขาดไปแล้วด่านซ้ำอ่อนลง
+        assert "truck" in self._missing({**self.ROW, "truck_plate": None})
+
+    def test_the_truck_type_is_read_not_assumed_missing(self):
+        assert "truck_type" in self._missing({**self.ROW, "truck_type": None})
+
+    def test_the_remark_is_read_not_assumed_missing(self):
+        assert "remark" in self._missing({**self.ROW, "remark": "  "})
