@@ -62,6 +62,7 @@ def log_status_change(
 # Helpers
 # ----------------------------
 ADVANCE_FORM_CODE = "ADV"
+PETTY_FORM_PREFIX = "PC-"  # เบิกเงินสดย่อย: form_code = PC-{branch}-{division}
 
 
 def _now_bkk() -> datetime:
@@ -100,12 +101,21 @@ def _locked_sequence(db: Session, form_code: str, year: int):
 
 
 def generate_form_id(db: Session, form_code: str) -> str:
-    """{code}-{year}-{0000}; ADV (v3 §4) is ADV-YYMM-NNN, its sequence keyed by year = YYMM (Bangkok)."""
+    """{code}-{year}-{0000} · ADV (v3 §4) = ADV-YYMM-NNN · PC-{branch}-{division} = {branch}-{division}-YYMM-NNN
+
+    petty ใช้ sequence ตัวเดียวกัน (form_sequences + SELECT ... FOR UPDATE) จึงกันเลขชนได้อยู่แล้ว
+    แต่คืนเลขที่ไม่มีคำว่า PC- เพราะบนกระดาษเขียนแค่ สาขา-แผนก-เดือน-ลำดับ
+    """
     advance = form_code == ADVANCE_FORM_CODE
-    year = int(_now_bkk().strftime("%y%m")) if advance else datetime.utcnow().year
+    petty = form_code.startswith(PETTY_FORM_PREFIX)
+    monthly = advance or petty
+    year = int(_now_bkk().strftime("%y%m")) if monthly else datetime.utcnow().year
     seq = _locked_sequence(db, form_code, year)
 
     seq.last_number += 1
+    if petty:
+        branch_division = form_code[len(PETTY_FORM_PREFIX):]  # "03-B02"
+        return f"{branch_division}-{year:04d}-{seq.last_number:03d}"
     if advance:
         return f"{ADVANCE_FORM_CODE}-{year:04d}-{seq.last_number:03d}"  # > 999 simply grows to 4 digits
     return f"{form_code}-{year}-{str(seq.last_number).zfill(4)}"

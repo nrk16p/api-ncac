@@ -4,9 +4,13 @@
 petty ไม่ผูกกับ form_submissions — form_id เป็นสตริงที่ S3 ใช้เป็น prefix ของไฟล์แนบอยู่แล้ว
 """
 from sqlalchemy import (
-    Boolean, CheckConstraint, Column, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, func,
+    JSON, Boolean, CheckConstraint, Column, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
+
+# Postgres ได้ jsonb เหมือนที่ migration สร้าง ส่วน sqlite (เทสต์) ได้ JSON ธรรมดา
+# เขียน JSONB ตรง ๆ แบบ finance_model.py เดิมทำให้ create_all บน sqlite พังทั้ง metadata
+JSONish = JSON().with_variant(JSONB(), "postgresql")
 
 from database import Base
 
@@ -39,7 +43,7 @@ class FinPettyExpenseType(Base):
     atms_sku = Column(String(20))
     sort_order = Column(Integer, nullable=False, default=0, server_default="0")
     is_active = Column(Boolean, nullable=False, default=True, server_default="true")
-    spec = Column(JSONB, nullable=False, server_default="{}")
+    spec = Column(JSONish, nullable=False, server_default="{}")
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
     updated_by = Column(String(50))
 
@@ -70,9 +74,9 @@ class FinPettyClaim(Base):
     driver_name = Column(String(150))
     payee_name = Column(String(150))
     amount = Column(Numeric(12, 2), nullable=False, default=0, server_default="0")
-    detail = Column(JSONB, nullable=False, server_default="{}")
+    detail = Column(JSONish, nullable=False, server_default="{}")
     dd_no = Column(String(50))
-    dd_snapshot = Column(JSONB)
+    dd_snapshot = Column(JSONish)
     receipt_no = Column(String(50))
     wht_applicable = Column(Boolean, nullable=False, default=False, server_default="false")
     created_by = Column(String(50), nullable=False)
@@ -135,7 +139,7 @@ class FinPettyLog(Base):
     id = Column(Integer, primary_key=True)
     claim_id = Column(Integer, ForeignKey("fin_petty_claims.id", ondelete="CASCADE"), nullable=False, index=True)
     action = Column(String(30), nullable=False)
-    changes = Column(JSONB)
+    changes = Column(JSONish)
     remark = Column(Text)
     action_by = Column(String(50))
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
