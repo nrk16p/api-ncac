@@ -52,6 +52,23 @@ class TestFetch:
         petty_atms.fetch_dd("LBDD26090931")
         assert coll.last_filter == {"DD": "LBDD26090931"}
 
+    def test_pr_and_po_are_lifted_to_the_header(self, monkeypatch):
+        # DD ของยางจริง LBDD26090680 มี PO LBPO26090431 และ PR LBPR26090380
+        rows = [dict(ROWS[0], **{"PR": "LBPR26090380", "PO": "LBPO26090431"}), ROWS[1]]
+        _patch(monkeypatch, rows)
+        out = petty_atms.fetch_dd("LBDD26090680")
+        assert out["pr"] == "LBPR26090380" and out["po"] == "LBPO26090431"
+
+    def test_a_dd_without_a_po_does_not_break(self, monkeypatch):
+        # ค่าชั่งน้ำหนักไม่มี PR/PO
+        _patch(monkeypatch, ROWS)
+        out = petty_atms.fetch_dd("LBDD26090931")
+        assert out["pr"] is None and out["po"] is None
+
+    def test_pr_is_taken_from_whichever_line_has_it(self, monkeypatch):
+        _patch(monkeypatch, [ROWS[1], dict(ROWS[0], **{"PR": "LBPR26090380"})])
+        assert petty_atms.fetch_dd("LBDD26090680")["pr"] == "LBPR26090380"
+
     def test_header_comes_from_the_first_line(self, monkeypatch):
         _patch(monkeypatch, ROWS)
         out = petty_atms.fetch_dd("LBDD26090931")

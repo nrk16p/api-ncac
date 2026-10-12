@@ -1,23 +1,33 @@
 -- ประเภทการเบิกที่เหลือ 4 แบบ — แก้ต่อได้ที่หน้า master ไม่ต้องแก้โค้ด
+-- ถอดจากเอกสารจริงใน Reference_data/เงินสดย่อย + ข้อสั่งของผู้ใช้ 2026-10-12:
+--   ค่าทางด่วน = โครงเดียวกับค่าเดินทาง ต่างที่ต้องใช้ใบเสร็จตัวจริง
+--   ค่าซ่อมฉุกเฉิน = โครงเดียวกับค่าชั่งน้ำหนัก (กรอกเป็นรายการ + ใบรับรองแทนใบเสร็จ)
+--   ไม่มีเรื่องหักภาษี ณ ที่จ่ายในระบบนี้
 -- คอมเมนต์ -- spec:CODE / -- /spec มีไว้ให้ tests/finance/test_petty_types_spec.py อ่านของจริง
+
 UPDATE fin_petty_expense_types SET spec =
 -- spec:TOLL
 '{
   "item_based": false,
   "header_fields": [
     {"key":"event_date","label":"วันที่ใช้ทาง","type":"date","required":true},
+    {"key":"payee_name","label":"ผู้สำรองจ่าย","type":"employee","required":true},
     {"key":"truck","label":"รถ","type":"truck","required":true,"search":["code","plate"]},
     {"key":"driver","label":"พจส.","type":"employee","required":true},
-    {"key":"rate","label":"จำนวนเงิน","type":"money","required":true},
-    {"key":"receipt_no","label":"เลขที่ใบเสร็จ","type":"text","required":false}
+    {"key":"route_from","label":"ขึ้นด่าน","type":"text","required":true},
+    {"key":"route_to","label":"ลงด่าน","type":"text","required":true},
+    {"key":"receipt_no","label":"เลขที่ใบเสร็จ","type":"text","required":false},
+    {"key":"rate","label":"จำนวนเงิน","type":"money","required":true}
   ],
   "attachments": [
-    {"key":"receipt","label":"ใบเสร็จค่าทางด่วน","required":true,"max":10},
-    {"key":"transfer","label":"หลักฐานโอนเงิน","required":true,"max":3}
+    {"key":"receipt","label":"ใบเสร็จค่าทางด่วน (ตัวจริง)","required":true,"max":10,"note":"สแกนหรือถ่ายแนบที่นี่ แล้วส่งตัวจริงไปกับใบปะหน้า"},
+    {"key":"transfer","label":"หลักฐานโอนเงิน","required":true,"max":3},
+    {"key":"other","label":"อื่นๆ","required":false,"max":3}
   ],
   "rules": [
     {"when":"total >= 500","require_field":"dd_no","at":"BEFORE_SUBMIT_TO_ACCOUNTING"},
-    {"when":"always","require_attachment":"receipt","at":"BEFORE_APPROVE"}
+    {"when":"always","require_attachment":"receipt","at":"BEFORE_APPROVE"},
+    {"when":"always","require_attachment":"transfer","at":"BEFORE_APPROVE"}
   ],
   "duplicate_check": {
     "scope":"item",
@@ -34,21 +44,28 @@ UPDATE fin_petty_expense_types SET spec =
 '{
   "item_based": true,
   "item_label": "รายการปะ/เปลี่ยนยาง",
+  "header_fields": [
+    {"key":"payee_name","label":"จ่ายให้ (ร้าน/ผู้รับเงิน)","type":"text","required":true}
+  ],
   "item_fields": [
-    {"key":"event_date","label":"วันที่","type":"date","required":true},
+    {"key":"event_date","label":"วันที่ตามบิล","type":"date","required":true},
     {"key":"truck","label":"รถ","type":"truck","required":true,"search":["code","plate"]},
-    {"key":"ref_no","label":"เลขที่ใบเสร็จ/บิล","type":"text","required":true},
+    {"key":"truck_type","label":"ประเภทรถ","type":"select","options":["โม่ใหญ่","โม่เล็ก","12 ตัน","หัวลาก","อื่นๆ"],"required":true,"auto_from":"truck"},
+    {"key":"ref_no","label":"เลขที่บิล/ใบเสร็จร้าน","type":"text","required":true},
     {"key":"remark","label":"รายการที่ทำ","type":"text","required":true},
-    {"key":"rate","label":"จำนวนเงิน","type":"money","required":true}
+    {"key":"qty","label":"จำนวน (เส้น)","type":"number","required":true},
+    {"key":"rate","label":"ราคา/เส้น","type":"money","required":true}
   ],
   "attachments": [
-    {"key":"receipt","label":"ใบเสร็จ/บิลเงินสด","required":true,"max":10},
+    {"key":"receipt","label":"บิลเงินสด/ใบเสร็จร้าน","required":true,"max":10},
     {"key":"photo","label":"รูปยางที่เปลี่ยน","required":false,"max":10},
+    {"key":"id_card","label":"สำเนาบัตรประชาชนผู้รับเงิน","required":false,"max":3},
     {"key":"transfer","label":"หลักฐานโอนเงิน","required":true,"max":3}
   ],
   "rules": [
     {"when":"total >= 500","require_field":"dd_no","at":"BEFORE_SUBMIT_TO_ACCOUNTING"},
-    {"when":"always","require_attachment":"receipt","at":"BEFORE_APPROVE"}
+    {"when":"always","require_attachment":"receipt","at":"BEFORE_APPROVE"},
+    {"when":"always","require_attachment":"transfer","at":"BEFORE_APPROVE"}
   ],
   "duplicate_check": {
     "scope":"item",
@@ -56,7 +73,7 @@ UPDATE fin_petty_expense_types SET spec =
     "soft":{"keys":["event_date","truck"],"days":7,"action":"warn","override":"reason"}
   },
   "prints": ["PETTY_VOUCHER","DD"],
-  "atms": {"sku":"LB00009","product_group":"ค่าแรง","unit":"งาน","vat":0}
+  "atms": {"sku":"LB00009","product_group":"ค่าแรง-ระบบยาง","unit":"งาน","vat":0}
 }'
 -- /spec
 ::jsonb WHERE code = 'TIRE';
@@ -66,6 +83,11 @@ UPDATE fin_petty_expense_types SET spec =
 '{
   "item_based": true,
   "item_label": "รายการซ่อม",
+  "header_fields": [
+    {"key":"period_from","label":"ตั้งแต่วันที่","type":"date","required":true,"auto":"min(item.event_date)"},
+    {"key":"period_to","label":"ถึงวันที่","type":"date","required":true,"auto":"max(item.event_date)"},
+    {"key":"payee_name","label":"จ่ายให้","type":"text","required":true}
+  ],
   "item_fields": [
     {"key":"event_date","label":"วันที่ซ่อม","type":"date","required":true},
     {"key":"truck","label":"รถ","type":"truck","required":true,"search":["code","plate"]},
@@ -75,20 +97,21 @@ UPDATE fin_petty_expense_types SET spec =
   ],
   "attachments": [
     {"key":"receipt","label":"ใบเสร็จ/บิลเงินสด","required":true,"max":10},
-    {"key":"photo","label":"รูปหน้างาน","required":true,"max":10},
+    {"key":"photo","label":"รูปหน้างาน","required":false,"max":10},
+    {"key":"id_card","label":"สำเนาบัตรประชาชนผู้รับเงิน","required":false,"max":3},
     {"key":"transfer","label":"หลักฐานโอนเงิน","required":true,"max":3}
   ],
   "rules": [
     {"when":"total >= 500","require_field":"dd_no","at":"BEFORE_SUBMIT_TO_ACCOUNTING"},
     {"when":"always","require_attachment":"receipt","at":"BEFORE_APPROVE"},
-    {"when":"always","require_attachment":"photo","at":"BEFORE_APPROVE"}
+    {"when":"always","require_attachment":"transfer","at":"BEFORE_APPROVE"}
   ],
   "duplicate_check": {
     "scope":"item",
     "hard":{"keys":["ref_no","truck_code","truck_plate"],"days":365,"action":"block","override":false},
     "soft":{"keys":["event_date","truck"],"days":7,"action":"warn","override":"reason"}
   },
-  "prints": ["PETTY_VOUCHER","DD"]
+  "prints": ["PETTY_VOUCHER","RECEIPT_SUBSTITUTE","DD"]
 }'
 -- /spec
 ::jsonb WHERE code = 'REPAIR';
@@ -99,16 +122,26 @@ UPDATE fin_petty_expense_types SET spec =
   "item_based": false,
   "header_fields": [
     {"key":"event_date","label":"วันที่เดินทาง","type":"date","required":true},
-    {"key":"driver","label":"พจส.","type":"employee","required":true},
-    {"key":"remark","label":"เส้นทาง/เหตุผล","type":"text","required":true},
+    {"key":"payee_name","label":"ผู้เดินทาง (สำรองจ่าย)","type":"employee","required":true},
+    {"key":"dept","label":"แผนกผู้ขอ","type":"select","options":["จัดส่ง","ยานยนต์","จป.","HR","บัญชี","จัดซื้อ","เชื้อเพลิง"],"required":true},
+    {"key":"leg","label":"เที่ยว","type":"select","options":["ขาไป","ขากลับ"],"required":true},
+    {"key":"route_from","label":"จาก","type":"text","required":true},
+    {"key":"route_to","label":"ไป","type":"text","required":true},
+    {"key":"reason","label":"เหตุที่ใช้","type":"text","required":true},
+    {"key":"ref_no","label":"Trip Code / รหัสการเดินทาง","type":"text","required":false},
+    {"key":"truck","label":"รถที่เกี่ยวข้อง","type":"truck","required":false,"search":["code","plate"]},
     {"key":"rate","label":"จำนวนเงิน","type":"money","required":true}
   ],
   "attachments": [
-    {"key":"receipt","label":"ใบเสร็จ (ถ้ามี)","required":false,"max":10},
-    {"key":"transfer","label":"หลักฐานโอนเงิน","required":true,"max":3}
+    {"key":"request_form","label":"แบบฟอร์มขอใช้บริการที่อนุมัติแล้ว","required":true,"max":3},
+    {"key":"receipt","label":"ใบเสร็จ/E-Receipt หรือรูปมิเตอร์+บัตรคนขับ","required":true,"max":10},
+    {"key":"transfer","label":"หลักฐานโอนเงิน","required":true,"max":3},
+    {"key":"other","label":"อื่นๆ","required":false,"max":3}
   ],
   "rules": [
     {"when":"total >= 500","require_field":"dd_no","at":"BEFORE_SUBMIT_TO_ACCOUNTING"},
+    {"when":"always","require_attachment":"request_form","at":"BEFORE_APPROVE"},
+    {"when":"always","require_attachment":"receipt","at":"BEFORE_APPROVE"},
     {"when":"always","require_attachment":"transfer","at":"BEFORE_APPROVE"}
   ],
   "duplicate_check": {

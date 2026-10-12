@@ -47,7 +47,7 @@ def fetch_dd(dd_no: str, atms_spec: Optional[dict] = None) -> dict:
     """คืนรูปทรงเดียวกันเสมอ ไม่ว่าจะเจอ ไม่เจอ หรือ Mongo ล่ม — หน้าจอจึงไม่ต้องเดา"""
     spec = atms_spec or {}
     empty = {"found": False, "dd_no": dd_no, "received_date": None, "warehouse": None,
-             "supplier": None, "lines": [], "total": Decimal("0.00"),
+             "supplier": None, "pr": None, "po": None, "lines": [], "total": Decimal("0.00"),
              "unit": spec.get("unit"), "vat": spec.get("vat"), "error": None}
     number = (dd_no or "").strip()
     if not number:
@@ -74,9 +74,12 @@ def fetch_dd(dd_no: str, atms_spec: Optional[dict] = None) -> dict:
             "sub_remark": row.get("หมายเหตุย่อย"), "pr": row.get("PR"), "po": row.get("PO"),
         })
     first = rows[0]
+    # PR/PO อยู่ระดับเอกสาร แต่ ATMS ลงไว้รายบรรทัด และบางบรรทัดเว้นว่าง — หยิบค่าแรกที่มี
+    pick = lambda key: next((str(r.get(key)).strip() for r in rows if str(r.get(key) or "").strip()), None)
     return {
         "found": True, "dd_no": number, "received_date": first.get("วันที่"),
         "warehouse": first.get("คลังสินค้า"), "supplier": first.get("ซัพพลายเออร์"),
+        "pr": pick("PR"), "po": pick("PO"),
         "lines": lines, "total": total.quantize(_CENT),
         "unit": spec.get("unit"), "vat": spec.get("vat"), "error": None,
     }
