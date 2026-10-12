@@ -107,3 +107,43 @@ CREATE TABLE IF NOT EXISTS fin_petty_logs (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS ix_fin_petty_logs_claim ON fin_petty_logs (claim_id);
+
+INSERT INTO fin_petty_expense_types (code, name_th, atms_sku, sort_order, spec) VALUES
+('WEIGH', 'ค่าชั่งน้ำหนัก', 'LB00038', 1, '{
+  "item_based": true,
+  "item_label": "รายการชั่ง",
+  "header_fields": [
+    {"key":"period_from","label":"ตั้งแต่วันที่","type":"date","required":true,"auto":"min(item.event_date)"},
+    {"key":"period_to","label":"ถึงวันที่","type":"date","required":true,"auto":"max(item.event_date)"},
+    {"key":"payee_name","label":"จ่ายให้","type":"employee","required":true}
+  ],
+  "item_fields": [
+    {"key":"event_date","label":"วันที่ชั่ง","type":"date","required":true},
+    {"key":"truck","label":"รถ","type":"truck","required":true,"search":["code","plate"]},
+    {"key":"truck_type","label":"ประเภทรถ","type":"select","options":["โม่ใหญ่","โม่เล็ก"],"required":true,"auto_from":"truck"},
+    {"key":"ref_no","label":"เลขที่บัตรชั่ง","type":"text","required":true},
+    {"key":"rate","label":"ราคา/ครั้ง","type":"money","required":true}
+  ],
+  "attachments": [
+    {"key":"weigh_slip","label":"ใบชั่งน้ำหนัก (สำเนา)","required":true,"max":10},
+    {"key":"transfer","label":"หลักฐานโอนเงิน","required":true,"max":3},
+    {"key":"other","label":"อื่นๆ","required":false,"max":3}
+  ],
+  "rules": [
+    {"when":"total >= 500","require_field":"dd_no","at":"BEFORE_SUBMIT_TO_ACCOUNTING"},
+    {"when":"always","require_attachment":"weigh_slip","at":"BEFORE_APPROVE"},
+    {"when":"always","require_attachment":"transfer","at":"BEFORE_APPROVE"}
+  ],
+  "duplicate_check": {
+    "scope": "item",
+    "hard": {"keys":["ref_no","truck_code","truck_plate"],"days":365,"action":"block","override":false},
+    "soft": {"keys":["event_date","truck"],"days":7,"action":"warn","override":"reason"}
+  },
+  "prints": ["PETTY_VOUCHER","RECEIPT_SUBSTITUTE","DD"],
+  "atms": {"sku":"LB00038","product_group":"ค่าแรง","unit":"งาน","vat":0}
+}'::jsonb),
+('TOLL',   'ค่าทางด่วน',      NULL,       2, '{}'::jsonb),
+('TIRE',   'ค่าปะ-เปลี่ยนยาง', 'LB00009',  3, '{}'::jsonb),
+('REPAIR', 'ค่าซ่อมฉุกเฉิน',   NULL,       4, '{}'::jsonb),
+('TRAVEL', 'ค่าเดินทางคนขับ',  NULL,       5, '{}'::jsonb)
+ON CONFLICT (code) DO NOTHING;
