@@ -34,6 +34,7 @@ UPDATE fin_petty_expense_types SET spec =
     "hard":{"keys":["ref_no","truck_code","truck_plate"],"days":365,"action":"block","override":false},
     "soft":{"keys":["event_date","truck"],"days":7,"action":"warn","override":"reason"}
   },
+  "print": {"unit":"เที่ยว"},
   "prints": ["PETTY_VOUCHER","DD"]
 }'
 -- /spec
@@ -72,6 +73,7 @@ UPDATE fin_petty_expense_types SET spec =
     "hard":{"keys":["ref_no","truck_code","truck_plate"],"days":365,"action":"block","override":false},
     "soft":{"keys":["event_date","truck"],"days":7,"action":"warn","override":"reason"}
   },
+  "print": {"unit":"เส้น"},
   "prints": ["PETTY_VOUCHER","DD"],
   "atms": {"sku":"LB00009","product_group":"ค่าแรง-ระบบยาง","unit":"งาน","vat":0}
 }'
@@ -111,6 +113,7 @@ UPDATE fin_petty_expense_types SET spec =
     "hard":{"keys":["ref_no","truck_code","truck_plate"],"days":365,"action":"block","override":false},
     "soft":{"keys":["event_date","truck"],"days":7,"action":"warn","override":"reason"}
   },
+  "print": {"unit":"คัน"},
   "prints": ["PETTY_VOUCHER","RECEIPT_SUBSTITUTE","DD"]
 }'
 -- /spec
@@ -149,6 +152,7 @@ UPDATE fin_petty_expense_types SET spec =
     "hard":{"keys":["ref_no","truck_code","truck_plate"],"days":365,"action":"block","override":false},
     "soft":{"keys":["event_date","driver"],"days":7,"action":"warn","override":"reason"}
   },
+  "print": {"unit":"เที่ยว"},
   "prints": ["PETTY_VOUCHER","RECEIPT_SUBSTITUTE","DD"]
 }'
 -- /spec

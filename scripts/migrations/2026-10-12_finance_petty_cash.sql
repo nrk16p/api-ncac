@@ -142,6 +142,7 @@ INSERT INTO fin_petty_expense_types (code, name_th, atms_sku, sort_order, spec) 
     "hard": {"keys":["ref_no","truck_code","truck_plate"],"days":365,"action":"block","override":false},
     "soft": {"keys":["event_date","truck"],"days":7,"action":"warn","override":"reason"}
   },
+  "print": {"unit":"คัน"},
   "prints": ["PETTY_VOUCHER","RECEIPT_SUBSTITUTE","DD"],
   "atms": {"sku":"LB00038","product_group":"ค่าแรง","unit":"งาน","vat":0}
 }'

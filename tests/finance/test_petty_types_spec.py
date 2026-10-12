@@ -135,3 +135,21 @@ class TestEveryTypeWorksWithTheSameGate:
         from schemas.finance_petty_schema import ExpenseTypeUpdate
         for code, spec in specs.items():
             assert ExpenseTypeUpdate(name_th=code, spec=spec).spec is not None
+
+
+class TestPrintUnit:
+    """หน่วยนับบนใบสำคัญจ่าย — ใบจริงนับ "คัน" (ค่าชั่ง) / "เส้น" (ยาง) ไม่ใช่หน่วย SKU "งาน" ของ ATMS
+    (เจอตอนพิมพ์จริง 2026-10-13: ใบชั่งขึ้น "8 งาน")"""
+
+    def test_tire_counts_in_sen(self, specs):
+        assert specs["TIRE"]["print"]["unit"] == "เส้น"
+
+    def test_repair_counts_in_khan(self, specs):
+        assert specs["REPAIR"]["print"]["unit"] == "คัน"
+
+    def test_weigh_counts_in_khan(self):
+        import json, pathlib
+        text = (pathlib.Path(__file__).resolve().parents[2] /
+                "scripts/migrations/2026-10-12_finance_petty_cash.sql").read_text(encoding="utf-8")
+        body = text.split("-- spec:WEIGH")[1].split("-- /spec")[0].strip().strip("'")
+        assert json.loads(body)["print"]["unit"] == "คัน"
