@@ -1,0 +1,141 @@
+"""Finance — เบิกเงินสดย่อย. Tables are created by scripts/migrations/2026-10-12_finance_petty_cash.sql
+(and create_all, which is a no-op once they exist). Keep both in sync.
+
+petty ไม่ผูกกับ form_submissions — form_id เป็นสตริงที่ S3 ใช้เป็น prefix ของไฟล์แนบอยู่แล้ว
+"""
+from sqlalchemy import (
+    Boolean, CheckConstraint, Column, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, func,
+)
+from sqlalchemy.dialects.postgresql import JSONB
+
+from database import Base
+
+PETTY_STATUSES = (
+    "PENDING_APPROVAL", "RETURNED", "APPROVED", "TRANSFERRED", "AWAITING_REVIEW", "SENT_BACK", "CLOSED",
+)
+
+
+class FinPettyFund(Base):
+    __tablename__ = "fin_petty_funds"
+
+    id = Column(Integer, primary_key=True)
+    branch_code = Column(String(4), nullable=False)
+    division_code = Column(String(8), nullable=False)
+    holder_employee_id = Column(String(50), nullable=False)
+    fund_limit = Column(Numeric(12, 2))
+    is_active = Column(Boolean, nullable=False, default=True, server_default="true")
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    updated_by = Column(String(50))
+
+    __table_args__ = (Index("ix_fin_petty_funds_holder", "holder_employee_id"),)
+
+
+class FinPettyExpenseType(Base):
+    __tablename__ = "fin_petty_expense_types"
+
+    code = Column(String(20), primary_key=True)
+    name_th = Column(String(120), nullable=False)
+    atms_sku = Column(String(20))
+    sort_order = Column(Integer, nullable=False, default=0, server_default="0")
+    is_active = Column(Boolean, nullable=False, default=True, server_default="true")
+    spec = Column(JSONB, nullable=False, server_default="{}")
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    updated_by = Column(String(50))
+
+
+class FinPettyBatch(Base):
+    __tablename__ = "fin_petty_batches"
+
+    id = Column(Integer, primary_key=True)
+    fund_id = Column(Integer, ForeignKey("fin_petty_funds.id"), nullable=False)
+    batch_no = Column(String(30), nullable=False, unique=True)
+    total_amount = Column(Numeric(12, 2), nullable=False, default=0, server_default="0")
+    remark = Column(Text)
+    closed_by = Column(String(50))
+    closed_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class FinPettyClaim(Base):
+    __tablename__ = "fin_petty_claims"
+
+    id = Column(Integer, primary_key=True)
+    form_id = Column(String(80), nullable=False, unique=True)
+    fund_id = Column(Integer, ForeignKey("fin_petty_funds.id"), nullable=False)
+    expense_type = Column(String(20), ForeignKey("fin_petty_expense_types.code"), nullable=False)
+    expense_date = Column(Date, nullable=False)
+    period_from = Column(Date)
+    period_to = Column(Date)
+    driver_employee_id = Column(String(50))
+    driver_name = Column(String(150))
+    payee_name = Column(String(150))
+    amount = Column(Numeric(12, 2), nullable=False, default=0, server_default="0")
+    detail = Column(JSONB, nullable=False, server_default="{}")
+    dd_no = Column(String(50))
+    dd_snapshot = Column(JSONB)
+    receipt_no = Column(String(50))
+    wht_applicable = Column(Boolean, nullable=False, default=False, server_default="false")
+    created_by = Column(String(50), nullable=False)
+    source = Column(String(10), nullable=False, default="WEB", server_default="'WEB'")
+    dup_override_reason = Column(Text)
+    return_reason = Column(Text)
+    approved_by = Column(String(50))
+    approved_at = Column(DateTime(timezone=True))
+    transfer_date = Column(Date)
+    transfer_slip_at = Column(DateTime(timezone=True))
+    submitted_to_acc_at = Column(DateTime(timezone=True))
+    review_remark = Column(Text)
+    reviewed_by = Column(String(50))
+    reviewed_at = Column(DateTime(timezone=True))
+    batch_id = Column(Integer, ForeignKey("fin_petty_batches.id"))
+    status = Column(String(30), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('PENDING_APPROVAL','RETURNED','APPROVED','TRANSFERRED',"
+            "'AWAITING_REVIEW','SENT_BACK','CLOSED')",
+            name="ck_fin_petty_claims_status",
+        ),
+        CheckConstraint("amount >= 0", name="ck_fin_petty_claims_amount"),
+        Index("ix_fin_petty_claims_fund_status", "fund_id", "status"),
+        Index("ix_fin_petty_claims_status", "status"),
+        Index("ix_fin_petty_claims_created_by", "created_by"),
+    )
+
+
+class FinPettyClaimItem(Base):
+    __tablename__ = "fin_petty_claim_items"
+
+    id = Column(Integer, primary_key=True)
+    claim_id = Column(Integer, ForeignKey("fin_petty_claims.id", ondelete="CASCADE"), nullable=False)
+    line_no = Column(Integer, nullable=False)
+    event_date = Column(Date, nullable=False)
+    truck_code = Column(String(20))
+    truck_plate = Column(String(20))
+    truck_type = Column(String(30))
+    ref_no = Column(String(50))
+    qty = Column(Numeric(10, 2), nullable=False, default=1, server_default="1")
+    rate = Column(Numeric(12, 2), nullable=False)
+    amount = Column(Numeric(12, 2), nullable=False)
+    remark = Column(String(255))
+
+    __table_args__ = (
+        Index("ix_fin_petty_items_claim", "claim_id"),
+        Index("ix_fin_petty_items_date_code", "event_date", "truck_code"),
+        Index("ix_fin_petty_items_date_plate", "event_date", "truck_plate"),
+        Index("ix_fin_petty_items_hard_dup", "ref_no", "truck_code", "truck_plate"),
+    )
+
+
+class FinPettyLog(Base):
+    __tablename__ = "fin_petty_logs"
+
+    id = Column(Integer, primary_key=True)
+    claim_id = Column(Integer, ForeignKey("fin_petty_claims.id", ondelete="CASCADE"), nullable=False, index=True)
+    action = Column(String(30), nullable=False)
+    changes = Column(JSONB)
+    remark = Column(Text)
+    action_by = Column(String(50))
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
