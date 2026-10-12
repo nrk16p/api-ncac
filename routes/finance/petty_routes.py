@@ -90,6 +90,9 @@ def _claim_dict(c, items) -> dict:
         "approved_by": c.approved_by, "approved_at": c.approved_at.isoformat() if c.approved_at else None,
         "transfer_date": str(c.transfer_date) if c.transfer_date else None,
         "review_remark": c.review_remark, "return_reason": c.return_reason,
+        "reviewed_by": c.reviewed_by,
+        "reviewed_at": c.reviewed_at.isoformat() if c.reviewed_at else None,
+        "submitted_to_acc_at": c.submitted_to_acc_at.isoformat() if c.submitted_to_acc_at else None,
         "dup_override_reason": c.dup_override_reason, "batch_id": c.batch_id,
         "items": [_item_dict(i) for i in items],
     }
