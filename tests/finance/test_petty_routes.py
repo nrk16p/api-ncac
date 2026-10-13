@@ -305,3 +305,24 @@ class TestWeighTicketSequenceInTheMonth:
         now = repo.create_claim(db_session, claim_payload_for(fund),
                                 [dict(weigh_items[0], event_date=date(2026, 9, 17), ref_no="A2")], actor="55555")
         assert R.get_claim(now.form_id, db=db_session)["items"][0]["month_seq"] == 1
+
+
+class TestCreateClaimRejections:
+    def test_an_unknown_expense_type_is_404_not_500(self, db_session, fund, claim_payload, weigh_items):
+        from schemas.finance_petty_schema import ClaimIn
+        body = dict(claim_payload(), expense_type="NOPE", items=weigh_items, created_by="55555")
+        with pytest.raises(HTTPException) as exc:
+            R.create_claim(ClaimIn(**body), db_session)
+        assert exc.value.status_code == 404
+        assert "ประเภท" in exc.value.detail
+
+    def test_a_future_dated_row_is_422_and_names_the_row(self, db_session, fund, weigh_type, claim_payload,
+                                                           weigh_items):
+        from schemas.finance_petty_schema import ClaimIn
+        items = [dict(weigh_items[0], event_date="2099-01-01")] + weigh_items[1:]
+        body = dict(claim_payload(), items=items, created_by="55555")
+        with pytest.raises(HTTPException) as exc:
+            R.create_claim(ClaimIn(**body), db_session)
+        assert exc.value.status_code == 422
+        assert exc.value.detail["missing"][0]["key"] == "event_date"
+        assert exc.value.detail["missing"][0]["line_no"] == 1

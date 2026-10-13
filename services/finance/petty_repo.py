@@ -329,7 +329,12 @@ def find_prior_items(db: Session, *, expense_type: str, keys: list[dict], days: 
     plates = {L.normalize_plate(k.get("truck_plate")) for k in keys}
     refs = {str(k.get("ref_no") or "").strip() for k in keys if k.get("ref_no")}
 
-    rows = (db.query(FinPettyClaimItem, FinPettyClaim.form_id, FinPettyClaim.payee_name, FinPettyClaim.amount)
+    # ค่าว่างไม่ใช่คีย์: รายการไม่มีรถ (แท็กซี่/ทางด่วน) ต้องไม่ดึงรายการไม่มีรถของคนอื่นมาทั้งคลัง
+    codes.discard(""); plates.discard("")
+    drivers = {" ".join(str(k.get("driver_name") or "").split()).lower() for k in keys} - {""}
+
+    rows = (db.query(FinPettyClaimItem, FinPettyClaim.form_id, FinPettyClaim.payee_name, FinPettyClaim.amount,
+                     FinPettyClaim.driver_name)
             .join(FinPettyClaim, FinPettyClaim.id == FinPettyClaimItem.claim_id)
             .filter(FinPettyClaim.expense_type == expense_type,
                     FinPettyClaim.status != L.RETURNED,
@@ -340,14 +345,17 @@ def find_prior_items(db: Session, *, expense_type: str, keys: list[dict], days: 
             .all())
 
     out = []
-    for item, form_id, payee_name, amount in rows:
+    for item, form_id, payee_name, amount, claim_driver in rows:
+        driver = item.driver_name or claim_driver  # แถวไม่ระบุ พจส. = คนขับของใบ (ค่าเดินทาง)
         same_truck = (L.normalize_code(item.truck_code) in codes
                       or L.normalize_plate(item.truck_plate) in plates)
         same_ref = (item.ref_no or "").strip() in refs
-        if not same_truck and not same_ref:
+        same_driver = " ".join(str(driver or "").split()).lower() in drivers
+        if not same_truck and not same_ref and not same_driver:
             continue
         out.append({"event_date": item.event_date, "truck_code": item.truck_code,
                     "truck_plate": item.truck_plate, "ref_no": item.ref_no, "form_id": form_id,
+                    "driver_name": driver,
                     "payee_name": payee_name, "amount": float(amount) if amount is not None else None})
     return out
 

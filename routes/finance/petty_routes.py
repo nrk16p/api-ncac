@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from schemas.finance_petty_schema import ExpenseTypeUpdate, FundCreate, FundUpdate
+from services.finance import petty_logic as L
 from services.finance import petty_repo as repo
 
 logger = logging.getLogger(__name__)
@@ -108,8 +109,10 @@ def _claim_dict(c, items, names: dict | None = None) -> dict:
 def _reject_incomplete_rows(db: Session, expense_type: str, items: list[dict]) -> None:
     """ช่องที่ spec บังคับ (เลขที่บัตรชั่ง รถ ฯลฯ) ต้องครบตั้งแต่บันทึก ไม่ปล่อยให้ค้างถึงด่านอนุมัติ"""
     type_row = repo.get_expense_type(db, expense_type)
-    spec = (type_row.spec if type_row else None) or {}
-    missing = validate.missing_item_fields(items, spec)
+    if type_row is None:
+        raise HTTPException(status_code=404, detail="ไม่พบประเภทการเบิกนี้ หรือถูกปิดใช้งานแล้ว")
+    spec = type_row.spec or {}
+    missing = validate.missing_item_fields(items, spec) + validate.future_dated_rows(items, L.bkk_today())
     if missing:
         raise HTTPException(status_code=422, detail={"error": "กรอกรายการไม่ครบ", "missing": missing})
 
@@ -182,7 +185,6 @@ def get_claim(form_id: str, db: Session = Depends(get_db)):
 from datetime import datetime, timezone  # noqa: E402
 
 from schemas.finance_petty_schema import ApproveIn, ReturnIn, ReviewIn, SubmitAccIn, TransferIn  # noqa: E402
-from services.finance import petty_logic as L  # noqa: E402
 from services.finance import petty_mail as mail  # noqa: E402
 from services.finance import petty_validate as validate  # noqa: E402
 
@@ -195,7 +197,7 @@ def _gate(db: Session, claim, items, stage: str, attachments: dict) -> dict:
     item_dicts = [{"event_date": i.event_date, "truck_code": i.truck_code,
                    "truck_plate": i.truck_plate, "truck_type": i.truck_type,
                    "ref_no": i.ref_no, "rate": i.rate, "qty": i.qty,
-                   "remark": i.remark} for i in items]
+                   "remark": i.remark, "driver_name": i.driver_name or claim.driver_name} for i in items]
     result = validate.validate_claim(
         {"amount": claim.amount, "dd_no": claim.dd_no, "receipt_no": claim.receipt_no,
          "expense_type": claim.expense_type, "detail": claim.detail or {},

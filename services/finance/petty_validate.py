@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 from typing import Iterable, Mapping
 
@@ -84,6 +85,22 @@ def missing_item_fields(items: list[Mapping], spec: Mapping) -> list[dict]:
     return missing
 
 
+def future_dated_rows(items: list[Mapping], today: date) -> list[dict]:
+    """แถวที่วันที่เป็นอนาคต — ใบชั่ง/ใบเสร็จของวันพรุ่งนี้ไม่มีจริง รับไว้ก็ไปพังด่านซ้ำกับใบสรุปรายเดือน"""
+    out: list[dict] = []
+    for index, item in enumerate(items, start=1):
+        raw = item.get("event_date")
+        if isinstance(raw, str):
+            try:
+                raw = date.fromisoformat(raw[:10])
+            except ValueError:
+                continue
+        if isinstance(raw, date) and raw > today:
+            out.append({"kind": "item_field", "key": "event_date", "line_no": index,
+                        "label": f"วันที่เป็นอนาคต (แถวที่ {index})"})
+    return out
+
+
 def validate_claim(claim: Mapping, items: list[Mapping], spec: Mapping, stage: str,
                    attachments: Mapping[str, int]) -> dict:
     """คืน {"missing": [...], "warnings": [...]} — missing ไม่ว่าง = ห้ามผ่านด่านนี้"""
@@ -113,14 +130,35 @@ def validate_claim(claim: Mapping, items: list[Mapping], spec: Mapping, stage: s
     return {"missing": _dedupe(missing), "warnings": []}
 
 
-def _soft_key(item: Mapping) -> tuple[str, str]:
-    return (L.normalize_code(item.get("truck_code")), L.normalize_plate(item.get("truck_plate")))
+def soft_keys_of(spec: Mapping) -> list[str]:
+    """คีย์ด่านอ่อนตาม spec (ไม่นับ event_date ที่เป็นเงื่อนไขช่วงวัน) — ไม่ตั้งไว้ = เทียบด้วยรถ"""
+    keys = ((spec.get("duplicate_check") or {}).get("soft") or {}).get("keys") or ["event_date", "truck"]
+    return [k for k in keys if k != "event_date"] or ["truck"]
+
+
+def _soft_key(item: Mapping, keys: list[str]) -> tuple | None:
+    """คีย์เทียบด่านอ่อนของแถว · ทุกส่วนว่าง = ไม่มีคีย์ (รายการไม่มีรถ/ไม่มีคนขับ ห้ามจับคู่กันเองว่า 'ว่างเท่ากับว่าง')"""
+    parts: list[str] = []
+    for key in keys:
+        if key == "truck":
+            parts += [L.normalize_code(item.get("truck_code")), L.normalize_plate(item.get("truck_plate"))]
+        elif key == "driver":
+            parts.append(" ".join(str(item.get("driver_name") or "").split()).lower())
+        else:
+            parts.append(str(item.get(key) or "").strip().lower())
+    return tuple(parts) if any(parts) else None
+
+
+def _soft_message(keys: list[str], days: int) -> str:
+    who = "คนขับคนนี้" if keys == ["driver"] else "รถคันนี้"
+    return f"{who}มีรายการใน {days} วันที่ผ่านมา"
 
 
 def split_duplicates(items: Iterable[Mapping], prior: Iterable[Mapping], spec: Mapping) -> dict:
     """เทียบรายการในใบนี้กับใบอื่น *และกับกันเอง* — ของจริงมีรถซ้ำในใบเดียวมาแล้ว"""
     cfg = spec.get("duplicate_check") or {}
     soft_days = int((cfg.get("soft") or {}).get("days", 7))
+    keys = soft_keys_of(spec)
     hard: list[dict] = []
     soft: list[dict] = []
     pool = list(prior)
@@ -137,16 +175,16 @@ def split_duplicates(items: Iterable[Mapping], prior: Iterable[Mapping], spec: M
                          "payee_name": matched_hard.get("payee_name"), "amount": matched_hard.get("amount"),
                          "message": ("เลขอ้างอิงนี้ของรถคันนี้เบิกไปแล้ว"
                                      if (item.get("truck_code") or item.get("truck_plate")) else "เลขอ้างอิงนี้เบิกไปแล้ว")})
-        else:
+        elif (mine := _soft_key(item, keys)) is not None:
             for other in pool:
-                if _soft_key(other) != _soft_key(item):
+                if _soft_key(other, keys) != mine:
                     continue
                 here, there = item.get("event_date"), other.get("event_date")
                 if here and there and abs((here - there).days) <= soft_days:
                     soft.append({"line_no": index, "form_id": other.get("form_id"),
                                  "event_date": str(there), "truck_code": item.get("truck_code"),
                                  "payee_name": other.get("payee_name"), "amount": other.get("amount"),
-                                 "message": f"รถคันนี้มีรายการใน {soft_days} วันที่ผ่านมา"})
+                                 "message": _soft_message(keys, soft_days)})
                     break
         pool.append(dict(item, form_id=item.get("form_id")))
 

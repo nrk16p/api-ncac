@@ -270,3 +270,85 @@ class TestHardDuplicateWordingFitsTheType:
     def test_without_a_truck(self):
         out = V.split_duplicates([{"ref_no": "TRIP-1"}], [{"ref_no": "TRIP-1", "form_id": "X"}], self.SPEC)
         assert out["hard"][0]["message"] == "เลขอ้างอิงนี้เบิกไปแล้ว"
+
+
+class TestFutureDatedRows:
+    TODAY = date(2026, 10, 13)
+
+    def test_a_row_dated_tomorrow_is_caught_and_named(self):
+        rows = [dict(ITEM, event_date=date(2026, 10, 14))]
+        out = V.future_dated_rows(rows, self.TODAY)
+        assert out == [{"kind": "item_field", "key": "event_date", "line_no": 1,
+                        "label": "วันที่เป็นอนาคต (แถวที่ 1)"}]
+
+    def test_today_and_the_past_pass(self):
+        rows = [dict(ITEM, event_date=self.TODAY), dict(ITEM, event_date=date(2026, 9, 1))]
+        assert V.future_dated_rows(rows, self.TODAY) == []
+
+    def test_an_iso_string_is_understood_too(self):
+        assert V.future_dated_rows([dict(ITEM, event_date="2027-01-15")], self.TODAY)[0]["line_no"] == 1
+
+    def test_a_missing_date_is_someone_elses_problem(self):
+        assert V.future_dated_rows([dict(ITEM, event_date=None)], self.TODAY) == []
+
+
+TRAVEL_SPEC = {"duplicate_check": {"hard": {"keys": ["ref_no", "truck_code", "truck_plate"], "days": 365},
+                                   "soft": {"keys": ["event_date", "driver"], "days": 7}}}
+
+
+class TestSoftKeyFollowsTheSpec:
+    """ด่านอ่อนต้องเทียบด้วยคีย์ที่ spec บอก — รายการที่ไม่มีรถ (แท็กซี่ ทางด่วน ประเภทใหม่) ห้ามจับคู่กันเองเพราะ 'รถว่างเท่ากับรถว่าง'"""
+
+    def test_two_truckless_rows_on_the_same_day_are_not_a_pair(self):
+        rows = [{"event_date": date(2026, 9, 5), "ref_no": "A", "qty": 1, "rate": 75},
+                {"event_date": date(2026, 9, 5), "ref_no": "B", "qty": 1, "rate": 75}]
+        assert V.split_duplicates(rows, [], WEIGH_SPEC)["soft"] == []
+
+    def test_a_truckless_row_does_not_match_a_truckless_prior(self):
+        prior = [{"event_date": date(2026, 9, 5), "ref_no": "A", "form_id": "LB-B02-2610-029"}]
+        rows = [{"event_date": date(2026, 9, 5), "ref_no": "B"}]
+        assert V.split_duplicates(rows, prior, WEIGH_SPEC)["soft"] == []
+
+    def test_same_driver_within_a_week_is_soft_for_a_driver_keyed_type(self):
+        prior = [{"event_date": date(2026, 9, 17), "ref_no": "T1", "driver_name": "สมชาย ใจดี", "form_id": "x"}]
+        rows = [{"event_date": date(2026, 9, 18), "ref_no": "T2", "driver_name": "สมชาย  ใจดี"}]
+        out = V.split_duplicates(rows, prior, TRAVEL_SPEC)
+        assert len(out["soft"]) == 1 and out["soft"][0]["form_id"] == "x"
+        assert "คนขับ" in out["soft"][0]["message"]
+
+    def test_a_different_driver_is_not(self):
+        prior = [{"event_date": date(2026, 9, 17), "ref_no": "T1", "driver_name": "สมชาย ใจดี", "form_id": "x"}]
+        rows = [{"event_date": date(2026, 9, 18), "ref_no": "T2", "driver_name": "วิชัย แก้วมณี"}]
+        assert V.split_duplicates(rows, prior, TRAVEL_SPEC)["soft"] == []
+
+    def test_no_driver_on_either_side_is_not(self):
+        prior = [{"event_date": date(2026, 9, 17), "ref_no": "T1", "form_id": "x"}]
+        rows = [{"event_date": date(2026, 9, 18), "ref_no": "T2"}]
+        assert V.split_duplicates(rows, prior, TRAVEL_SPEC)["soft"] == []
+
+    def test_a_spec_without_duplicate_check_still_keys_on_the_truck(self):
+        rows = [ITEM, dict(ITEM, ref_no="000056")]
+        assert len(V.split_duplicates(rows, [], {})["soft"]) == 1
+
+
+class TestFindPriorItemsKeys:
+    def test_truckless_rows_do_not_pull_other_truckless_rows(self, db_session, fund, claim_payload,
+                                                              seq_stub, frozen_bkk):
+        from services.finance import petty_repo as repo
+        bare = [{"event_date": date(2026, 9, 5), "ref_no": "A", "qty": 1, "rate": 75}]
+        repo.create_claim(db_session, claim_payload(), bare, actor="55555")
+        prior = repo.find_prior_items(db_session, expense_type="WEIGH",
+                                      keys=[{"event_date": date(2026, 9, 5), "ref_no": "B"}],
+                                      days=7, exclude_claim_id=None)
+        assert prior == []
+
+    def test_same_driver_is_pulled_even_without_a_truck(self, db_session, fund, claim_payload,
+                                                        seq_stub, frozen_bkk):
+        from services.finance import petty_repo as repo
+        bare = [{"event_date": date(2026, 9, 5), "ref_no": "A", "qty": 1, "rate": 75}]
+        first = repo.create_claim(db_session, claim_payload(driver_name="สมชาย ใจดี"), bare, actor="55555")
+        prior = repo.find_prior_items(db_session, expense_type="WEIGH",
+                                      keys=[{"event_date": date(2026, 9, 6), "ref_no": "B", "driver_name": "สมชาย  ใจดี"}],
+                                      days=7, exclude_claim_id=None)
+        assert [p["form_id"] for p in prior] == [first.form_id]
+        assert prior[0]["driver_name"] == "สมชาย ใจดี"

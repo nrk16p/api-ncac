@@ -5,7 +5,8 @@
 from __future__ import annotations
 
 import re
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Iterable, Mapping
 
@@ -16,6 +17,11 @@ TRANSFERRED = "TRANSFERRED"
 AWAITING_REVIEW = "AWAITING_REVIEW"
 SENT_BACK = "SENT_BACK"
 CLOSED = "CLOSED"
+
+def bkk_today() -> date:
+    """วันนี้ตามเวลาไทย — ใช้ตัดสินว่าวันที่ในรายการเป็นอนาคตหรือไม่ (ไม่ใช้ UTC ที่ช้ากว่า 7 ชม.)"""
+    return datetime.now(ZoneInfo("Asia/Bangkok")).date()
+
 
 STATUSES = (PENDING_APPROVAL, RETURNED, APPROVED, TRANSFERRED, AWAITING_REVIEW, SENT_BACK, CLOSED)
 
