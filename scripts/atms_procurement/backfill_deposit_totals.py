@@ -35,6 +35,13 @@ urllib3.disable_warnings()
 from pipeline_atms_procurement import BASE, get_session, parse_deposit_totals  # noqa: E402
 
 
+def parse_amount(v):
+    try:
+        return float(str(v or "0").replace(",", "").strip() or 0)
+    except ValueError:
+        return 0.0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--write", action="store_true", help="เขียนลงฐานจริง (ไม่ใส่ = ดูอย่างเดียว)")
@@ -57,6 +64,7 @@ def main():
         q["deposit_code"] = {"$in": a.dd}
     if not a.refresh:
         q["amount_net"] = {"$exists": False}
+        q["totals_missing"] = {"$ne": True}        # ใบเปล่าที่เปิดดูแล้วไม่มียอด — ไม่ต้องดึงซ้ำ
     docs = list(col.find(q, {"_id": 0, "deposit_id": 1, "deposit_code": 1,
                              "amount": 1, "received_at": 1, "purchase_order": 1}))
     # received_at เก็บเป็น "DD/MM/YYYY HH:MM" (สตริง) — กรองในเครื่องด้วยคีย์ปี/เดือน/วัน
@@ -75,7 +83,7 @@ def main():
         return
 
     s = get_session()
-    ops, done, errors, changed, same = [], 0, 0, 0, 0
+    ops, done, errors, changed, same, blanks = [], 0, 0, 0, 0, 0
     t0 = time.time()
 
     def work(d):
@@ -94,8 +102,17 @@ def main():
             d, totals = fut.result()
             done += 1
             if not totals:
-                errors += 1
-                print(f"   ✗ {d.get('deposit_code')} อ่านยอดไม่ได้")
+                # ใบเปล่ายอด 0.00 ไม่มีตารางรายการในหน้า DD เลย (386 ใบจาก 388 ที่อ่านไม่ได้
+                # ตอนเติมรอบแรก) — ลงเครื่องหมายว่า "เปิดดูแล้วไม่มียอด" ไม่ปั้นตัวเลขขึ้นมาเอง
+                # เพื่อให้เลิกไล่ดึงซ้ำทุกรอบ · ใบที่ยอดไม่เป็น 0 ถือว่ายิงพลาด ปล่อยให้ลองใหม่
+                if parse_amount(d.get("amount")) == 0:
+                    blanks += 1
+                    ops.append(UpdateOne({"deposit_id": d["deposit_id"]},
+                                         {"$set": {"totals_missing": True,
+                                                   "totals_at": datetime.utcnow()}}))
+                else:
+                    errors += 1
+                    print(f"   ✗ {d.get('deposit_code')} อ่านยอดไม่ได้ (ยอด {d.get('amount')})")
                 continue
             raw = str(d.get("amount") or "").replace(",", "")
             net = totals["amount_net"].replace(",", "")
@@ -117,8 +134,8 @@ def main():
 
     if a.write and ops:
         col.bulk_write(ops, ordered=False)
-    print(f"\nอ่านได้ {done - errors:,} ใบ · ยอดต่างจาก amount {changed:,} ใบ · เท่ากัน {same:,} ใบ"
-          f" · อ่านไม่ได้ {errors:,} ใบ · {time.time() - t0:.0f}s")
+    print(f"\nอ่านได้ {done - errors - blanks:,} ใบ · ยอดต่างจาก amount {changed:,} ใบ · เท่ากัน {same:,} ใบ"
+          f" · ใบเปล่ายอด 0 {blanks:,} ใบ · อ่านไม่ได้ {errors:,} ใบ · {time.time() - t0:.0f}s")
     print("เขียนลงฐานแล้ว" if a.write else "ยังไม่เขียน — ใส่ --write เมื่อพร้อม")
 
 

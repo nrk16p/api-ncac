@@ -29,7 +29,7 @@ from datetime import datetime, timedelta
 import requests
 import urllib3
 from bs4 import BeautifulSoup
-from pymongo import MongoClient, UpdateOne, ReplaceOne
+from pymongo import MongoClient, UpdateOne
 
 urllib3.disable_warnings()
 
@@ -317,7 +317,11 @@ def scrape_deposit(session, from_date, db, collect_ids=None):
                     collect_ids.append(dep)
         if not rows:
             break
-        ops = [ReplaceOne({"deposit_id": r["deposit_id"]}, r, upsert=True) for r in rows]
+        # $set ไม่ใช่ ReplaceOne — หัวใบมีฟิลด์ที่หน้า index ไม่มี (grand_total/vat_rate/
+        # vat_amount/amount_net/totals_at จาก parse_deposit_totals) การ replace ทั้งก้อน
+        # จะลบทิ้งทุกรอบ · เจอจริง 13/10/2026: ระหว่าง backfill 24 นาที ใบเดือน ก.ย.-ต.ค.
+        # หายไป ~1.3 พันใบ เพราะ pipeline บน Render วิ่งทับทุก 4 ชม.
+        ops = [UpdateOne({"deposit_id": r["deposit_id"]}, {"$set": r}, upsert=True) for r in rows]
         col.bulk_write(ops, ordered=False)
         up += len(ops)
         nxt = next_page(soup, page)
@@ -450,7 +454,7 @@ def changed_deposit_ids_from_log(session, days=3):
 def stale_deposit_ids(db, deposit_ids):
     """ใบที่ผลรวมรายการ != ยอดหัวใบ = รายการค้าง (ชั้นกันเหนียวของ changed_deposit_ids_from_log)
 
-    หัวใบถูก ReplaceOne ทุกรอบอยู่แล้ว การเทียบจึงฟรี ไม่ต้องยิง ATMS เพิ่มสักครั้ง
+    หัวใบถูกอัปเดตทุกรอบอยู่แล้ว การเทียบจึงฟรี ไม่ต้องยิง ATMS เพิ่มสักครั้ง
     ชั้นนี้จับสิ่งที่ log จับไม่ได้ — ใบที่ scrape ครั้งแรกไม่ครบ หรือช่วงที่ log ขาด
     ATMS ปัดเศษ "รวม" ทีละบรรทัด ใบยาวจึงเพี้ยนได้ระดับสตางค์ → เผื่อ tolerance ตามจำนวนบรรทัด
     (วัดจริงทั้งคอลเลกชัน 16,472 ใบ: เพี้ยนสูงสุด 0.03 บาทที่ 39 บรรทัด)
@@ -495,8 +499,11 @@ def ids_missing_totals(db, deposit_ids):
     out = set()
     for i in range(0, len(ids), 1000):
         chunk = ids[i:i + 1000]
+        # totals_missing = เคยเปิดหน้านั้นแล้วไม่มีตารางยอดจริง ๆ (ใบเปล่ายอด 0.00 มี 386 ใบ
+        # ตอนเติมย้อนหลัง 13/10/2026) — ไม่ต้องไล่ดึงซ้ำทุกรอบตลอดไป
         for h in db["deposit_header"].find(
-                {"deposit_id": {"$in": chunk}, "amount_net": {"$exists": False}},
+                {"deposit_id": {"$in": chunk}, "amount_net": {"$exists": False},
+                 "totals_missing": {"$ne": True}},
                 {"_id": 0, "deposit_id": 1}):
             out.add(int(h["deposit_id"]))
     return out
