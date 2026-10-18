@@ -41,8 +41,12 @@ RETURNED = "returned"
 PAID = "paid"
 SENT_BACK = "sent_back"
 CLOSED = "closed"
+READY_FOR_VOUCHER = "ready_for_voucher"
 APPROVER_EVENTS = (SUBMITTED, RESUBMITTED, STEP_PENDING)
 REQUESTER_EVENTS = (APPROVED, REJECTED, RETURNED, PAID, SENT_BACK, CLOSED)
+# goes to the accounting inbox, not to a person in the approval chain
+FINANCE_INBOX_EVENTS = (READY_FOR_VOUCHER,)
+DEFAULT_FINANCE_INBOX = "accountbkk@menatransport.co.th"
 
 
 # ---------------------------- switch + sender ----------------------------
@@ -64,6 +68,11 @@ def deliver_finance_email(to, subject: str, html: str) -> int:
     if not email_enabled():
         log.info("finance email skipped (FINANCE_EMAIL_ENABLED is not true): %s", subject)
         return 0
+    # While testing, every finance email goes to this one address instead of the real recipients.
+    test_to = (os.getenv("FINANCE_EMAIL_TEST_TO") or "").strip()
+    if test_to:
+        log.info("finance email redirected to FINANCE_EMAIL_TEST_TO (%s): %s", test_to, subject)
+        to = test_to
     user = os.getenv("FINANCE_SMTP_USER")
     password = os.getenv("FINANCE_SMTP_PASSWORD")
     if not user or not password:
@@ -174,6 +183,8 @@ _TITLES = {
     PAID: ("จ่ายเงินแล้ว", "การเงินจ่ายเงินเรียบร้อย", "โปรดเคลียร์เงินภายในกำหนด", False),
     SENT_BACK: ("ตีกลับเคลียร์", "บัญชีตีกลับเอกสารเคลียร์", "กรุณาแก้ไขเอกสารเคลียร์และส่งใหม่", False),
     CLOSED: ("ปิดรายการ", "รายการเบิกเงินปิดเรียบร้อย", "บัญชีตรวจสอบและปิดรายการแล้ว", False),
+    READY_FOR_VOUCHER: ("รอตั้งเบิก", "มีใบคำขอเบิกเงินรอตั้งเบิก",
+                        "คำขอผ่านการอนุมัติครบทุกขั้นแล้ว รอฝ่ายบัญชีตั้งเบิกทำจ่าย", False),
 }
 
 
@@ -269,6 +280,13 @@ def step_approver_emails(db, submission) -> list:
     return pick_recipients(by_id.get(p.get("id")) for p in eligible)
 
 
+def finance_inbox_emails() -> list:
+    """The accounting inbox that watches for newly approved requests. One mailbox by default;
+    FINANCE_INBOX_EMAIL may hold a comma-separated list."""
+    raw = (os.getenv("FINANCE_INBOX_EMAIL") or DEFAULT_FINANCE_INBOX)
+    return pick_recipients(raw.split(","))
+
+
 def requester_email(db, submission) -> list:
     from models.user_model import User
 
@@ -298,7 +316,9 @@ def queue_event(background_tasks, db, event: str, submission, **extra) -> None:
         ctx = {"form_id": submission.form_id,
                "requester_name": (people.get(submission.created_by) or {}).get("name"),
                "amount": values.get("amount"), "fe_base_url": os.getenv("FE_BASE_URL"), **extra}
-        if event in APPROVER_EVENTS:
+        if event in FINANCE_INBOX_EVENTS:
+            to = finance_inbox_emails()
+        elif event in APPROVER_EVENTS:
             try:
                 actx = approval_repo.ensure_people(db, approval_repo.load_context(db), submission.created_by)
                 info = approval_repo.describe(db, submission.created_by, values.get("amount"), actx)

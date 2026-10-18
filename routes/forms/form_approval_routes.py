@@ -628,6 +628,9 @@ def approve_submission(
             fin_mail.APPROVED if submission.status_approve == "Approved" else fin_mail.STEP_PENDING,
             submission,
         )
+        if submission.status_approve == "Approved":
+            # the request now sits in "รอตั้งเบิก" — tell the accounting inbox it has arrived
+            fin_mail.queue_event(background_tasks, db, fin_mail.READY_FOR_VOUCHER, submission)
     if submission.status_approve == "Approved" and notifications_enabled(submission.form):
 
         creator = db.query(User).filter(
