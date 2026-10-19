@@ -24,7 +24,7 @@ def levels(steps):
 
 class TestPlanSteps:
     @pytest.mark.parametrize("amount,expected", [
-        ("1500", [4]),         # 6.7: max(2, 4) = 4, not > 4 → step 1 only
+        ("1500", [4, 5]),      # 6.7: TOA ขอแค่ 2 แต่ทุกใบต้องมีขั้น 2 → 4 แล้วต่อ 5
         ("15000", [4, 5]),     # 6.5
         ("60000", [4, 8]),     # 6.4
     ])
@@ -38,9 +38,18 @@ class TestPlanSteps:
             {"step": 2, "required_level": 5, "label": "ระดับ 5 ขึ้นไป (ข้อ 6.5 · MGR / SM / DPCL (ระดับ 5–7))"},
         ]
 
-    def test_review_focus_level_5_asks_15000_is_one_step(self):
-        steps = A.plan_steps(5, tier("6.5"))  # step 1 = 6; step 2 = max(5, 6) = 6, not > 6
+    def test_level_5_asks_15000_still_gets_a_second_step(self):
+        """ขั้น 1 = 6 · TOA ขอ 5 ซึ่งต่ำกว่า จึงดันขั้น 2 เป็น 7 (ผู้ใช้สั่ง 19/10/2026)"""
+        assert levels(A.plan_steps(5, tier("6.5"))) == [6, 7]
+
+    def test_level_5_asks_15000_is_one_step_under_the_old_rule(self):
+        steps = A.plan_steps(5, tier("6.5"), force_second=False)
         assert steps == [{"step": 1, "required_level": 6, "label": "หัวหน้าระดับ 6 ขึ้นไป"}]
+
+    def test_level_8_and_above_keep_a_single_step(self):
+        """ข้อยกเว้นที่ผู้ใช้กำหนด: ผู้เบิกระดับ 8 ขึ้นไป ขั้นเดียวจบ"""
+        assert levels(A.plan_steps(8, tier("6.7"))) == [9]
+        assert levels(A.plan_steps(9, tier("6.7"))) == [9]
 
     @pytest.mark.parametrize("clause", ["6.7", "6.5", "6.3", "6.1"])
     def test_level_9_requester_is_one_step_at_9(self, clause):
@@ -64,7 +73,7 @@ class TestPlanSteps:
 class TestNextAfterApproval:
     TWO = A.plan_steps(3, tier("6.5"))    # [4, 5]
     BIG = A.plan_steps(3, tier("6.4"))    # [4, 8]
-    ONE = A.plan_steps(3, tier("6.7"))    # [4]
+    ONE = A.plan_steps(8, tier("6.4"))    # [9] — ผู้เบิกระดับ 8 ขั้นเดียว
 
     def test_step_1_moves_on(self):
         assert A.next_after_approval(self.TWO, 1, 4) == (A.OUTCOME_STEP, 2)
@@ -222,5 +231,8 @@ class TestDecide:
         assert A.decide(ev("15000"), PEOPLE, MAP, "R", "NOPE", 1, [])["allowed"] is False
 
     def test_plan_shrank_clamps_to_last_step(self):
-        d = A.decide(ev("1500"), PEOPLE, MAP, "R", "L4", 2, [])
+        """ใบที่แผนเหลือขั้นเดียว (ผู้เบิกระดับ 8) แต่ current_level ค้างที่ 2 ต้องหนีบกลับมาขั้น 1"""
+        boss = person("BOSS", 8, 8, 10)
+        people = {**PEOPLE, "BOSS": boss}
+        d = A.decide(ev("1500", requester="BOSS", people=people), people, MAP, "BOSS", "N9", 2, [])
         assert (d["step"], d["total_steps"], d["allowed"], d["outcome"]) == (1, 1, True, "approved")

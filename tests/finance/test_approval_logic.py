@@ -119,7 +119,19 @@ class TestEvaluate:
     MAP = {"CL": {3}}
 
     def test_manager_asks_1500(self):
+        """ยอดเล็กที่ TOA ขอแค่ระดับ 2 แต่ยังต้องมีขั้น 2 (ผู้ใช้สั่ง 19/10/2026)"""
         res = A.evaluate(TIERS, self.PEOPLE, self.MAP, "R", "1500")
+        assert res["clause"] == "6.7"
+        assert res["steps"] == [
+            {"step": 1, "required_level": 6, "label": "หัวหน้าระดับ 6 ขึ้นไป"},
+            {"step": 2, "required_level": 7,
+             "label": "ระดับ 7 ขึ้นไป (ขั้นที่สอง · ทุกใบต้องผ่านผู้อนุมัติเหนือขึ้นไป)"},
+        ]
+        assert (res["required_level"], res["direct_level"]) == (7, 8)
+
+    def test_manager_asks_1500_under_the_old_single_step_rule(self):
+        """กติกาเดิมยังใช้อยู่กับการอนุมัติเคลียร์เงิน (force_second=False)"""
+        res = A.evaluate(TIERS, self.PEOPLE, self.MAP, "R", "1500", force_second=False)
         assert res == {"clause": "6.7", "approver_label": "Asst. Sup (ระดับ 2)", "min_level": 2,
                        "required_level": 6, "direct_level": 6,
                        "steps": [{"step": 1, "required_level": 6, "label": "หัวหน้าระดับ 6 ขึ้นไป"}]}

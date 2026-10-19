@@ -26,8 +26,13 @@ REJECT_REMARK_REQUIRED = "กรุณาระบุเหตุผลที่
 
 def plan(tiers, people: Mapping[str, Mapping], mappings, requester_employee_id: str,
          amount_actual) -> dict:
-    """สายอนุมัติของการเคลียร์ ตัดชั้นด้วยยอดที่ใช้จริง — คืนรูปเดียวกับตอนขอเบิก"""
-    return rules.evaluate(tiers, people, mappings, requester_employee_id, amount_actual)
+    """สายอนุมัติของการเคลียร์ ตัดชั้นด้วยยอดที่ใช้จริง — คืนรูปเดียวกับตอนขอเบิก
+
+    ใช้กติกาเดิม (ขั้น 2 เฉพาะตอน TOA เรียก) กฎ "ทุกใบต้องมีสองขั้น" ของ 19/10/2026
+    ผู้ใช้สั่งไว้กับการ "ขอเบิก" เท่านั้น การเคลียร์ยังตัดชั้นตามยอดใช้จริงอย่างเดียว
+    """
+    return rules.evaluate(tiers, people, mappings, requester_employee_id, amount_actual,
+                          force_second=False)
 
 
 def clause_for(tiers, amount_actual) -> str:

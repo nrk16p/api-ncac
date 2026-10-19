@@ -56,7 +56,7 @@ def approved_log(log_id, step, action_by):
 # ---------------------------- จำนวนขั้นตามยอดและระดับผู้เบิก ----------------------------
 
 @pytest.mark.parametrize("amount,clause,steps", [
-    (1500, "6.7", 1),      # ขั้น 1 ต้องการ lv2 · TOA ก็ lv2 → ขั้นเดียว
+    (1500, "6.7", 2),      # TOA ขอแค่ lv2 แต่ทุกใบต้องมีขั้น 2 (19/10/2026)
     (3000, "6.6", 2),
     (15000, "6.5", 2),
     (60000, "6.4", 2),
@@ -69,10 +69,11 @@ def test_staff_step_count_by_amount(amount, clause, steps):
     assert len(info["steps"]) == steps
 
 
-def test_the_smallest_tier_is_one_step_for_a_level_1_requester():
-    """จุดที่คนมักเข้าใจผิด: ไม่ใช่ทุกใบมี 2 ขั้น ยอดเล็กที่หัวหน้าถัดไปมีอำนาจพอ จบขั้นเดียว"""
+def test_even_the_smallest_tier_needs_a_second_approval():
+    """ผู้ใช้สั่ง 19/10/2026: ยอดเล็กแค่ไหนก็ต้องมีคนเหนือขั้น 1 อนุมัติอีกชั้น"""
     info = plan(STAFF, 1500)
-    assert [s["required_level"] for s in info["steps"]] == [2]
+    assert [s["required_level"] for s in info["steps"]] == [2, 3]
+    assert "ขั้นที่สอง" in info["steps"][1]["label"]
 
 
 def test_executive_borrowing_a_large_sum_needs_only_one_approval():
