@@ -90,6 +90,12 @@ class FakeDB:
     def __init__(self):
         self.added, self.commits = [], 0
 
+    def query(self, _entity):  # สิทธิ์ตามหน้าที่ — ไม่มีแถว = ยังไม่ตั้งค่า ใช้กติกาเดิม
+        return self
+
+    def all(self):
+        return []
+
     def add(self, row):
         self.added.append(row)
 

@@ -15,7 +15,8 @@ from sqlalchemy.orm import Session
 from database import get_db
 from models.finance_model import FinPayeeAccount, FinPayeeAccountLog, FinPayeeAccountRequest
 from models.user_model import User
-from routes.finance.advance_routes import require_finance
+from routes.finance.advance_routes import require_finance, require_permission
+from services.finance import permission_logic as perms
 from schemas.finance_schema import (PayeeAccountCreate, PayeeAccountUpdate, PayeeActionIn, PayeeRejectIn,
                                     PayeeRequestCreate)
 from services.finance.finance_mail import send_finance_email
@@ -103,7 +104,7 @@ def list_payee_accounts(q: Optional[str] = None, status: Optional[str] = None, d
 
 @router.post("/payee-accounts", status_code=201)
 def create_payee_account(body: PayeeAccountCreate, db: Session = Depends(get_db)):
-    require_finance(db, body.action_by)
+    require_permission(db, body.action_by, perms.PERM_PAYEE_ADMIN)
     try:
         account_no = pl.check_kbank_account(body.account_no)
         account_name = pl.check_account_name(body.account_name)
@@ -125,7 +126,7 @@ def create_payee_account(body: PayeeAccountCreate, db: Session = Depends(get_db)
 
 @router.put("/payee-accounts/{account_id}")
 def update_payee_account(account_id: int, body: PayeeAccountUpdate, db: Session = Depends(get_db)):
-    require_finance(db, body.action_by)
+    require_permission(db, body.action_by, perms.PERM_PAYEE_ADMIN)
     row = (db.query(FinPayeeAccount).filter(FinPayeeAccount.id == account_id).with_for_update().first())
     if row is None:
         raise HTTPException(status_code=404, detail="ไม่พบบัญชี")
@@ -225,7 +226,7 @@ def get_payee_request(request_id: int, db: Session = Depends(get_db)):
 
 @router.put("/payee-requests/{request_id}/approve")
 def approve_payee_request(request_id: int, body: PayeeActionIn, db: Session = Depends(get_db)):
-    require_finance(db, body.action_by)
+    require_permission(db, body.action_by, perms.PERM_PAYEE_ADMIN)
     req = _load_request(db, request_id, for_update=True)
     if body.action_by == req.employee_id:
         raise HTTPException(status_code=403, detail="ไม่สามารถอนุมัติคำขอบัญชีของตนเองได้")
@@ -257,7 +258,7 @@ def approve_payee_request(request_id: int, body: PayeeActionIn, db: Session = De
 
 @router.put("/payee-requests/{request_id}/reject")
 def reject_payee_request(request_id: int, body: PayeeRejectIn, db: Session = Depends(get_db)):
-    require_finance(db, body.action_by)
+    require_permission(db, body.action_by, perms.PERM_PAYEE_ADMIN)
     req = _load_request(db, request_id, for_update=True)
     try:
         pl.check_request_open(req.status)

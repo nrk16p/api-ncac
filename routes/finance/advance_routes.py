@@ -28,6 +28,8 @@ from services.finance import approval_logic as approval_rules
 from services.finance import approval_repo
 from services.finance import finance_mail as mail
 from services.finance import overdue_reminder
+from services.finance import permission_logic as perms
+from services.finance import permission_repo
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +47,16 @@ def require_finance(db: Session, employee_id: str) -> User:
     depts, emps = _finance_ids()
     if user is None or not logic.is_finance_user(user.department_id, user.employee_id, depts, emps):
         raise HTTPException(status_code=403, detail="เฉพาะฝ่ายการเงินเท่านั้น")
+    return user
+
+
+def require_permission(db: Session, employee_id: str, permission: str) -> User:
+    """ฝ่ายการเงิน/บัญชีก่อน แล้วค่อยดูสิทธิ์ตามหน้าที่ (ผู้ใช้ตัดสิน 2026-10-19).
+    สิทธิ์ที่ยังไม่มีใครถูกกำหนด = ยังไม่ตั้งค่า ใช้กติกาเดิมไปก่อน ระบบจึงไม่ล็อกตัวเองก่อนรัน SQL"""
+    user = require_finance(db, employee_id)
+    grants = permission_repo.load_grants(db, fresh=True)
+    if not perms.allowed(permission, employee_id, grants, is_finance=True):
+        raise HTTPException(status_code=403, detail=perms.denied_message(permission))
     return user
 
 
@@ -94,6 +106,22 @@ def update_account(acc_code: str, body: AccountUpdate, db: Session = Depends(get
             setattr(acc, field, value)
     db.commit()
     return _account_dict(acc)
+
+
+# ---------------------------- permissions ----------------------------
+
+@router.get("/permissions/me")
+def my_permissions(employee_id: str, db: Session = Depends(get_db)):
+    """สิทธิ์ตามหน้าที่ของคนนี้ — หน้าเว็บใช้ซ่อนปุ่มที่กดไม่ได้ (ตัวจริงยังกันที่ endpoint)"""
+    user = db.query(User).filter(User.employee_id == employee_id).first()
+    depts, emps = _finance_ids()
+    is_finance = user is not None and logic.is_finance_user(user.department_id, user.employee_id, depts, emps)
+    grants = permission_repo.load_grants(db)
+    return {
+        "employee_id": employee_id,
+        "is_finance": is_finance,
+        "permissions": perms.permissions_for(employee_id, grants, is_finance) if is_finance else [],
+    }
 
 
 # ---------------------------- advances (read) ----------------------------
@@ -269,7 +297,7 @@ def _commit_and_return(db: Session, form_id: str):
 def remind_overdue(body: OverdueRemindIn, db: Session = Depends(get_db)):
     """Finance sends the overdue-clearing reminder now (v3 §7b). Ignores the 7-day interval; counts as sent only
     when SMTP accepted it; logs OVERDUE_REMIND (remark "manual") per sent advance."""
-    finance_user = require_finance(db, body.action_by)
+    finance_user = require_permission(db, body.action_by, perms.PERM_OVERDUE_REMIND)
     if not mail.email_enabled():
         return {"sent": 0, "skipped": [], "disabled": True}
     wanted = list(dict.fromkeys(body.form_ids)) if body.form_ids is not None else None
@@ -284,7 +312,7 @@ def remind_overdue(body: OverdueRemindIn, db: Session = Depends(get_db)):
 
 @router.put("/advances/{form_id}/voucher")
 def voucher_advance(form_id: str, body: VoucherIn, db: Session = Depends(get_db)):
-    require_finance(db, body.action_by)
+    require_permission(db, body.action_by, perms.PERM_VOUCHER)
     sub, adv, status = _load_for_update(db, form_id)
     try:
         logic.check_voucher(status, voucher_date=body.voucher_date, is_edit=body.is_edit)
@@ -320,7 +348,7 @@ def return_advance(form_id: str, body: ReturnIn, background_tasks: BackgroundTas
     """ตีกลับให้ผู้เบิกแก้ไข (v3 §6) from รอตั้งเบิกทำจ่าย / รอจ่าย, reason required. The fin row goes to RETURNED
     (created when the request was not vouchered yet) with its voucher fields cleared; a RETURN fin log and a
     RETURNED approval-log marker (level_no 0, the Finance user's users.id) record it."""
-    finance_user = require_finance(db, body.action_by)
+    finance_user = require_permission(db, body.action_by, perms.PERM_RETURN)
     sub, adv, status = _load_for_update(db, form_id)
     try:
         logic.check_return(status, remark=body.remark)
@@ -415,7 +443,7 @@ def reject_voucher(form_id: str, body: RejectVoucherIn, db: Session = Depends(ge
 @router.put("/advances/{form_id}/pay")
 def pay_advance(form_id: str, body: PayIn, background_tasks: BackgroundTasks,
                 db: Session = Depends(get_db)):
-    require_finance(db, body.action_by)
+    require_permission(db, body.action_by, perms.PERM_PAY)
     sub, adv, status = _load_for_update(db, form_id)
     account = db.get(FinAccount, body.acc_code) if body.acc_code else None
     acc_active = True if not body.acc_code else bool(account and account.is_active)
@@ -488,7 +516,7 @@ def clear_advance(form_id: str, body: ClearIn, db: Session = Depends(get_db)):
 @router.put("/advances/{form_id}/send-back")
 def send_back_advance(form_id: str, body: SendBackIn, background_tasks: BackgroundTasks,
                       db: Session = Depends(get_db)):
-    require_finance(db, body.action_by)
+    require_permission(db, body.action_by, perms.PERM_CLEARING_REVIEW)
     sub, adv, status = _load_for_update(db, form_id)
     try:
         logic.check_fresh(body.expected_clear_submitted_at, adv.clear_submitted_at if adv is not None else None)
@@ -507,7 +535,7 @@ def send_back_advance(form_id: str, body: SendBackIn, background_tasks: Backgrou
 @router.put("/advances/{form_id}/confirm")
 def confirm_advance(form_id: str, body: ConfirmIn, background_tasks: BackgroundTasks,
                     db: Session = Depends(get_db)):
-    require_finance(db, body.action_by)
+    require_permission(db, body.action_by, perms.PERM_CLOSE)
     sub, adv, status = _load_for_update(db, form_id)
     try:
         logic.check_fresh(body.expected_clear_submitted_at, adv.clear_submitted_at if adv is not None else None)

@@ -181,3 +181,18 @@ class FinPayeeAccountLog(Base):
     __table_args__ = (
         Index("ix_fin_payee_account_logs_employee_id", "employee_id"),
     )
+
+
+class FinPermission(Base):
+    """สิทธิ์ตามหน้าที่ของงาน Advance (ผู้ใช้ตัดสิน 2026-10-19).
+    ว่างเปล่าสำหรับสิทธิ์ใด = ยังไม่ตั้งค่า ระบบใช้กติกาเดิม (ทุกคนในแผนกการเงิน/บัญชี)."""
+    __tablename__ = "fin_permissions"
+
+    employee_id = Column(String(50), primary_key=True)
+    permission = Column(String(30), primary_key=True)
+    granted_by = Column(String(50))
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_fin_permissions_permission", "permission"),
+    )

@@ -16,7 +16,7 @@ from sqlalchemy.dialects import postgresql  # noqa: E402
 from sqlalchemy.exc import IntegrityError  # noqa: E402
 from sqlalchemy.schema import CreateTable  # noqa: E402
 
-from models.finance_model import FinAdvance, FinAdvanceLog, FinPayeeAccount  # noqa: E402
+from models.finance_model import FinAdvance, FinPermission, FinAdvanceLog, FinPayeeAccount  # noqa: E402
 from models.master_model import FormApprovalLog, FormSubmission, FormSubmissionValue  # noqa: E402
 from models.user_model import User  # noqa: E402
 from routes.finance import advance_routes as ar  # noqa: E402
@@ -297,6 +297,9 @@ class _Q:
     def order_by(self, *a):
         return self
 
+    def all(self):
+        return self.result if isinstance(self.result, list) else []
+
     def first(self):
         return self.result
 
@@ -316,6 +319,8 @@ class _Db:
             return _Q(self.master)
         if entity is FinAdvanceLog:  # the resubmit's lookup of the latest RETURN snapshot
             return _Q(self.return_log)
+        if entity is FinPermission:  # สิทธิ์ตามหน้าที่ — ว่าง = ยังไม่ตั้งค่า ใช้กติกาเดิม
+            return _Q([])
         raise AssertionError(f"unexpected query {entity}")
 
     def add(self, obj):
