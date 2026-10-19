@@ -14,10 +14,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from database import get_db
-from models.finance_model import FinAccount, FinAdvance, FinAdvanceClearItem, FinAdvanceLog
+from models.finance_model import FinClearApprovalLog, FinAccount, FinAdvance, FinAdvanceClearItem, FinAdvanceLog
 from models.master_model import FormApprovalLog
 from models.user_model import User
 from schemas.finance_schema import (
+    ClearApproveIn, ClearRejectIn,
     AccountCreate, AccountUpdate, ClearIn, ConfirmIn, OverdueRemindIn, PayIn, RejectVoucherIn, ResubmitIn, ReturnIn, SendBackIn,
     VoucherIn,
 )
@@ -30,6 +31,8 @@ from services.finance import finance_mail as mail
 from services.finance import overdue_reminder
 from services.finance import permission_logic as perms
 from services.finance import permission_repo
+from services.finance import clear_approval_logic as clr
+from services.finance import approval_repo
 
 logger = logging.getLogger(__name__)
 
@@ -203,6 +206,23 @@ def get_advance(form_id: str, db: Session = Depends(get_db)):
             db, repo.get_advance_submission(db, form_id), detail["request"]["amount"])
     except logic.AdvanceRuleError:
         detail["approval"] = None
+
+    # ด่านอนุมัติการเคลียร์ (19/10/2026) — มีค่าเฉพาะตอนรออนุมัติเคลียร์
+    detail["clear_approval"] = None
+    if detail.get("status") == logic.CLEARING_APPROVAL:
+        sub = repo.get_advance_submission(db, form_id)
+        adv = db.query(FinAdvance).filter(FinAdvance.submission_id == sub.id).first()
+        try:
+            info, _ctx = _clear_plan(db, sub, adv.amount_actual)
+            step = adv.clear_approval_level or clr.STEP_LEADER
+            detail["clear_approval"] = {
+                "step": step,
+                "total_steps": len(info["steps"]),
+                "clause": info["clause"],
+                "required_level": clr.step_spec(info, step)["required_level"],
+            }
+        except logic.AdvanceRuleError:
+            pass
     return detail
 
 
@@ -505,11 +525,126 @@ def clear_advance(form_id: str, body: ClearIn, db: Session = Depends(get_db)):
     old_count = (db.query(FinAdvanceClearItem).filter(FinAdvanceClearItem.advance_id == adv.id)
                  .delete(synchronize_session=False))
     db.add_all([FinAdvanceClearItem(advance_id=adv.id, **row) for row in rows])
-    adv.fin_status = logic.FIN_CLEARING_SUBMITTED
+    # ผู้ใช้สั่ง 19/10/2026: ส่งเคลียร์แล้วต้องผ่านหัวหน้าก่อนถึงบัญชี
+    # ขึ้นอนุมัติใหม่เฉพาะตอนยอดใหม่ข้ามชั้น (แก้เล็กน้อยหลังบัญชีส่งกลับ ไม่กวนหัวหน้า)
+    info, _ctx = _clear_plan(db, sub, total_net)
+    if clr.needs_reapproval(adv.clear_approved_clause, info["clause"]) and clr.needs_approval(info):
+        adv.fin_status = logic.FIN_CLEAR_PENDING
+        adv.clear_approval_level = clr.STEP_LEADER
+        _clear_log(db, form_id, clr.STEP_LEADER, "SUBMITTED", info["clause"], total_net,
+                   action_by=body.action_by)
+    else:
+        adv.fin_status = logic.FIN_CLEARING_SUBMITTED
+        adv.clear_approval_level = None
     adv.clear_submitted_at = func.now()
     changes = {**logic.diff_fields(before, values), "items": [old_count, len(rows)], "items_total": [None if old_total is None else str(old_total), str(total_net)]}
     db.add(FinAdvanceLog(advance_id=adv.id, action=action, changes=changes,
                          remark=body.remark, action_by=body.action_by))
+    return _commit_and_return(db, form_id)
+
+
+# ---------------------------- อนุมัติการเคลียร์ (ผู้ใช้สั่ง 19/10/2026) ----------------------------
+
+def _clear_plan(db: Session, sub, amount_actual):
+    """สายอนุมัติของการเคลียร์ ตัดชั้นด้วยยอดที่ใช้จริง"""
+    ctx = approval_repo.load_context(db, fresh=True)
+    ctx = approval_repo.ensure_people(db, ctx, sub.created_by)
+    return clr.plan(ctx.tiers, ctx.people, ctx.mappings, sub.created_by, amount_actual), ctx
+
+
+def _clear_round_approvers(db: Session, form_id: str) -> tuple:
+    """users.id ของคนที่อนุมัติขั้นก่อนหน้าในรอบนี้ (นับจาก SUBMITTED ล่าสุด)"""
+    rows = (db.query(FinClearApprovalLog)
+            .filter(FinClearApprovalLog.form_id == form_id)
+            .order_by(FinClearApprovalLog.id).all())
+    start = 0
+    for i, r in enumerate(rows):
+        if r.action == "SUBMITTED":
+            start = i + 1
+    ids = []
+    for r in rows[start:]:
+        if r.action == "APPROVED" and r.action_by:
+            user = db.query(User).filter(User.employee_id == r.action_by).first()
+            if user is not None:
+                ids.append(user.id)
+    return tuple(ids)
+
+
+def _clear_log(db, form_id, step, action, clause=None, amount=None, remark=None, action_by=None):
+    db.add(FinClearApprovalLog(form_id=form_id, step=step, action=action, clause=clause,
+                               amount_actual=amount, remark=remark, action_by=action_by))
+
+
+@router.get("/clear-approvals/pending")
+def clear_approvals_pending(employee_id: str, db: Session = Depends(get_db)):
+    """ใบที่รอคนนี้อนุมัติการเคลียร์ — หน้าคิวอนุมัติใช้แสดงคู่กับคำขอเบิก"""
+    rows = (db.query(FinAdvance).filter(FinAdvance.fin_status == logic.FIN_CLEAR_PENDING).all())
+    out = []
+    for adv in rows:
+        sub = repo.get_advance_submission(db, adv.form_id)
+        if sub is None or sub.created_by == employee_id:
+            continue
+        try:
+            info, _ctx = _clear_plan(db, sub, adv.amount_actual)
+        except logic.AdvanceRuleError:
+            continue
+        step = adv.clear_approval_level or clr.STEP_LEADER
+        ctx = approval_repo.load_context(db)
+        if clr.can_approve(info, ctx.people, ctx.mappings, sub.created_by, employee_id, step,
+                           _clear_round_approvers(db, adv.form_id)):
+            out.append({"form_id": adv.form_id, "amount_actual": logic.jsonable(adv.amount_actual),
+                        "step": step, "total_steps": len(info["steps"]),
+                        "clause": info["clause"], "requester_employee_id": sub.created_by})
+    return out
+
+
+@router.put("/advances/{form_id}/clear-approve")
+def clear_approve(form_id: str, body: ClearApproveIn, db: Session = Depends(get_db)):
+    sub, adv, status = _load_for_update(db, form_id)
+    pending = status == logic.CLEARING_APPROVAL
+    try:
+        if adv is None or not pending:
+            raise logic.InvalidTransition(clr.NOT_PENDING)
+        info, ctx = _clear_plan(db, sub, adv.amount_actual)
+        step = adv.clear_approval_level or clr.STEP_LEADER
+        eligible = clr.can_approve(info, ctx.people, ctx.mappings, sub.created_by, body.action_by,
+                                   step, _clear_round_approvers(db, form_id))
+        clr.check_approve(pending, eligible)
+    except logic.AdvanceRuleError as exc:
+        raise _rule_error(exc)
+
+    _clear_log(db, form_id, step, "APPROVED", info["clause"], adv.amount_actual,
+               body.remark, body.action_by)
+    nxt = clr.next_step(info, step)
+    if nxt is None:
+        adv.fin_status = logic.FIN_CLEARING_SUBMITTED
+        adv.clear_approval_level = None
+        adv.clear_approved_clause = info["clause"]
+    else:
+        adv.clear_approval_level = nxt
+    return _commit_and_return(db, form_id)
+
+
+@router.put("/advances/{form_id}/clear-reject")
+def clear_reject(form_id: str, body: ClearRejectIn, db: Session = Depends(get_db)):
+    sub, adv, status = _load_for_update(db, form_id)
+    pending = status == logic.CLEARING_APPROVAL
+    try:
+        if adv is None or not pending:
+            raise logic.InvalidTransition(clr.NOT_PENDING)
+        info, ctx = _clear_plan(db, sub, adv.amount_actual)
+        step = adv.clear_approval_level or clr.STEP_LEADER
+        eligible = clr.can_approve(info, ctx.people, ctx.mappings, sub.created_by, body.action_by,
+                                   step, _clear_round_approvers(db, form_id))
+        remark = clr.check_reject(pending, eligible, body.review_remark)
+    except logic.AdvanceRuleError as exc:
+        raise _rule_error(exc)
+
+    _clear_log(db, form_id, step, "REJECTED", info["clause"], adv.amount_actual, remark, body.action_by)
+    adv.fin_status = logic.FIN_SENT_BACK
+    adv.clear_approval_level = None
+    adv.review_remark = remark
+    db.add(FinAdvanceLog(advance_id=adv.id, action="CLEAR_REJECT", remark=remark, action_by=body.action_by))
     return _commit_and_return(db, form_id)
 
 

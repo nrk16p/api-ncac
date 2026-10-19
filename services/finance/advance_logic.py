@@ -21,6 +21,7 @@ AWAITING_CLEARING = "AWAITING_CLEARING"
 SENT_BACK = "SENT_BACK"
 AWAITING_REVIEW = "AWAITING_REVIEW"
 CLOSED = "CLOSED"
+CLEARING_APPROVAL = "CLEARING_APPROVAL"  # ผู้เบิกส่งเคลียร์แล้ว รอหัวหน้าอนุมัติก่อนถึงบัญชี
 RETURNED = "RETURNED"  # v3 §6: Finance sent it back to the requester to edit + resubmit
 
 STATUS_LABELS = {
@@ -32,6 +33,7 @@ STATUS_LABELS = {
     SENT_BACK: "ส่งกลับแก้ไข",
     AWAITING_REVIEW: "รอบัญชีตรวจ",
     CLOSED: "ปิดแล้ว",
+    CLEARING_APPROVAL: "รออนุมัติเคลียร์",
     RETURNED: "ตีกลับให้ผู้เบิกแก้ไข",
 }
 
@@ -40,6 +42,7 @@ FIN_VOUCHER_REJECTED = "VOUCHER_REJECTED"  # legacy (v2 reject-voucher); still m
 FIN_RETURNED = "RETURNED"        # v3 §6: waiting for the requester
 FIN_RESUBMITTED = "RESUBMITTED"  # v3 §6: the requester sent it again (re-approval, then รอตั้งเบิก)
 FIN_PAID = "PAID"
+FIN_CLEAR_PENDING = "CLEAR_PENDING"   # รออนุมัติการเคลียร์ (ผู้ใช้สั่ง 19/10/2026)
 FIN_CLEARING_SUBMITTED = "CLEARING_SUBMITTED"
 FIN_SENT_BACK = "SENT_BACK"
 FIN_CLOSED = "CLOSED"
@@ -51,6 +54,7 @@ _FIN_TO_STATUS = {
     FIN_RESUBMITTED: AWAITING_VOUCHER,
     FIN_PAID: AWAITING_CLEARING,
     FIN_SENT_BACK: SENT_BACK,
+    FIN_CLEAR_PENDING: CLEARING_APPROVAL,
     FIN_CLEARING_SUBMITTED: AWAITING_REVIEW,
     FIN_CLOSED: CLOSED,
 }

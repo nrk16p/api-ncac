@@ -35,6 +35,8 @@ class FinAdvance(Base):
     amount_paid = Column(Numeric(12, 2))     # ยอดเงิน — NULL until paid
     transfer_date = Column(Date)             # วันที่โอนเงิน — NULL until paid
     clear_due_date = Column(Date)            # กำหนดการเคลียร์ — NULL until paid
+    clear_approval_level = Column(Integer)      # ขั้นอนุมัติเคลียร์ที่ค้างอยู่ (1/2) NULL = ไม่ได้รออนุมัติ
+    clear_approved_clause = Column(String(10))  # ข้อ TOA ที่อนุมัติเคลียร์ไปแล้ว ใช้ดูว่าแก้แล้วข้ามชั้นไหม
     paid_by = Column(String(50))
     paid_at = Column(DateTime(timezone=True))
 
@@ -195,4 +197,23 @@ class FinPermission(Base):
 
     __table_args__ = (
         Index("ix_fin_permissions_permission", "permission"),
+    )
+
+
+class FinClearApprovalLog(Base):
+    """ประวัติการอนุมัติการเคลียร์ (ผู้ใช้สั่ง 19/10/2026) แยกจากการอนุมัติตอนขอเบิก"""
+    __tablename__ = "fin_clear_approval_logs"
+
+    id = Column(Integer, primary_key=True)
+    form_id = Column(String(80), nullable=False)
+    step = Column(Integer, nullable=False)          # 1 หัวหน้าถัดไป · 2 ผู้มีอำนาจตาม TOA
+    action = Column(String(20), nullable=False)     # APPROVED / REJECTED / SUBMITTED
+    clause = Column(String(10))
+    amount_actual = Column(Numeric(12, 2))
+    remark = Column(Text)
+    action_by = Column(String(50))
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_fin_clear_approval_logs_form_id", "form_id"),
     )

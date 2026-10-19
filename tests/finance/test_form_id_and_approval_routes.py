@@ -27,6 +27,13 @@ class _SeqQuery:
         self.db.locked = True
         return self
 
+    def order_by(self, *a):
+        return self
+
+    def all(self):
+        # ประวัติอนุมัติการเคลียร์ — ว่างในเทสต์เหล่านี้
+        return []
+
     def first(self):
         return self.db.seq
 

@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import and_, case, exists, false, func, not_, or_
 from sqlalchemy.orm import joinedload, aliased
 
-from models.finance_model import FinAccount, FinAdvance, FinAdvanceClearItem, FinAdvanceLog
+from models.finance_model import FinClearApprovalLog, FinAccount, FinAdvance, FinAdvanceClearItem, FinAdvanceLog
 from models.master_model import FormApprovalLog, FormMaster, FormQuestion, FormSubmission, FormSubmissionValue
 from models.user_model import Department, Position, Site, User
 from services.finance import advance_logic as logic
@@ -420,6 +420,13 @@ def get_advance_detail(db, form_id):
             .order_by(FinAdvanceLog.id.asc()).all()
         ]
     item["fin_logs"] = fin_logs
+    item["clear_logs"] = [
+        {"step": r.step, "action": r.action, "clause": r.clause, "remark": r.remark,
+         "action_by": r.action_by, "created_at": _iso(r.created_at)}
+        for r in (db.query(FinClearApprovalLog)
+                  .filter(FinClearApprovalLog.form_id == form_id)
+                  .order_by(FinClearApprovalLog.id).all())
+    ]
     return item
 
 

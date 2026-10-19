@@ -103,6 +103,16 @@ class ConfirmIn(_Body):
     expected_clear_submitted_at: Optional[datetime] = None
 
 
+class ClearApproveIn(_Body):
+    action_by: str
+    remark: Optional[str] = Field(default=None, max_length=500)
+
+
+class ClearRejectIn(_Body):
+    action_by: str
+    review_remark: Optional[str] = Field(default=None, max_length=500)  # ว่าง -> 400 ผ่าน check_reject
+
+
 class PayeeAccountCreate(_Body):
     employee_id: str = Field(max_length=50)
     account_no: str = Field(max_length=20)
