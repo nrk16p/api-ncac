@@ -7,6 +7,8 @@ from services.notify_guard import ADVANCE_FORM_TYPE, notifications_enabled
 from services.finance import advance_logic as fin_logic
 from services.finance import approval_repo
 from services.finance import finance_line as fin_line
+
+REJECT_REMARK_REQUIRED = "กรุณาระบุเหตุผลที่ไม่อนุมัติ"
 from services.finance import finance_mail as fin_mail
 
 from models.master_model import (
@@ -690,6 +692,9 @@ def reject_submission(
 
     advance = is_advance_submission(submission)
     level_no = submission.current_approval_level
+    if advance and not (remark or "").strip():
+        # หน้าจอบังคับอยู่แล้ว แต่ยิง API ตรงด้วยเหตุผลว่างเคยผ่าน ผู้เบิกจะไม่รู้ว่าถูกปฏิเสธเพราะอะไร
+        raise HTTPException(400, REJECT_REMARK_REQUIRED)
     if advance:
         # same eligibility as approve, at the current step (v3 §5): a reject at any step → Rejected
         db.refresh(submission, with_for_update=True)
