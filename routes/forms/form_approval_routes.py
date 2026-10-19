@@ -6,6 +6,7 @@ from services.email_service import render_form_rejected_th ,  send_email , rende
 from services.notify_guard import ADVANCE_FORM_TYPE, notifications_enabled
 from services.finance import advance_logic as fin_logic
 from services.finance import approval_repo
+from services.finance import finance_line as fin_line
 from services.finance import finance_mail as fin_mail
 
 from models.master_model import (
@@ -628,6 +629,9 @@ def approve_submission(
             fin_mail.APPROVED if submission.status_approve == "Approved" else fin_mail.STEP_PENDING,
             submission,
         )
+        if submission.status_approve == "Approved":  # กลุ่มไลน์: อนุมัติครบแล้ว รอบัญชีตั้งเบิก
+            fin_line.queue_line(background_tasks, db, fin_line.READY_FOR_VOUCHER, submission,
+                                approver_name=f"{approver.firstname} {approver.lastname}".strip() or None)
     if submission.status_approve == "Approved" and notifications_enabled(submission.form):
 
         creator = db.query(User).filter(
