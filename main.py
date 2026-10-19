@@ -102,6 +102,7 @@ from routes.atms_maintenance import router as atms_maintenance_router
 from routes.atms_tms import router as atms_tms_router
 from routes.atms.openjob import router as atms_openjob_router
 from routes.atms.deposit_totals import router as atms_deposit_totals_router
+from routes.atms.sku_lookup import router as atms_sku_lookup_router
 from routes.news_safety_talk import router as news_safety_talk_router
 from routes.news_case_report import router as news_case_report_router
 from routes.news_accident_case import router as news_accident_case_router
@@ -174,6 +175,7 @@ app.include_router(atms_tms_router)
 # ATMS (เปิด job แจ้งซ่อม / ขอเปลี่ยนยาง)
 app.include_router(atms_openjob_router)
 app.include_router(atms_deposit_totals_router)
+app.include_router(atms_sku_lookup_router)
 
 # Finance — เบิกเงิน Advance
 app.include_router(finance_router)
