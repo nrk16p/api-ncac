@@ -62,7 +62,9 @@ class ClearIn(_Body):
     clear_date: date
     # Ignored: the server computes amount_actual = sum of net_amount over items.
     amount_actual: Optional[Decimal] = Field(default=None, max_digits=12, decimal_places=2)
-    items: list[ClearItemIn] = Field(min_length=1)
+    # ไม่ใส่ min_length: ถ้า Pydantic ดักเอง ผู้ใช้จะเห็นข้อความอังกฤษ
+    # ปล่อยให้ check_clear_items เป็นคนบอกด้วยข้อความไทย (UAT 19/10/2026)
+    items: list[ClearItemIn]
     clear_doc_no: Optional[str] = Field(default=None, max_length=100)
     settle_date: Optional[date] = None
     remark: Optional[str] = None

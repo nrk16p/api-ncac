@@ -548,35 +548,35 @@ def approve_submission(
         FormSubmission.form_id == form_id
     ).first()
     if not submission:
-        raise HTTPException(404, "Submission not found")
+        raise HTTPException(404, "ไม่พบคำขอนี้ในระบบ")
 
     if submission.status_approve != "In Progress":
-        raise HTTPException(400, "Submission not in approvable state")
+        raise HTTPException(400, "คำขอนี้ไม่ได้อยู่ในสถานะที่อนุมัติได้ กรุณารีเฟรชหน้าจอ")
 
     requester = get_user_by_employee_id(db, submission.created_by)
     approver = get_user_by_employee_id(db, employee_id)
     if not requester or not approver:
-        raise HTTPException(404, "User not found")
+        raise HTTPException(404, "ไม่พบข้อมูลผู้ใช้ในระบบ")
 
     advance = is_advance_submission(submission)
     if advance:
         # two-step chain (v3 §5): lock the row so concurrent approvals of the same step serialize
         db.refresh(submission, with_for_update=True)
         if submission.status_approve != "In Progress":
-            raise HTTPException(400, "Submission not in approvable state")
+            raise HTTPException(400, "คำขอนี้ไม่ได้อยู่ในสถานะที่อนุมัติได้ กรุณารีเฟรชหน้าจอ")
         decision = approval_repo.approval_decision(db, submission, employee_id)
         if not decision["allowed"]:
-            raise HTTPException(403, "Not authorized to approve")
+            raise HTTPException(403, "คุณไม่มีอำนาจอนุมัติคำขอนี้")
     else:
         approver_level = get_employee_position_level(db, employee_id)
         if not approver_level:
-            raise HTTPException(403, "Approver has no position level")
+            raise HTTPException(403, "ไม่พบระดับตำแหน่งของผู้อนุมัติ กรุณาติดต่อฝ่ายบุคคล")
 
         pos_req = db.query(Position).filter(
             Position.position_id == requester.position_id
         ).first()
         if not pos_req:
-            raise HTTPException(400, "Requester position not found")
+            raise HTTPException(400, "ไม่พบระดับตำแหน่งของผู้ขอเบิก กรุณาติดต่อฝ่ายบุคคล")
 
         rule = get_applicable_rule_with_fallback(
             db=db,
@@ -586,7 +586,7 @@ def approve_submission(
             requester=requester,
         )
         if not rule:
-            raise HTTPException(400, "Approval rule not found")
+            raise HTTPException(400, "ไม่พบกติกาการอนุมัติของแบบฟอร์มนี้ กรุณาติดต่อผู้ดูแลระบบ")
 
         if not can_user_approve(
             db=db,
@@ -595,7 +595,7 @@ def approve_submission(
             approver_level=approver_level,
             requester=requester,
         ):
-            raise HTTPException(403, "Not authorized to approve")
+            raise HTTPException(403, "คุณไม่มีอำนาจอนุมัติคำขอนี้")
 
     if advance:
         # log level_no = current step; finish (Approved) or move to step 2 (stays In Progress)
@@ -674,15 +674,15 @@ def reject_submission(
         FormSubmission.form_id == form_id
     ).first()
     if not submission:
-        raise HTTPException(404, "Submission not found")
+        raise HTTPException(404, "ไม่พบคำขอนี้ในระบบ")
 
     if submission.status_approve != "In Progress":
-        raise HTTPException(400, "Submission not in approvable state")
+        raise HTTPException(400, "คำขอนี้ไม่ได้อยู่ในสถานะที่อนุมัติได้ กรุณารีเฟรชหน้าจอ")
 
     requester = get_user_by_employee_id(db, submission.created_by)
     approver = get_user_by_employee_id(db, employee_id)
     if not requester or not approver:
-        raise HTTPException(404, "User not found")
+        raise HTTPException(404, "ไม่พบข้อมูลผู้ใช้ในระบบ")
 
     advance = is_advance_submission(submission)
     level_no = submission.current_approval_level
@@ -690,21 +690,21 @@ def reject_submission(
         # same eligibility as approve, at the current step (v3 §5): a reject at any step → Rejected
         db.refresh(submission, with_for_update=True)
         if submission.status_approve != "In Progress":
-            raise HTTPException(400, "Submission not in approvable state")
+            raise HTTPException(400, "คำขอนี้ไม่ได้อยู่ในสถานะที่อนุมัติได้ กรุณารีเฟรชหน้าจอ")
         decision = approval_repo.approval_decision(db, submission, employee_id)
         if not decision["allowed"]:
-            raise HTTPException(403, "Not authorized to reject")
+            raise HTTPException(403, "คุณไม่มีอำนาจไม่อนุมัติคำขอนี้")
         level_no = decision["step"]
     else:
         approver_level = get_employee_position_level(db, employee_id)
         if not approver_level:
-            raise HTTPException(403, "Approver has no position level")
+            raise HTTPException(403, "ไม่พบระดับตำแหน่งของผู้อนุมัติ กรุณาติดต่อฝ่ายบุคคล")
 
         pos_req = db.query(Position).filter(
             Position.position_id == requester.position_id
         ).first()
         if not pos_req:
-            raise HTTPException(400, "Requester position not found")
+            raise HTTPException(400, "ไม่พบระดับตำแหน่งของผู้ขอเบิก กรุณาติดต่อฝ่ายบุคคล")
 
         rule = get_applicable_rule_with_fallback(
             db=db,
@@ -714,7 +714,7 @@ def reject_submission(
             requester=requester,
         )
         if not rule:
-            raise HTTPException(400, "Approval rule not found")
+            raise HTTPException(400, "ไม่พบกติกาการอนุมัติของแบบฟอร์มนี้ กรุณาติดต่อผู้ดูแลระบบ")
 
         if not can_user_approve(
             db=db,
@@ -723,7 +723,7 @@ def reject_submission(
             approver_level=approver_level,
             requester=requester,
         ):
-            raise HTTPException(403, "Not authorized to reject")
+            raise HTTPException(403, "คุณไม่มีอำนาจไม่อนุมัติคำขอนี้")
 
     db.add(FormApprovalLog(
         submission_id=submission.id,
@@ -828,7 +828,7 @@ def remove_department(
     ).first()
 
     if not row:
-        raise HTTPException(404, "Mapping not found")
+        raise HTTPException(404, "ไม่พบการผูกฝ่ายของผู้อนุมัติ")
 
     row.is_active = False
     db.commit()

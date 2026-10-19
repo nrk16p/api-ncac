@@ -62,8 +62,8 @@ def test_clear_in_items_required_and_amount_actual_optional():
     assert item.vehicle is None
     with pytest.raises(ValidationError):
         ClearIn(action_by="680001", clear_date="2026-07-15", amount_actual="10")
-    with pytest.raises(ValidationError):
-        ClearIn(action_by="680001", clear_date="2026-07-15", items=[])
+    # items ว่างต้องผ่าน schema ไปให้ check_clear_items ตอบเป็นภาษาไทย (UAT 19/10/2026)
+    assert ClearIn(action_by="680001", clear_date="2026-07-15", items=[]).items == []
 
 
 def test_clear_item_limits():
