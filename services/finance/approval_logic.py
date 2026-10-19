@@ -15,6 +15,7 @@ from typing import Iterable, Mapping, Optional
 from services.finance.advance_logic import AdvanceRuleError
 
 ORG_WIDE_LEVEL = 9
+NOTIFY_MAX_LEVEL = 5  # ผู้ใช้สั่ง 19/10/2026: อีเมลขอให้หยุดที่ระดับผู้จัดการ ไม่ต้องรบกวนผู้บริหาร
 TAB_MINE = "mine"
 TAB_DELEGABLE = "delegable"
 
@@ -197,6 +198,25 @@ def _eligible(people: Iterable[Mapping], requester: Mapping, required: int,
     excluded = frozenset(excluded)
     return [p for p in people
             if can_approve(p, requester, required, mappings.get(p["employee_id"], ()), excluded)]
+
+
+def notify_approvers(eligible: Iterable[Mapping], required: int, ceiling: int = NOTIFY_MAX_LEVEL) -> list:
+    """ใครควร "ได้รับอีเมล" จากกลุ่มที่อนุมัติได้ (ผู้ใช้สั่ง 19/10/2026).
+
+    สิทธิ์กดอนุมัติไม่เปลี่ยน ใครที่ระดับถึงก็ยังกดได้เหมือนเดิม แต่อีเมลหยุดที่ระดับผู้จัดการ
+    ไม่งั้นใบ 3,000 บาทก็เด้งถึง DCEO ทุกครั้ง เพดานจริงคือ max(ระดับที่ขั้นนั้นต้องการ, ceiling)
+    เพราะขั้นที่ต้องการระดับ 8 อยู่แล้วจะกดให้ต่ำกว่านั้นไม่ได้ และถ้ากรองแล้วไม่เหลือใคร
+    ให้ถอยไปใช้ชั้นต่ำสุดที่ผ่านเกณฑ์ เพื่อไม่ให้ใบค้างโดยไม่มีใครรู้
+    """
+    people = list(eligible)
+    if not people:
+        return []
+    cap = max(required, ceiling)
+    picked = [p for p in people if p.get("level") is not None and p["level"] <= cap]
+    if picked:
+        return picked
+    lowest = min(p["level"] for p in people if p.get("level") is not None)
+    return [p for p in people if p.get("level") == lowest]
 
 
 def eligible_approvers(people: Iterable[Mapping], requester: Mapping, required: int,

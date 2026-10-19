@@ -263,6 +263,8 @@ def step_approver_emails(db, submission) -> list:
         return []
     eligible = rules.eligible_approvers(ctx.people.values(), requester, state["required_level"], ctx.mappings,
                                         state["excluded"])
+    # อีเมลหยุดที่ระดับผู้จัดการ สิทธิ์กดอนุมัติไม่เปลี่ยน (ผู้ใช้สั่ง 19/10/2026)
+    eligible = rules.notify_approvers(eligible, state["required_level"])
     eligible.sort(key=lambda p: (p["level"], p["employee_id"]))
     ids = [p["id"] for p in eligible if p.get("id") is not None]
     by_id = {u.id: u.email for u in db.query(User).filter(User.id.in_(ids)).all()} if ids else {}
