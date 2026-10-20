@@ -165,6 +165,58 @@ async def _fire_post_run_webhook(pipeline_type: str) -> None:
         log.error("Post-run webhook %s -> %s error: %s", pipeline_type, url, e)
 
 
+# ── รอบเช้า: sync คงเหลือ/min/max จาก ATMS ให้ /safety-stock ของ mena-wms ─────────────────
+# เดิม mena-wms ดึงคงเหลือจาก ATMS วันละครั้งตอน 10:00 (cron Vercel ซึ่งเต็ม 2 ตัวแล้ว) ของที่รับเข้าหลัง 10:00
+# จึงขึ้น "ของหมด" ไปจนถึง 10:00 อีกวัน (เคส LB05AE00133, 2026-10-20) → ให้ที่นี่ยิงเพิ่มตอน 05:55 ไทย
+# ใช้ env ชุดเดียวกับ webhook ด้านบน (token = CRON_SECRET ของ mena-wms ใช้ได้ทั้งสอง route)
+# ไม่ส่ง ?inventory= เพื่อให้ mena-wms ตัดสินเองว่าครอบคลุมคลังไหน (WAREHOUSES ใน safety-stock-core.ts)
+_wms_sync_running = False
+
+
+def _wms_urls() -> tuple[str, str, str | None] | None:
+    from urllib.parse import urlsplit, urlunsplit
+
+    build_url = os.getenv("SAFETY_STOCK_BUILD_URL")
+    if not build_url:
+        return None
+    parts = urlsplit(build_url)
+    sync_path = parts.path.replace("/safety-stock-build", "/atms-sku-sync")
+    sync_url = urlunsplit(parts._replace(path=sync_path, query=""))
+    build = urlunsplit(parts._replace(query="source=morning-sync"))
+    return sync_url, build, os.getenv("SAFETY_STOCK_BUILD_TOKEN")
+
+
+async def run_wms_sku_sync_morning() -> None:
+    """sync คงเหลือจาก ATMS แล้วสั่ง build ต่อ — sync ล้มก็ไม่ build (คำนวณจากยอดเก่าไม่มีประโยชน์)
+    พังยังไงก็แค่ log ห้าม raise ออกไปถึง scheduler"""
+    import logging
+
+    global _wms_sync_running
+    log = logging.getLogger(__name__)
+    urls = _wms_urls()
+    if not urls:
+        return
+    if _wms_sync_running:
+        log.warning("wms_sku_sync_morning: รอบก่อนยังไม่จบ ข้ามรอบนี้")
+        return
+    sync_url, build_url, token = urls
+    _wms_sync_running = True
+    try:
+        status, body = await asyncio.to_thread(_call_webhook, sync_url, token)
+        if not 200 <= status < 300:
+            log.error("wms_sku_sync_morning sync failed: %s %s", status, body)
+            return
+        status, body = await asyncio.to_thread(_call_webhook, build_url, token)
+        if 200 <= status < 300:
+            log.info("wms_sku_sync_morning OK")
+        else:
+            log.error("wms_sku_sync_morning build failed: %s %s", status, body)
+    except Exception as e:  # noqa: BLE001
+        log.error("wms_sku_sync_morning error: %s", e)
+    finally:
+        _wms_sync_running = False
+
+
 def _verify_key(x_api_key: str = Header(..., alias="x-api-key")):
     key = os.getenv("PIPELINE_API_KEY")
     if not key or x_api_key != key:

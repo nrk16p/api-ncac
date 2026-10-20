@@ -212,7 +212,7 @@ async def startup_event():
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
     from apscheduler.triggers.cron import CronTrigger
     from pytz import timezone as tz
-    from routes.pipeline.pipeline_routes import _run
+    from routes.pipeline.pipeline_routes import _run, run_wms_sku_sync_morning
 
     scheduler = AsyncIOScheduler(timezone=tz("Asia/Bangkok"))
     # Run LD → SCCO → CPAC sequentially so they don't hammer ATMS at the same time
@@ -235,6 +235,10 @@ async def startup_event():
     # ทุกชั่วโมง 07:15–20:15 BKK → 00–13 UTC นาที 15 (เลี่ยง :00 ของ procurement light ที่ใช้ ~11 นาที
     # และ :30 ของ stockmovement light) · งานเบา ~10–20 requests ต่อรอบ ไม่ถึงนาที
     scheduler.add_job(_run, CronTrigger(hour="0-13", minute=15), args=["atms_pr_quick"], id="sched_atms_pr_quick")
+    # รอบเช้า mena-wms /safety-stock: sync คงเหลือ/min/max จาก ATMS แล้ว build — 05:55 BKK → 22:55 UTC
+    # ใช้ราว 3 นาที จบก่อน atms_procurement 06:00 จะได้ไม่ยิง ATMS พร้อมกัน
+    # ⚠️ ช่อง 06:00 ใน BUILD_SCHEDULE ของ mena-wms (lib/safety-stock-core.ts) อิงเวลานี้ — เลื่อนแล้วต้องแก้ที่โน่นด้วย
+    scheduler.add_job(run_wms_sku_sync_morning, CronTrigger(hour=22, minute=55), id="sched_wms_sku_sync_morning")  # 05:55 BKK
     # master ซัพพลายเออร์ (เครดิตเทอมของ mena-wms /ap-tracking) — 06:40 BKK → 23:40 UTC
     # ต่อท้าย atms_procurement (23:00 UTC) เพื่อให้ ddCount นับจาก deposit_header ที่เพิ่งรีเฟรชแล้ว
     # และไม่ยิง ATMS พร้อมกัน · งานเบา ~11 คำขอ ใช้เวลาไม่ถึงนาที
