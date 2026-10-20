@@ -45,6 +45,7 @@ CLOSED = "closed"
 CLEAR_SUBMITTED = "clear_submitted"
 CLEAR_APPROVED = "clear_approved"
 CLEAR_PENDING = "clear_pending"
+CLEAR_REJECTED = "clear_rejected"
 APPROVER_EVENTS = (SUBMITTED, RESUBMITTED, STEP_PENDING)
 REQUESTER_EVENTS = (APPROVED, REJECTED, RETURNED, PAID, SENT_BACK, CLOSED, CLEAR_SUBMITTED)
 # งานถึงมือบัญชี: สรุปเลขที่ ผู้เบิก ยอดเงิน และ CC กล่องบัญชี (ผู้ใช้สั่ง 20/10/2026)
@@ -219,6 +220,8 @@ _TITLES = {
     SENT_BACK: ("ตีกลับเคลียร์", "บัญชีตีกลับเอกสารเคลียร์", "กรุณาแก้ไขเอกสารเคลียร์และส่งใหม่", False),
     CLOSED: ("ปิดรายการ", "รายการเบิกเงินปิดเรียบร้อย", "บัญชีตรวจสอบและปิดรายการแล้ว", False),
     CLEAR_SUBMITTED: ("เบิกเงิน Advance", "ส่งเคลียร์เงินแล้ว", "ผู้เบิกส่งเอกสารเคลียร์เงินแล้ว", False),
+    CLEAR_REJECTED: ("ไม่อนุมัติการเคลียร์", "หัวหน้าไม่อนุมัติการเคลียร์",
+                     "กรุณาแก้ไขเอกสารเคลียร์ตามเหตุผลด้านล่าง แล้วส่งเคลียร์ใหม่", False),
     CLEAR_PENDING: ("เบิกเงิน Advance", "รอท่านอนุมัติการเคลียร์",
                     "ผู้เบิกส่งเคลียร์เงินแล้ว ตรวจรายการกับใบเสร็จก่อนส่งต่อให้บัญชี", True),
     CLEAR_APPROVED: ("เบิกเงิน Advance", "อนุมัติเคลียร์แล้ว",
@@ -304,7 +307,9 @@ def _legacy_rows(event: str, ctx: dict, form_id, requester) -> list:
             value = _fmt_money(ctx.get(key)) if key == "amount_paid" else _fmt_date(ctx.get(key))
             if value:
                 rows.append((label, value))
-    if event in (REJECTED, RETURNED, SENT_BACK) and ctx.get("remark"):
+    if event == CLEAR_REJECTED and ctx.get("approver_name"):
+        rows.append(("ผู้ไม่อนุมัติ", ctx["approver_name"]))
+    if event in (REJECTED, RETURNED, SENT_BACK, CLEAR_REJECTED) and ctx.get("remark"):
         rows.append(("เหตุผล", ctx.get("remark")))
     return rows
 

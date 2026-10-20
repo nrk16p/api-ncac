@@ -105,7 +105,10 @@ def test_route_sends_only_on_the_last_clearing_step(monkeypatch, next_step, expe
     monkeypatch.setattr(r, "_clear_round_approvers", lambda db, fid: set())
     monkeypatch.setattr(r.clr, "can_approve", lambda *a: True)
     monkeypatch.setattr(r.clr, "check_approve", lambda *a: None)
-    monkeypatch.setattr(r.clr, "next_step", lambda info, step: next_step)
+    monkeypatch.setattr(r, "_clear_approver_level", lambda *a: 3)
+    monkeypatch.setattr(r.approval_rules, "skipped_steps", lambda steps, step, level: [])
+    monkeypatch.setattr(r.approval_rules, "next_after_approval",
+                        lambda steps, step, level: ("approved", None) if next_step is None else ("step", next_step))
     monkeypatch.setattr(r, "_clear_log", lambda *a: None)
     monkeypatch.setattr(r, "_commit_and_return", lambda db, fid: {"form_id": fid})
     monkeypatch.setattr(r.repo, "people_by_employee_id", lambda db, ids: {"A9": {"name": "ณรงค์กร อัตถะ"}})

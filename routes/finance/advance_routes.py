@@ -531,7 +531,13 @@ def clear_advance(form_id: str, body: ClearIn, background_tasks: BackgroundTasks
     db.add_all([FinAdvanceClearItem(advance_id=adv.id, **row) for row in rows])
     # ผู้ใช้สั่ง 19/10/2026: ส่งเคลียร์แล้วต้องผ่านหัวหน้าก่อนถึงบัญชี
     # ขึ้นอนุมัติใหม่เฉพาะตอนยอดใหม่ข้ามชั้น (แก้เล็กน้อยหลังบัญชีส่งกลับ ไม่กวนหัวหน้า)
-    info, clear_ctx = _clear_plan(db, sub, total_net)
+    # ไม่ได้ใช้เงินเลย (คืนทั้งก้อน) ไม่มีชั้นอนุมัติให้ตัด ส่งถึงบัญชีตรง — เดิมพังเป็น 500
+    info, clear_ctx = {"clause": None, "steps": []}, None
+    if total_net > 0:
+        try:
+            info, clear_ctx = _clear_plan(db, sub, total_net)
+        except logic.AdvanceRuleError as exc:
+            raise _rule_error(exc)
     if clr.needs_reapproval(adv.clear_approved_clause, info["clause"]) and clr.needs_approval(info):
         adv.fin_status = logic.FIN_CLEAR_PENDING
         adv.clear_approval_level = clr.STEP_LEADER
@@ -665,9 +671,16 @@ def clear_approve(form_id: str, body: ClearApproveIn, background_tasks: Backgrou
     except logic.AdvanceRuleError as exc:
         raise _rule_error(exc)
 
+    # ข้ามขั้นแบบเดียวกับตอนขอเบิก: ระดับของคนกดถึงขั้นถัดไปแล้ว ผ่านขั้นนั้นไปด้วยเลย
+    # superadmin กดแทนได้ทุกขั้นแต่ไม่ข้ามขั้น (เหมือน approval_logic.decide) — คิดก่อนบันทึกการกดครั้งนี้
+    level = _clear_approver_level(info, ctx, sub.created_by, body.action_by, step, _clear_round_approvers(db, form_id))
     _clear_log(db, form_id, step, "APPROVED", info["clause"], adv.amount_actual,
                body.remark, body.action_by)
-    nxt = clr.next_step(info, step)
+    for skipped in approval_rules.skipped_steps(info["steps"], step, level):
+        spec = clr.step_spec(info, skipped)
+        _clear_log(db, form_id, skipped, "APPROVED", info["clause"], adv.amount_actual,
+                   approval_rules.skip_remark(skipped, step, level, spec["required_level"]), body.action_by)
+    _outcome, nxt = approval_rules.next_after_approval(info["steps"], step, level)
     if nxt is None:
         adv.fin_status = logic.FIN_CLEARING_SUBMITTED
         adv.clear_approval_level = None
@@ -686,8 +699,20 @@ def clear_approve(form_id: str, body: ClearApproveIn, background_tasks: Backgrou
     return detail
 
 
+def _clear_approver_level(info, ctx, requester_id, approver_id, step, already):
+    """ระดับที่ใช้ตัดสินการข้ามขั้น — superadmin ที่กดได้เพราะสิทธิ์พิเศษนับเป็นระดับของขั้นนี้พอดี (ไม่ข้าม)"""
+    approver = ctx.people.get(approver_id)
+    requester = ctx.people.get(requester_id) or {}
+    spec = clr.step_spec(info, step)
+    if approver is not None and approval_rules.can_approve(approver, requester, spec["required_level"],
+                                                           ctx.mappings.get(approver_id, ()), already):
+        return approver.get("level")
+    return spec["required_level"]
+
+
 @router.put("/advances/{form_id}/clear-reject")
-def clear_reject(form_id: str, body: ClearRejectIn, db: Session = Depends(get_db)):
+def clear_reject(form_id: str, body: ClearRejectIn, background_tasks: BackgroundTasks,
+                 db: Session = Depends(get_db)):
     sub, adv, status = _load_for_update(db, form_id)
     pending = status == logic.CLEARING_APPROVAL
     try:
@@ -706,7 +731,12 @@ def clear_reject(form_id: str, body: ClearRejectIn, db: Session = Depends(get_db
     adv.clear_approval_level = None
     adv.review_remark = remark
     db.add(FinAdvanceLog(advance_id=adv.id, action="CLEAR_REJECT", remark=remark, action_by=body.action_by))
-    return _commit_and_return(db, form_id)
+    detail = _commit_and_return(db, form_id)
+    # ผู้เบิกต้องรู้ว่าหัวหน้าไม่อนุมัติการเคลียร์และต้องแก้อะไร (รอบทดสอบทั้ง flow 20/10/2026)
+    rejecter = repo.people_by_employee_id(db, [body.action_by]).get(body.action_by) or {}
+    mail.queue_event(background_tasks, db, mail.CLEAR_REJECTED, sub, remark=remark,
+                     approver_name=rejecter.get("name"))
+    return detail
 
 
 @router.put("/advances/{form_id}/send-back")

@@ -236,7 +236,8 @@ def _check_list(text):
 def test_model_check_matches_migration():
     ddl = str(CreateTable(FinAdvance.__table__).compile(dialect=postgresql.dialect()))
     sql = MIGRATION.read_text(encoding="utf-8")
-    assert _check_list(ddl) == V3_FIN_STATUSES
+    # v3 SQL เพิ่ม RETURNED/RESUBMITTED · โมเดลตามทันชุดล่าสุดของ prod (2026-10-19 เพิ่ม CLEAR_PENDING)
+    assert set(V3_FIN_STATUSES) <= set(_check_list(ddl)) and "CLEAR_PENDING" in _check_list(ddl)
     assert _check_list(sql) == V3_FIN_STATUSES
     assert set(PROD_FIN_STATUSES) <= set(V3_FIN_STATUSES)  # existing prod rows keep passing
 
