@@ -26,11 +26,12 @@ def test_format_account():
 
 def test_email_subject_and_escaping():
     subject, html = render_payee_request_email(CTX)
-    assert subject == "บัญชีรับเงิน · ขอเพิ่มบัญชีใหม่ · สมชาย <b>x</b> (E<1>)"  # subject is a header, not HTML
+    assert subject == "บัญชีรับเงินสำหรับเบิก Advance · ขอเพิ่มบัญชีใหม่ · สมชาย <b>x</b> (E<1>)"  # subject is a header, not HTML
     assert "<script>" not in html and "&lt;script&gt;" in html
     assert "<b>x</b>" not in html and "&lt;b&gt;x&lt;/b&gt;" in html
     assert "&amp; C" in html
     assert "123-4-56789-0" in html and "กสิกรไทย" in html and "bookbank" in html
+    assert "สำหรับเบิก Advance" in html
 
 
 def test_email_link_present_and_absent():
@@ -49,7 +50,7 @@ def test_email_skips_empty_rows():
 
 def test_change_request_shows_the_old_number():
     subject, html = render_payee_request_email({**CTX, "old_account_no": "0298526131"})
-    assert subject.startswith("บัญชีรับเงิน · ขอเปลี่ยนบัญชี · ")
+    assert subject.startswith("บัญชีรับเงินสำหรับเบิก Advance · ขอเปลี่ยนบัญชี · ")
     assert "ขอเปลี่ยนบัญชี" in html and "เลขเดิม" in html and "029-8-52613-1" in html
     _, new = render_payee_request_email(CTX)
     assert "เลขเดิม" not in new and "ขอเพิ่มบัญชีใหม่" in new

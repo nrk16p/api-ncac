@@ -29,7 +29,7 @@ def render_payee_request_email(ctx: dict):
     emp = ctx.get("employee_id") or "-"
     old = ctx.get("old_account_no")
     kind = "ขอเปลี่ยนบัญชี" if old else "ขอเพิ่มบัญชีใหม่"
-    subject = f"บัญชีรับเงิน · {kind} · {name} ({emp})"
+    subject = f"บัญชีรับเงินสำหรับเบิก Advance · {kind} · {name} ({emp})"
 
     who = " · ".join(e(v) for v in (f"รหัส {emp}", ctx.get("department"), ctx.get("position")) if v)
     old_row = ""
@@ -53,13 +53,13 @@ def render_payee_request_email(ctx: dict):
         '<table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#eef2f7;'
         'padding:32px 16px 32px 24px"><tr><td align="left">'
         '<div style="font-size:12px;font-weight:700;letter-spacing:0.08em;color:#4a5568;margin-bottom:16px">'
-        '&#9679; FINANCE &mdash; บัญชีรับเงินพนักงาน</div>'
+        '&#9679; FINANCE &mdash; บัญชีรับเงินสำหรับเบิก Advance</div>'
         '<table width="620" cellpadding="0" cellspacing="0" border="0" style="max-width:620px;width:100%;'
         'background-color:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #e0e6ed">'
         '<tr><td style="background:#2ea84f;padding:28px 36px">'
-        '<div style="font-size:11px;font-weight:700;color:#ffffff;letter-spacing:0.1em;margin-bottom:10px">บัญชีรับเงิน</div>'
+        '<div style="font-size:11px;font-weight:700;color:#ffffff;letter-spacing:0.1em;margin-bottom:10px">บัญชีรับเงิน · สำหรับเบิก Advance</div>'
         f'<div style="font-size:24px;font-weight:700;color:#ffffff;margin-bottom:6px">{kind}</div>'
-        '<div style="font-size:13px;color:#e8f5ec">รอฝ่ายบัญชีเทียบ bookbank แล้วกดอนุมัติในระบบ</div></td></tr>'
+        '<div style="font-size:13px;color:#e8f5ec">บัญชีที่บริษัทจะโอนเงินเบิก Advance ให้ · รอฝ่ายบัญชีเทียบ bookbank แล้วกดอนุมัติในระบบ</div></td></tr>'
         '<tr><td style="padding:28px 36px"><table width="100%" cellpadding="0" cellspacing="0" border="0">'
         '<tr><td style="font-size:12px;color:#6b7280;padding-bottom:4px">ผู้ขอ</td></tr>'
         f'<tr><td style="font-size:17px;font-weight:700;color:#1f2937">{e(name)}</td></tr>'
