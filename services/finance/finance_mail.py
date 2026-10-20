@@ -60,6 +60,24 @@ def account_mailbox() -> str:
     return (os.getenv("FINANCE_ACCOUNT_EMAIL") or "").strip() or ACCOUNT_MAILBOX_DEFAULT
 
 
+def test_mailbox() -> str:
+    """FINANCE_EMAIL_TEST_TO: ตั้งไว้ = อีเมล Finance ทุกฉบับเข้ากล่องนี้กล่องเดียว (ใช้ช่วง UAT)"""
+    return (os.getenv("FINANCE_EMAIL_TEST_TO") or "").strip()
+
+
+def _test_banner(recipients, cc) -> str:
+    who = escape(", ".join(recipients))
+    cc_line = f" · CC: {escape(', '.join(cc))}" if cc else ""
+    return ('<div style="background:#fff4cc;border:1px solid #f0c64a;padding:10px 16px;margin:12px 24px;'
+            'font-family:Tahoma,Arial,sans-serif;font-size:13px;color:#5b4500">'
+            f"อีเมลทดสอบ · ระบบจริงจะส่งถึง: {who}{cc_line}</div>")
+
+
+def _with_banner(html: str, banner: str) -> str:
+    m = re.search(r"<body[^>]*>", html or "", re.I)
+    return html[:m.end()] + banner + html[m.end():] if m else banner + (html or "")
+
+
 def send_finance_email(to, subject: str, html: str, cc=None) -> None:
     deliver_finance_email(to, subject, html, cc=cc)
 
@@ -88,6 +106,12 @@ def deliver_finance_email(to, subject: str, html: str, cc=None) -> int:
         pending_cc = [c for c in pick_recipients([cc] if isinstance(cc, str) else list(cc or []))
                       if c.lower() not in taken]
         subject = _one_line(subject)
+        test_to = test_mailbox()
+        if test_to and recipients:
+            # ช่วงทดสอบ: ทุกฉบับเข้ากล่องเดียว บอกในเนื้อหาว่าตัวจริงจะถึงใคร (ผู้ใช้สั่ง 20/10/2026)
+            log.info("finance email redirected to FINANCE_EMAIL_TEST_TO: %s", subject)
+            html = _with_banner(html, _test_banner(recipients, pending_cc))
+            recipients, pending_cc = [test_to], []
         for index, addr in enumerate(recipients):
             if server is None:
                 try:
