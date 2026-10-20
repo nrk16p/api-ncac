@@ -45,7 +45,7 @@ CLOSED = "closed"
 CLEAR_SUBMITTED = "clear_submitted"
 APPROVER_EVENTS = (SUBMITTED, RESUBMITTED, STEP_PENDING)
 REQUESTER_EVENTS = (APPROVED, REJECTED, RETURNED, PAID, SENT_BACK, CLOSED, CLEAR_SUBMITTED)
-# งานถึงมือบัญชี: หน้าตาอิงข้อความไลน์กลุ่มบัญชี และ CC กล่องบัญชี (ผู้ใช้สั่ง 20/10/2026)
+# งานถึงมือบัญชี: สรุปเลขที่ ผู้เบิก ยอดเงิน และ CC กล่องบัญชี (ผู้ใช้สั่ง 20/10/2026)
 ACCOUNT_CC_EVENTS = (APPROVED, CLEAR_SUBMITTED)
 
 
@@ -219,7 +219,7 @@ _TITLES = {
 
 
 def _account_rows(event: str, ctx: dict) -> list:
-    """แถวเดียวกับข้อความไลน์กลุ่มบัญชี (finance_line.render_line_message)"""
+    """แถวสรุปในอีเมลที่ CC บัญชี: เลขที่ ผู้เบิก และยอดเงินของขั้นนั้น"""
     who = ctx.get("requester_name") or "-"
     if ctx.get("department"):
         who = f"{who} ({ctx['department']})"

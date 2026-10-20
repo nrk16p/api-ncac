@@ -9,7 +9,6 @@ from services.email_service import send_email, render_form_submit_th, render_for
 from services.line_service import send_line_message
 from services.notify_guard import ADVANCE_FORM_TYPE, notifications_enabled
 from services.finance import advance_guard, advance_logic, approval_logic, approval_repo
-from services.finance import finance_line as fin_line
 from services.finance import finance_mail as fin_mail
 from models.finance_model import FinAdvance
 from database import get_db
@@ -368,8 +367,6 @@ def submit_form(
 
         if form.form_type == ADVANCE_FORM_TYPE:  # finance email (off unless FINANCE_EMAIL_ENABLED)
             fin_mail.queue_event(background_tasks, db, fin_mail.SUBMITTED, submission)
-            # กลุ่มไลน์: เฉพาะใบที่ผู้เบิกอยู่แผนกบัญชี (ผู้ใช้สั่ง 19/10/2026)
-            fin_line.queue_line(background_tasks, db, fin_line.SUBMITTED, submission)
 
         if not notifications_enabled(form):
             return _submit_response(submission, form)

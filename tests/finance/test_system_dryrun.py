@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""ทดสอบทั้งระบบเบิก Advance แบบ dry run — เดินทั้งเส้นทางด้วยกฎจริง ไม่แตะฐานข้อมูล ไม่ส่งอีเมล ไม่ยิงไลน์
+"""ทดสอบทั้งระบบเบิก Advance แบบ dry run — เดินทั้งเส้นทางด้วยกฎจริง ไม่แตะฐานข้อมูล ไม่ส่งอีเมล
 
 ต่างจากเทสอื่นตรงที่ไฟล์นี้ "เดินใบหนึ่งใบตั้งแต่ยื่นจนปิด" แล้วตรวจทุกอย่างที่เกิดระหว่างทาง
-สถานะ · สิทธิ์ · ยอดเงิน · ใครได้อีเมล · ไลน์เข้ากลุ่มไหม — ชั้นวงเงินใช้ชุดเดียวกับ prod
+สถานะ · สิทธิ์ · ยอดเงิน · ใครได้อีเมล — ชั้นวงเงินใช้ชุดเดียวกับ prod
 """
 from datetime import date
 from decimal import Decimal
@@ -12,7 +12,6 @@ import pytest
 from services.finance import advance_logic as L
 from services.finance import approval_logic as rules
 from services.finance import clear_approval_logic as clr
-from services.finance import finance_line as fl
 from services.finance import permission_logic as perms
 from services.finance.advance_logic import AdvanceRuleError, NotAllowed, InvalidTransition
 
@@ -23,7 +22,7 @@ TIERS = [
     {"clause": "6.4", "amount_max": Decimal("100000"), "min_level": 8, "approver_label": "CL", "sort_order": 4},
     {"clause": "6.3", "amount_max": Decimal("500000"), "min_level": 9, "approver_label": "DCEO", "sort_order": 5},
 ]
-ACC_DEPT, OPS_DEPT = 6, 11          # 6 = แผนกบัญชี (ประตูไลน์), 11 = แผนกอื่น
+ACC_DEPT, OPS_DEPT = 6, 11          # 6 = แผนกบัญชี, 11 = แผนกอื่น
 TODAY = date(2026, 10, 19)
 
 
@@ -95,14 +94,6 @@ class Form:
                                       state["excluded"])
         return sorted(p["employee_id"] for p in rules.notify_approvers(el, state["required_level"]))
 
-    def line_fires(self):
-        return fl.should_notify(self.requester["department_id"])
-
-
-@pytest.fixture(autouse=True)
-def line_gate_default(monkeypatch):
-    monkeypatch.delenv("FINANCE_LINE_DEPARTMENT_IDS", raising=False)
-
 
 # ======================= เส้นทางหลัก =======================
 
@@ -112,7 +103,6 @@ def test_happy_path_small_amount_from_staff():
     assert f.status == L.PENDING_APPROVAL
     assert [s["required_level"] for s in f.plan["steps"]] == [2, 3]
     assert f.mail_to() == ["LEAD", "MGR"], "อีเมลขั้น 1 หยุดที่ผู้จัดการ ไม่ถึง CL/DCEO"
-    assert f.line_fires() is False, "ผู้เบิกไม่ได้อยู่แผนกบัญชี"
 
     f.approve("LEAD")                                     # lv3 ≥ ขั้น 2 ที่ต้อง lv3 → ข้ามขั้นจบในคลิกเดียว
     assert f.status_approve == "Approved"
@@ -298,20 +288,6 @@ def test_permissions_for_lists_what_a_person_may_do():
 
 
 # ======================= แจ้งเตือน =======================
-
-def test_line_fires_only_for_an_accounting_requester():
-    assert Form(ACCOUNTANT, 3000).line_fires() is True
-    assert Form(STAFF, 3000).line_fires() is False
-
-
-def test_line_messages_carry_the_numbers_a_reader_needs():
-    text = fl.render_line_message(fl.CLEARING_APPROVAL, {
-        "form_id": "ADV-2610-001", "requester_name": "ผู้เบิก", "department": "แผนกบัญชี",
-        "amount_paid": 15000, "amount_actual": 9000, "settle_amount": 6000,
-        "step": 1, "total_steps": 2, "clause": "6.6"})
-    for piece in ("15,000.00", "9,000.00", "6,000.00", "ขั้นที่ 1 จาก 2", "รออนุมัติเคลียร์"):
-        assert piece in text
-
 
 def test_executives_are_never_emailed_for_a_small_form_but_may_still_approve():
     f = Form(STAFF, 3000)

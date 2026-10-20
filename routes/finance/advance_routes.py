@@ -27,7 +27,6 @@ from services.finance import advance_logic as logic
 from services.finance import advance_repo as repo
 from services.finance import approval_logic as approval_rules
 from services.finance import approval_repo
-from services.finance import finance_line as line_notify
 from services.finance import finance_mail as mail
 from services.finance import overdue_reminder
 from services.finance import permission_logic as perms
@@ -552,11 +551,6 @@ def clear_advance(form_id: str, body: ClearIn, background_tasks: BackgroundTasks
     mail.queue_event(background_tasks, db, mail.CLEAR_SUBMITTED, sub, amount_paid=amount_paid,
                      amount_actual=total_net, settle_amount=settle, pending=pending_approval,
                      step=clr.STEP_LEADER, total_steps=len(info.get("steps") or []), clause=info.get("clause"))
-    if pending_approval:  # กลุ่มไลน์: รออนุมัติเคลียร์
-        line_notify.queue_line(background_tasks, db, line_notify.CLEARING_APPROVAL, sub,
-                               amount_paid=amount_paid, amount_actual=total_net,
-                               settle_amount=settle, step=clr.STEP_LEADER,
-                               total_steps=len(info.get("steps") or []), clause=info.get("clause"))
     return detail
 
 
