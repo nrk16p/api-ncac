@@ -362,7 +362,9 @@ CTX = {"form_id": "ADV-2610-001", "requester_name": '<b>สมชาย</b> & "�
 @pytest.mark.parametrize("event", list(fm._TITLES))
 def test_every_event_renders_and_escapes(event):
     subject, html = fm.render_event_email(event, CTX)
-    assert subject.startswith("[Finance Advance] ADV-2610-001")
+    # สองฉบับที่ CC บัญชีใช้หัวข้อเดียวกับไลน์กลุ่ม ที่เหลือคงรูปเดิม
+    assert subject.startswith("[Finance Advance] ADV-2610-001") or (
+        subject.startswith("เบิกเงิน Advance · ") and subject.endswith("ADV-2610-001"))
     assert "\n" not in subject
     assert "<script>" not in html and "<b>" not in html
     assert "&lt;b&gt;" in html and "&amp;" in html

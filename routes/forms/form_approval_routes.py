@@ -630,6 +630,7 @@ def approve_submission(
             db,
             fin_mail.APPROVED if submission.status_approve == "Approved" else fin_mail.STEP_PENDING,
             submission,
+            approver_name=f"{approver.firstname} {approver.lastname}".strip() or None,
         )
         if submission.status_approve == "Approved":  # กลุ่มไลน์: อนุมัติครบแล้ว รอบัญชีตั้งเบิก
             fin_line.queue_line(background_tasks, db, fin_line.READY_FOR_VOUCHER, submission,

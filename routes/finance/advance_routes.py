@@ -543,10 +543,15 @@ def clear_advance(form_id: str, body: ClearIn, background_tasks: BackgroundTasks
     db.add(FinAdvanceLog(advance_id=adv.id, action=action, changes=changes,
                          remark=body.remark, action_by=body.action_by))
     pending_approval = adv.fin_status == logic.FIN_CLEAR_PENDING
+    amount_paid = adv.amount_paid
     detail = _commit_and_return(db, form_id)
+    # อีเมลถึงผู้เบิก CC บัญชี ทุกครั้งที่ส่งเคลียร์ บอกว่ารอหัวหน้าหรือรอบัญชีตรวจ (ผู้ใช้สั่ง 20/10/2026)
+    mail.queue_event(background_tasks, db, mail.CLEAR_SUBMITTED, sub, amount_paid=amount_paid,
+                     amount_actual=total_net, settle_amount=settle, pending=pending_approval,
+                     step=clr.STEP_LEADER, total_steps=len(info.get("steps") or []), clause=info.get("clause"))
     if pending_approval:  # กลุ่มไลน์: รออนุมัติเคลียร์
         line_notify.queue_line(background_tasks, db, line_notify.CLEARING_APPROVAL, sub,
-                               amount_paid=adv.amount_paid, amount_actual=total_net,
+                               amount_paid=amount_paid, amount_actual=total_net,
                                settle_amount=settle, step=clr.STEP_LEADER,
                                total_steps=len(info.get("steps") or []), clause=info.get("clause"))
     return detail

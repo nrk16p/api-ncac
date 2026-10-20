@@ -114,6 +114,63 @@ def test_switch_off_sends_nothing_even_with_cc(monkeypatch, smtp):
     assert smtp == []
 
 
-def test_approved_email_tells_accounting_it_waits_for_voucher():
-    _subject, html = fm.render_event_email(fm.APPROVED, {"form_id": "ADV-2610-011", "amount": 5000})
-    assert "รอฝ่ายบัญชีตั้งเบิก" in html
+# ---- หน้าตาอีเมลอิงข้อความไลน์กลุ่มบัญชี (ผู้ใช้สั่ง 20/10/2026) ----
+
+CTX = {"form_id": "ADV-2610-011", "requester_name": "จุฑารัตน์ จำนงค์สังข์", "department": "แผนกบัญชี",
+       "amount": 5000, "purpose": "สำรองจ่ายค่าครูฝึก พจส.ใหม่", "use_date": "2026-10-21",
+       "approver_name": "เจษฎา รองศักดิ์", "fe_base_url": "https://app.example.com"}
+
+
+def test_approved_email_reads_like_the_line_message():
+    subject, html = fm.render_event_email(fm.APPROVED, CTX)
+    assert subject == "เบิกเงิน Advance · อนุมัติครบทุกขั้นแล้ว · ADV-2610-011"
+    for text in ("อนุมัติครบทุกขั้นแล้ว", "จุฑารัตน์ จำนงค์สังข์ (แผนกบัญชี)", "ยอดเบิก", "5,000.00",
+                 "สำรองจ่ายค่าครูฝึก พจส.ใหม่", "วันที่ใช้เงิน", "21/10/2026", "ผู้อนุมัติขั้นสุดท้าย",
+                 "เจษฎา รองศักดิ์", "สถานะ", "รอตั้งเบิก", "/finance/advance/ADV-2610-011"):
+        assert text in html, text
+
+
+def _clear(**kw):
+    return {**CTX, "amount_paid": 5000, "amount_actual": 4600, "settle_amount": 400, **kw}
+
+
+def test_clear_email_waiting_for_the_leader():
+    subject, html = fm.render_event_email(fm.CLEAR_SUBMITTED, _clear(pending=True, step=1, total_steps=1, clause="6.6"))
+    assert subject == "เบิกเงิน Advance · ส่งเคลียร์เงินแล้ว · ADV-2610-011"
+    for text in ("จ่ายไปแล้ว", "5,000.00", "ยอดใช้จริง", "4,600.00", "คืนบริษัท", "400.00",
+                 "ขั้นที่ 1 จาก 1 (TOA ข้อ 6.6)", "รออนุมัติเคลียร์"):
+        assert text in html, text
+    assert "รอบัญชีตรวจ" not in html
+
+
+def test_clear_email_straight_to_accounting():
+    _subject, html = fm.render_event_email(fm.CLEAR_SUBMITTED, _clear(pending=False))
+    assert "รอบัญชีตรวจ" in html
+    assert "ขั้นอนุมัติ" not in html and "รออนุมัติเคลียร์" not in html
+
+
+def test_clear_email_when_the_company_owes_the_requester():
+    _subject, html = fm.render_event_email(fm.CLEAR_SUBMITTED, _clear(amount_paid=30000, amount_actual=31200,
+                                                                      settle_amount=-1200, pending=False))
+    assert "บริษัทจ่ายเพิ่ม" in html and "1,200.00" in html
+    assert "คืนบริษัท" not in html
+
+
+def test_clear_email_without_change_shows_no_settle_line():
+    _subject, html = fm.render_event_email(fm.CLEAR_SUBMITTED, _clear(amount_actual=5000, settle_amount=0, pending=False))
+    assert "คืนบริษัท" not in html and "บริษัทจ่ายเพิ่ม" not in html
+
+
+def test_clear_submitted_goes_to_requester_and_ccs_accounting(monkeypatch, smtp):
+    _fire(monkeypatch, fm.CLEAR_SUBMITTED, amount_paid=5000, amount_actual=4600, settle_amount=400, pending=True)
+    assert smtp[0][0] == ["req@x.com", "accountbkk@menatransport.co.th"]
+
+
+def test_routes_send_both_accounting_emails():
+    import inspect
+    from routes.finance import advance_routes as ar
+    from routes.forms import form_approval_routes as fa
+    clear_src = inspect.getsource(ar.clear_advance)
+    assert "mail.CLEAR_SUBMITTED" in clear_src and "pending=pending_approval" in clear_src
+    after_mail = inspect.getsource(fa.approve_submission).split("fin_mail.queue_event", 1)[1][:400]
+    assert "approver_name=" in after_mail

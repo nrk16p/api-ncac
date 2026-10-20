@@ -42,8 +42,11 @@ RETURNED = "returned"
 PAID = "paid"
 SENT_BACK = "sent_back"
 CLOSED = "closed"
+CLEAR_SUBMITTED = "clear_submitted"
 APPROVER_EVENTS = (SUBMITTED, RESUBMITTED, STEP_PENDING)
-REQUESTER_EVENTS = (APPROVED, REJECTED, RETURNED, PAID, SENT_BACK, CLOSED)
+REQUESTER_EVENTS = (APPROVED, REJECTED, RETURNED, PAID, SENT_BACK, CLOSED, CLEAR_SUBMITTED)
+# งานถึงมือบัญชี: หน้าตาอิงข้อความไลน์กลุ่มบัญชี และ CC กล่องบัญชี (ผู้ใช้สั่ง 20/10/2026)
+ACCOUNT_CC_EVENTS = (APPROVED, CLEAR_SUBMITTED)
 
 
 # ---------------------------- switch + sender ----------------------------
@@ -181,24 +184,55 @@ _TITLES = {
     SUBMITTED: ("คำขอใหม่", "รอท่านอนุมัติ", "มีคำขอเบิกเงิน Advance รอท่านพิจารณา", True),
     RESUBMITTED: ("ส่งใหม่", "รอท่านอนุมัติ (ส่งใหม่หลังแก้ไข)", "ผู้เบิกแก้ไขและส่งคำขอเบิกเงิน Advance ใหม่", True),
     STEP_PENDING: ("รออนุมัติขั้นถัดไป", "รอท่านอนุมัติ", "คำขอเบิกเงิน Advance ผ่านการอนุมัติขั้นก่อนหน้าแล้ว", True),
-    APPROVED: ("อนุมัติแล้ว", "คำขอเบิกเงินได้รับการอนุมัติ", "คำขอของท่านผ่านการอนุมัติครบทุกขั้นตอนแล้ว", False),
+    APPROVED: ("เบิกเงิน Advance", "อนุมัติครบทุกขั้นแล้ว", "คำขอผ่านการอนุมัติครบทุกขั้นแล้ว รอฝ่ายบัญชีตั้งเบิก", False),
     REJECTED: ("ไม่อนุมัติ", "คำขอเบิกเงินไม่ได้รับการอนุมัติ", "คำขอของท่านถูกปฏิเสธ", False),
     RETURNED: ("ตีกลับ", "บัญชีตีกลับให้แก้ไข", "กรุณาแก้ไขและส่งคำขอใหม่", False),
     PAID: ("จ่ายเงินแล้ว", "การเงินจ่ายเงินเรียบร้อย", "โปรดเคลียร์เงินภายในกำหนด", False),
     SENT_BACK: ("ตีกลับเคลียร์", "บัญชีตีกลับเอกสารเคลียร์", "กรุณาแก้ไขเอกสารเคลียร์และส่งใหม่", False),
     CLOSED: ("ปิดรายการ", "รายการเบิกเงินปิดเรียบร้อย", "บัญชีตรวจสอบและปิดรายการแล้ว", False),
+    CLEAR_SUBMITTED: ("เบิกเงิน Advance", "ส่งเคลียร์เงินแล้ว", "ผู้เบิกส่งเอกสารเคลียร์เงินแล้ว", False),
 }
 
 
-def render_event_email(event: str, ctx: dict):
-    """ctx: form_id, requester_name, amount, remark, step, total_steps, step_label, transfer_date, clear_due_date,
-    fe_base_url. Returns (subject, html). Every interpolated value is HTML-escaped; the link only when
-    FE_BASE_URL is a bare http(s) origin."""
-    badge, headline, sub, for_approver = _TITLES[event]
-    e = lambda v: escape(str(v), quote=True)  # noqa: E731
-    form_id = ctx.get("form_id") or "-"
-    requester = ctx.get("requester_name")
-    subject = _one_line(f"[Finance Advance] {form_id} — {headline}")
+def _account_rows(event: str, ctx: dict) -> list:
+    """แถวเดียวกับข้อความไลน์กลุ่มบัญชี (finance_line.render_line_message)"""
+    who = ctx.get("requester_name") or "-"
+    if ctx.get("department"):
+        who = f"{who} ({ctx['department']})"
+    rows = [("เลขที่", ctx.get("form_id") or "-"), ("ผู้เบิก", who)]
+    money = lambda key: _fmt_money(ctx.get(key))  # noqa: E731
+    if event == CLEAR_SUBMITTED:
+        for label, key in (("จ่ายไปแล้ว", "amount_paid"), ("ยอดใช้จริง", "amount_actual")):
+            if money(key):
+                rows.append((label, money(key)))
+        try:
+            settle = float(ctx.get("settle_amount") or 0)
+        except (TypeError, ValueError):
+            settle = 0
+        if settle > 0:
+            rows.append(("คืนบริษัท", _fmt_money(settle)))
+        elif settle < 0:
+            rows.append(("บริษัทจ่ายเพิ่ม", _fmt_money(-settle)))
+    elif money("amount"):
+        rows.append(("ยอดเบิก", money("amount")))
+    if ctx.get("purpose"):
+        rows.append(("วัตถุประสงค์", ctx["purpose"]))
+    if event == APPROVED:
+        if _fmt_date(ctx.get("use_date")):
+            rows.append(("วันที่ใช้เงิน", _fmt_date(ctx.get("use_date"))))
+        if ctx.get("approver_name"):
+            rows.append(("ผู้อนุมัติขั้นสุดท้าย", ctx["approver_name"]))
+        rows.append(("สถานะ", "รอตั้งเบิก"))
+    else:
+        pending = bool(ctx.get("pending"))
+        if pending and ctx.get("total_steps"):
+            tail = f" (TOA ข้อ {ctx['clause']})" if ctx.get("clause") else ""
+            rows.append(("ขั้นอนุมัติ", f"ขั้นที่ {ctx.get('step') or 1} จาก {ctx['total_steps']}{tail}"))
+        rows.append(("สถานะ", "รออนุมัติเคลียร์" if pending else "รอบัญชีตรวจ"))
+    return rows
+
+
+def _legacy_rows(event: str, ctx: dict, form_id, requester) -> list:
     rows = [("เลขที่เอกสาร", form_id)]
     if requester:
         rows.append(("ผู้เบิก", requester))
@@ -214,10 +248,25 @@ def render_event_email(event: str, ctx: dict):
             value = _fmt_money(ctx.get(key)) if key == "amount_paid" else _fmt_date(ctx.get(key))
             if value:
                 rows.append((label, value))
-    if event == APPROVED:
-        rows.append(("ขั้นต่อไป", "รอฝ่ายบัญชีตั้งเบิก"))
     if event in (REJECTED, RETURNED, SENT_BACK) and ctx.get("remark"):
         rows.append(("เหตุผล", ctx.get("remark")))
+    return rows
+
+
+def render_event_email(event: str, ctx: dict):
+    """ctx: form_id, requester_name, amount, remark, step, total_steps, step_label, transfer_date, clear_due_date,
+    fe_base_url. Returns (subject, html). Every interpolated value is HTML-escaped; the link only when
+    FE_BASE_URL is a bare http(s) origin."""
+    badge, headline, sub, for_approver = _TITLES[event]
+    e = lambda v: escape(str(v), quote=True)  # noqa: E731
+    form_id = ctx.get("form_id") or "-"
+    requester = ctx.get("requester_name")
+    if event in ACCOUNT_CC_EVENTS:
+        subject = _one_line(f"{badge} · {headline} · {form_id}")
+        rows = _account_rows(event, ctx)
+    else:
+        subject = _one_line(f"[Finance Advance] {form_id} — {headline}")
+        rows = _legacy_rows(event, ctx, form_id, requester)
     table = "".join(
         f'<tr><td style="padding:6px 16px 6px 0;font-size:13px;color:#6b7280;white-space:nowrap">{e(label)}</td>'
         f'<td style="padding:6px 0;font-size:14px;color:#1f2937">{e(value)}</td></tr>' for label, value in rows)
@@ -314,7 +363,9 @@ def queue_event(background_tasks, db, event: str, submission, **extra) -> None:
         people = advance_repo.people_by_employee_id(db, [submission.created_by])
         ctx = {"form_id": submission.form_id,
                "requester_name": (people.get(submission.created_by) or {}).get("name"),
-               "amount": values.get("amount"), "fe_base_url": os.getenv("FE_BASE_URL"), **extra}
+               "amount": values.get("amount"), "fe_base_url": os.getenv("FE_BASE_URL"),
+               "department": (people.get(submission.created_by) or {}).get("department"),
+               "purpose": values.get("purpose"), "use_date": values.get("use_date"), **extra}
         if event in APPROVER_EVENTS:
             try:
                 actx = approval_repo.ensure_people(db, approval_repo.load_context(db), submission.created_by)
@@ -332,7 +383,7 @@ def queue_event(background_tasks, db, event: str, submission, **extra) -> None:
             return
         subject, html = render_event_email(event, ctx)
         # อนุมัติครบ = ใบรอตั้งเบิก: CC กล่องบัญชีให้รู้ด้วย (ผู้ใช้สั่ง 20/10/2026)
-        cc = [account_mailbox()] if event == APPROVED else None
+        cc = [account_mailbox()] if event in ACCOUNT_CC_EVENTS else None
         background_tasks.add_task(send_finance_email, to, subject, html, cc=cc)
     except Exception:  # noqa: BLE001 - never break the request
         _rollback(db)
