@@ -411,21 +411,24 @@ def get_advance_detail(db, form_id):
          "action_at": _iso(log.action_at), "actor_name": _full_name(user)}
         for log, user in approval_rows
     ]
-    fin_logs = []
+    fin_rows = []
     if adv is not None:
-        fin_logs = [
-            {"action": log.action, "changes": {k: v for k, v in (log.changes or {}).items() if k != "snapshot"} or log.changes, "remark": log.remark,
-             "action_by": log.action_by, "created_at": _iso(log.created_at)}
-            for log in db.query(FinAdvanceLog).filter(FinAdvanceLog.advance_id == adv.id)
-            .order_by(FinAdvanceLog.id.asc()).all()
-        ]
-    item["fin_logs"] = fin_logs
+        fin_rows = (db.query(FinAdvanceLog).filter(FinAdvanceLog.advance_id == adv.id)
+                    .order_by(FinAdvanceLog.id.asc()).all())
+    clear_rows = (db.query(FinClearApprovalLog).filter(FinClearApprovalLog.form_id == form_id)
+                  .order_by(FinClearApprovalLog.id).all())
+    # ชื่อคนทำ ให้ประวัติโชว์ชื่อแทนรหัสพนักงาน (รอบทดสอบ UI 20/10/2026)
+    actors = {r.action_by for r in [*fin_rows, *clear_rows] if r.action_by}
+    names = {k: v.get("name") for k, v in people_by_employee_id(db, list(actors)).items()} if actors else {}
+    item["fin_logs"] = [
+        {"action": log.action, "changes": {k: v for k, v in (log.changes or {}).items() if k != "snapshot"} or log.changes, "remark": log.remark,
+         "action_by": log.action_by, "action_by_name": names.get(log.action_by), "created_at": _iso(log.created_at)}
+        for log in fin_rows
+    ]
     item["clear_logs"] = [
         {"step": r.step, "action": r.action, "clause": r.clause, "remark": r.remark,
-         "action_by": r.action_by, "created_at": _iso(r.created_at)}
-        for r in (db.query(FinClearApprovalLog)
-                  .filter(FinClearApprovalLog.form_id == form_id)
-                  .order_by(FinClearApprovalLog.id).all())
+         "action_by": r.action_by, "action_by_name": names.get(r.action_by), "created_at": _iso(r.created_at)}
+        for r in clear_rows
     ]
     return item
 
