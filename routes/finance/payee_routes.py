@@ -193,10 +193,12 @@ def create_payee_request(body: PayeeRequestCreate, background_tasks: BackgroundT
                                  account_name=account_name, remark=body.remark, status="PENDING",
                                  created_at=_now())
     db.add(row)
+    master = repo.get_master(db, body.employee_id)
+    old_account_no = master.account_no if master is not None and master.status == "ACTIVE" else None
     try:
         db.flush()  # id for the log/email; the partial unique index fires here on a double click
         _log(db, body.employee_id, "REQUEST",
-             {**pl.diff_pairs({k: v for k, v in _account_values(repo.get_master(db, body.employee_id)).items()
+             {**pl.diff_pairs({k: v for k, v in _account_values(master).items()
                               if k != "status"},
                               {"account_no": account_no, "account_name": account_name}),
               "request_status": [None, "PENDING"]},
@@ -209,7 +211,7 @@ def create_payee_request(body: PayeeRequestCreate, background_tasks: BackgroundT
         "request_id": row.id, "employee_id": row.employee_id, "employee_name": person.get("name"),
         "department": person.get("department"), "position": person.get("position"),
         "account_no": row.account_no, "account_name": row.account_name, "remark": row.remark,
-        "app_origin": body.app_origin,
+        "old_account_no": old_account_no, "app_origin": body.app_origin,
     })
     return repo.request_dict(db, row)
 
