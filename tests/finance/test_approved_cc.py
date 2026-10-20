@@ -174,3 +174,36 @@ def test_routes_send_both_accounting_emails():
     assert "mail.CLEAR_SUBMITTED" in clear_src and "pending=pending_approval" in clear_src
     after_mail = inspect.getsource(fa.approve_submission).split("fin_mail.queue_event", 1)[1][:400]
     assert "approver_name=" in after_mail
+
+
+# ---- อีเมลขออนุมัติ CC ผู้เบิกด้วย (ผู้ใช้สั่ง 20/10/2026) ----
+
+def _fire_approver(monkeypatch, event):
+    monkeypatch.setattr(fm.advance_repo, "request_values_by_submission", lambda db, ids: {1: {"amount": 4500}})
+    monkeypatch.setattr(fm.advance_repo, "people_by_employee_id", lambda db, ids: {"E1": {"name": "กฤตบุญ"}})
+    monkeypatch.setattr(fm, "step_approver_emails", lambda db, sub: ["boss1@x.com", "boss2@x.com"])
+    monkeypatch.setattr(fm.approval_repo, "ensure_people", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("skip")))
+    bg = BackgroundTasks()
+    fm.queue_event(bg, _Db([NS(email="req@x.com")]), event, NS(id=1, form_id="ADV-2610-008", created_by="E1",
+                                                               current_approval_level=1))
+    for t in bg.tasks:
+        t.func(*t.args, **t.kwargs)
+
+
+@pytest.mark.parametrize("event", [fm.SUBMITTED, fm.STEP_PENDING, fm.RESUBMITTED])
+def test_approval_request_ccs_the_requester_once(monkeypatch, smtp, event):
+    _fire_approver(monkeypatch, event)
+    assert [to for to, _ in smtp] == [["boss1@x.com", "req@x.com"], ["boss2@x.com"]]
+    assert "Cc: req@x.com" in smtp[0][1] and "Cc:" not in smtp[1][1]
+
+
+def test_requester_who_is_also_an_approver_is_not_doubled(monkeypatch, smtp):
+    monkeypatch.setattr(fm.advance_repo, "request_values_by_submission", lambda db, ids: {1: {"amount": 4500}})
+    monkeypatch.setattr(fm.advance_repo, "people_by_employee_id", lambda db, ids: {"E1": {"name": "x"}})
+    monkeypatch.setattr(fm, "step_approver_emails", lambda db, sub: ["req@x.com"])
+    bg = BackgroundTasks()
+    fm.queue_event(bg, _Db([NS(email="req@x.com")]), fm.SUBMITTED, NS(id=1, form_id="F", created_by="E1",
+                                                                      current_approval_level=1))
+    for t in bg.tasks:
+        t.func(*t.args, **t.kwargs)
+    assert [to for to, _ in smtp] == [["req@x.com"]]

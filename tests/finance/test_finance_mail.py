@@ -349,7 +349,8 @@ def test_queue_event_failed_step_line_rolls_back_and_still_queues(monkeypatch):
     db = _FailingDb()
     bg = BackgroundTasks()
     fm.queue_event(bg, db, fm.STEP_PENDING, NS(id=1, form_id="F", created_by="E1", current_approval_level=2))
-    assert db.rollbacks == 1 and len(bg.tasks) == 1
+    # one rollback for the step line, one for the requester CC lookup; the approvers' email is still queued
+    assert db.rollbacks == 2 and len(bg.tasks) == 1
 
 
 # ---------------------------- renders ----------------------------

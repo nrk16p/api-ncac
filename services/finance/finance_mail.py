@@ -406,8 +406,17 @@ def queue_event(background_tasks, db, event: str, submission, **extra) -> None:
             log.info("finance email %s for %s: no recipient with an email", event, submission.form_id)
             return
         subject, html = render_event_email(event, ctx)
-        # อนุมัติครบ = ใบรอตั้งเบิก: CC กล่องบัญชีให้รู้ด้วย (ผู้ใช้สั่ง 20/10/2026)
-        cc = [account_mailbox()] if event in ACCOUNT_CC_EVENTS else None
+        # งานถึงมือบัญชี: CC กล่องบัญชี · อีเมลขออนุมัติ: CC ผู้เบิกให้รู้ว่าใบไปถึงใครแล้ว (ผู้ใช้สั่ง 20/10/2026)
+        if event in ACCOUNT_CC_EVENTS:
+            cc = [account_mailbox()]
+        elif event in APPROVER_EVENTS:
+            try:
+                cc = requester_email(db, submission)
+            except Exception:  # noqa: BLE001 - the CC is optional, the approvers' email still goes
+                _rollback(db)
+                cc = None
+        else:
+            cc = None
         background_tasks.add_task(send_finance_email, to, subject, html, cc=cc)
     except Exception:  # noqa: BLE001 - never break the request
         _rollback(db)
