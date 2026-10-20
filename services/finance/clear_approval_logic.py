@@ -76,6 +76,8 @@ def can_approve(plan_info: Mapping, people: Mapping[str, Mapping], mappings,
     """`already` = users.id ของคนที่อนุมัติขั้นก่อนหน้าในรอบนี้ — ห้ามคนเดิมกดสองขั้น"""
     spec = step_spec(plan_info, step)
     requester = people.get(requester_employee_id) or {}
+    if rules.superadmin_may_approve(approver_employee_id, requester_employee_id, requester):
+        return True
     approver = people.get(approver_employee_id)
     if approver is None:
         return False

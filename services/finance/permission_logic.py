@@ -15,6 +15,14 @@ PERM_CLOSE = "close"                     # ปิดรายการ (รั�
 PERM_PAYEE_ADMIN = "payee_admin"         # จัดการบัญชีรับเงิน (Master + อนุมัติคำขอ)
 PERM_OVERDUE_REMIND = "overdue_remind"   # ส่งแจ้งเตือนเกินกำหนด
 
+# ผู้ดูแลระบบสูงสุดของงานเบิก Advance: ทุกปุ่ม รวมอนุมัติทุกขั้น (ผู้ใช้สั่ง 20/10/2026)
+SUPERADMIN_EMPLOYEE_IDS = frozenset({"670108"})  # ณรงค์กรณ์ อัจฉริยญาติ (narongkorn.a)
+
+
+def is_superadmin(employee_id) -> bool:
+    return employee_id is not None and str(employee_id).strip() in SUPERADMIN_EMPLOYEE_IDS
+
+
 ALL_PERMISSIONS = (
     PERM_VOUCHER, PERM_PAY, PERM_RETURN, PERM_CLEARING_REVIEW,
     PERM_CLOSE, PERM_PAYEE_ADMIN, PERM_OVERDUE_REMIND,
@@ -45,7 +53,9 @@ def is_configured(permission: str, grants: Mapping[str, Iterable[str]]) -> bool:
 def allowed(permission: str, employee_id: str, grants: Mapping[str, Iterable[str]],
             is_finance: bool) -> bool:
     """ถ้าสิทธิ์นี้ยังไม่ได้ตั้งค่า ใช้กติกาเดิม (ใครอยู่การเงิน/บัญชีก็ทำได้)
-    เพื่อไม่ให้ระบบล็อกตัวเองตอน deploy ก่อนรัน SQL"""
+    เพื่อไม่ให้ระบบล็อกตัวเองตอน deploy ก่อนรัน SQL · superadmin ได้ทุกสิทธิ์เสมอ"""
+    if is_superadmin(employee_id):
+        return True
     if not is_configured(permission, grants):
         return bool(is_finance)
     return employee_id is not None and employee_id in set(grants.get(permission) or ())

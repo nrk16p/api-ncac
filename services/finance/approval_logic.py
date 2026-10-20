@@ -13,6 +13,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Iterable, Mapping, Optional
 
 from services.finance.advance_logic import AdvanceRuleError
+from services.finance.permission_logic import is_superadmin
 
 ORG_WIDE_LEVEL = 9
 NOTIFY_MAX_LEVEL = 5
@@ -293,6 +294,12 @@ def evaluate_step(evaluated: Mapping, people: Mapping[str, Mapping], mappings, r
             "label": spec["label"], "direct_level": direct, "excluded": excluded}
 
 
+def superadmin_may_approve(approver_employee_id, requester_employee_id, requester) -> bool:
+    """superadmin อนุมัติได้ทุกขั้นทุกใบ ยกเว้นใบของตัวเอง (ผู้ใช้สั่ง 20/10/2026)"""
+    return (requester is not None and is_superadmin(approver_employee_id)
+            and str(approver_employee_id) != str(requester_employee_id))
+
+
 def decide(evaluated: Mapping, people: Mapping[str, Mapping], mappings, requester_employee_id: str,
            approver_employee_id: str, current_level, round_logs: Iterable[Mapping] = ()) -> dict:
     """May this person act on the current step, and what happens if they approve it."""
@@ -303,6 +310,9 @@ def decide(evaluated: Mapping, people: Mapping[str, Mapping], mappings, requeste
                and can_approve(approver, requester, state["required_level"],
                                mappings.get(approver_employee_id, ()), state["excluded"]))
     level = approver.get("level") if approver is not None else None
+    if not allowed and superadmin_may_approve(approver_employee_id, requester_employee_id, requester):
+        # superadmin กดแทนได้ทุกขั้น แต่ผ่านแค่ขั้นนี้ ไม่ข้ามขั้นถัดไปด้วยระดับของตัวเอง
+        allowed, level = True, state["required_level"]
     steps = evaluated["steps"]
     outcome, next_step = next_after_approval(steps, state["step"], level)
     return {"allowed": allowed, "step": state["step"], "total_steps": state["total_steps"], "steps": steps,

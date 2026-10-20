@@ -232,7 +232,8 @@ def pending_for(db, employee_id):
     subs = _in_progress_advances(db)
     ctx = ensure_people(db, load_context(db), employee_id, *[s.created_by for s in subs])
     approver = ctx.people.get(employee_id)
-    if approver is None or approver["level"] is None:
+    superadmin = rules.is_superadmin(employee_id)
+    if approver is None or (approver["level"] is None and not superadmin):
         return []
     ids = [s.id for s in subs]
     requests = advance_repo.request_values_by_submission(db, ids)
@@ -250,8 +251,9 @@ def pending_for(db, employee_id):
             continue
         state = rules.evaluate_step(result, ctx.people, ctx.mappings, sub.created_by, sub.current_approval_level,
                                     rounds.get(sub.id, []))
-        if not rules.can_approve(approver, requester, state["required_level"], ctx.mappings.get(employee_id, ()),
-                                 state["excluded"]):
+        normal = approver["level"] is not None and rules.can_approve(
+            approver, requester, state["required_level"], ctx.mappings.get(employee_id, ()), state["excluded"])
+        if not normal and not rules.superadmin_may_approve(employee_id, sub.created_by, requester):
             continue
         items.append({
             "form_id": sub.form_id,
@@ -267,6 +269,6 @@ def pending_for(db, employee_id):
             "total_steps": state["total_steps"],
             "step_required_level": state["required_level"],
             "step_label": state["label"],
-            "tab": rules.approval_tab(approver["level"], state["direct_level"]),
+            "tab": (rules.approval_tab(approver["level"], state["direct_level"]) if normal else rules.TAB_MINE),
         })
     return items

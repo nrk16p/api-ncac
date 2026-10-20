@@ -49,6 +49,8 @@ def _finance_ids():
 def require_finance(db: Session, employee_id: str) -> User:
     user = db.query(User).filter(User.employee_id == employee_id).first()
     depts, emps = _finance_ids()
+    if user is not None and perms.is_superadmin(user.employee_id):
+        return user
     if user is None or not logic.is_finance_user(user.department_id, user.employee_id, depts, emps):
         raise HTTPException(status_code=403, detail="เฉพาะฝ่ายการเงินเท่านั้น")
     return user
