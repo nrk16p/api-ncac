@@ -29,6 +29,7 @@ log = logging.getLogger(__name__)
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
 MAX_RECIPIENTS = 20
+ACCOUNT_MAILBOX_DEFAULT = "accountbkk@menatransport.co.th"
 _ORIGIN = re.compile(r"^https?://[A-Za-z0-9.-]+(:[0-9]+)?$")
 
 # events
@@ -51,11 +52,16 @@ def email_enabled() -> bool:
     return (os.getenv("FINANCE_EMAIL_ENABLED") or "").strip().lower() == "true"
 
 
-def send_finance_email(to, subject: str, html: str) -> None:
-    deliver_finance_email(to, subject, html)
+def account_mailbox() -> str:
+    """กล่องอีเมลฝ่ายบัญชี: FINANCE_ACCOUNT_EMAIL ถ้าไม่ตั้ง = accountbkk"""
+    return (os.getenv("FINANCE_ACCOUNT_EMAIL") or "").strip() or ACCOUNT_MAILBOX_DEFAULT
 
 
-def deliver_finance_email(to, subject: str, html: str) -> int:
+def send_finance_email(to, subject: str, html: str, cc=None) -> None:
+    deliver_finance_email(to, subject, html, cc=cc)
+
+
+def deliver_finance_email(to, subject: str, html: str, cc=None) -> int:
     """Same as send_finance_email but returns how many recipients SMTP accepted (0 when off / failed).
     `to`: one address or a list (deduped, capped at MAX_RECIPIENTS). One message per recipient, each with only
     that recipient in To, over one SMTP connection per batch. A failed recipient is logged and the rest are still
@@ -74,6 +80,10 @@ def deliver_finance_email(to, subject: str, html: str) -> int:
     sent = 0
     try:
         recipients = pick_recipients([to] if isinstance(to, str) else list(to or []))
+        taken = {r.lower() for r in recipients}
+        # CC goes on one message only (the first that is accepted), never once per recipient
+        pending_cc = [c for c in pick_recipients([cc] if isinstance(cc, str) else list(cc or []))
+                      if c.lower() not in taken]
         subject = _one_line(subject)
         for index, addr in enumerate(recipients):
             if server is None:
@@ -84,8 +94,9 @@ def deliver_finance_email(to, subject: str, html: str) -> int:
                                   len(recipients) - index, subject)
                     return sent
             try:
-                server.sendmail(user, [addr], _message(user, addr, subject, html))
+                server.sendmail(user, [addr] + pending_cc, _message(user, addr, subject, html, pending_cc))
                 sent += 1
+                pending_cc = []
             except Exception:  # noqa: BLE001 - one recipient's failure must not stop the others
                 log.exception("finance email to %s failed: %s", addr, subject)
                 _quit(server)
@@ -117,10 +128,12 @@ def _quit(server) -> None:
         pass
 
 
-def _message(sender, recipient, subject, html) -> str:
+def _message(sender, recipient, subject, html, cc=None) -> str:
     msg = MIMEMultipart()
     msg["From"] = sender
     msg["To"] = _one_line(recipient)
+    if cc:
+        msg["Cc"] = _one_line(", ".join(cc))
     msg["Subject"] = subject
     msg.attach(MIMEText(html, "html", "utf-8"))
     return msg.as_string()
@@ -201,6 +214,8 @@ def render_event_email(event: str, ctx: dict):
             value = _fmt_money(ctx.get(key)) if key == "amount_paid" else _fmt_date(ctx.get(key))
             if value:
                 rows.append((label, value))
+    if event == APPROVED:
+        rows.append(("ขั้นต่อไป", "รอฝ่ายบัญชีตั้งเบิก"))
     if event in (REJECTED, RETURNED, SENT_BACK) and ctx.get("remark"):
         rows.append(("เหตุผล", ctx.get("remark")))
     table = "".join(
@@ -316,7 +331,9 @@ def queue_event(background_tasks, db, event: str, submission, **extra) -> None:
             log.info("finance email %s for %s: no recipient with an email", event, submission.form_id)
             return
         subject, html = render_event_email(event, ctx)
-        background_tasks.add_task(send_finance_email, to, subject, html)
+        # อนุมัติครบ = ใบรอตั้งเบิก: CC กล่องบัญชีให้รู้ด้วย (ผู้ใช้สั่ง 20/10/2026)
+        cc = [account_mailbox()] if event == APPROVED else None
+        background_tasks.add_task(send_finance_email, to, subject, html, cc=cc)
     except Exception:  # noqa: BLE001 - never break the request
         _rollback(db)
         log.exception("finance email %s could not be queued", event)
