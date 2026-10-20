@@ -18,19 +18,36 @@ STEPS = ("พิมพ์เอกสาร", "Part 1", "Cash Advance Request", 
          "Part 2", "Expense Claim Form", "ใบขอเบิกค่าใช้จ่าย/เคลียร์เบิกล่วงหน้า", "ตัวจริง", "ฝ่ายบัญชี")
 
 
-def test_subject_and_rows():
-    subject, html = fm.render_event_email(fm.CLEAR_APPROVED, CTX)
-    assert subject == "เบิกเงิน Advance · อนุมัติเคลียร์แล้ว · ADV-2610-009"
-    for text in ("อนุมัติเคลียร์แล้ว", "กฤตบุญ แหลงเงิน (IT)", "จ่ายไปแล้ว", "4,500.00", "ยอดใช้จริง", "4,300.00",
-                 "คืนบริษัท", "200.00", "ผู้อนุมัติเคลียร์", "ณรงค์กร อัตถะ", "รอบัญชีตรวจ",
+LETTER_CTX = {**CTX, "clear_due_date": "2026-10-27"}
+
+
+def test_letter_subject_has_full_name():
+    subject, _html = fm.render_event_email(fm.CLEAR_APPROVED, LETTER_CTX)
+    assert subject == "การเคลียร์เงิน Advance ผ่านการอนุมัติครบทุกขั้นแล้ว กฤตบุญ แหลงเงิน"
+
+
+def test_letter_body_follows_accounting_wording():
+    _s, html = fm.render_event_email(fm.CLEAR_APPROVED, LETTER_CTX)
+    for text in ("เรียน คุณกฤตบุญ,",
+                 "อีเมลฉบับนี้ส่งมาเพื่อแจ้งการเคลียร์เงินยืมทดรองจ่าย หลังจากผ่านการอนุมัติครบทุกขั้นแล้ว",
+                 "จากใบคำขอเบิกเงิน ADV-2610-009 จำนวน 4,500.00 บาท ซึ่งจะครบกำหนดชำระในวันที่ 27/10/2026",
+                 "โดยมีขั้นตอนการเคลียร์เงินยืมทดรอง หลังผ่านการอนุมัติครบทุกขั้นแล้ว ดังนี้",
+                 "พิมพ์แบบฟอร์มใบสรุปการเคลียร์เงินในระบบขอเบิกจ่ายเงินทดรอง",
+                 "ส่งมอบเอกสารฉบับจริง (เท่านั้น) เช่น ใบเสร็จรับเงินและเอกสารประกอบเพื่อเคลียร์ค่าใช้จ่าย",
+                 "หลักฐานการโอนเงินคืนบริษัท",
+                 "รบกวนส่งเอกสารตัวจริงให้ทางบัญชีทันทีหลังจากที่มีการเคลียร์เงินทดรองในระบบเรียบร้อยแล้ว",
+                 "หากคุณกฤตบุญ มีข้อติดขัด หรือต้องการสอบถามรายละเอียดเพิ่มเติม",
+                 "accountbkk@menatransport.co.th ค่ะ",
+                 "ขอขอบคุณสำหรับความร่วมมือค่ะ",
                  "/finance/advance/ADV-2610-009"):
         assert text in html, text
+    assert "ขอบเบิก" not in html
 
 
-def test_tells_the_requester_to_print_both_parts_and_send_originals():
-    _s, html = fm.render_event_email(fm.CLEAR_APPROVED, CTX)
-    for text in STEPS:
-        assert text in html, text
+def test_letter_contact_stays_accountbkk_even_when_cc_is_redirected(monkeypatch):
+    monkeypatch.setenv("FINANCE_ACCOUNT_EMAIL", "uat-box@x.com")
+    _s, html = fm.render_event_email(fm.CLEAR_APPROVED, LETTER_CTX)
+    assert "accountbkk@menatransport.co.th" in html and "uat-box@x.com" not in html
 
 
 def test_clear_going_straight_to_accounting_also_carries_the_steps():
@@ -80,7 +97,7 @@ def test_goes_to_the_requester_and_ccs_accounting(monkeypatch):
 def test_route_sends_only_on_the_last_clearing_step(monkeypatch, next_step, expect_mail):
     from routes.finance import advance_routes as r
 
-    adv = NS(form_id="ADV-2610-009", clear_approval_level=1, amount_paid=4500, amount_actual=4300,
+    adv = NS(form_id="ADV-2610-009", clear_approval_level=1, amount_paid=4500, amount_actual=4300, clear_due_date="2026-10-27",
              settle_amount=200, fin_status=None, clear_approved_clause=None)
     sub = NS(id=1, form_id="ADV-2610-009", created_by="E1")
     monkeypatch.setattr(r, "_load_for_update", lambda db, fid: (sub, adv, r.logic.CLEARING_APPROVAL))
@@ -99,8 +116,8 @@ def test_route_sends_only_on_the_last_clearing_step(monkeypatch, next_step, expe
     out = r.clear_approve("ADV-2610-009", NS(action_by="A9", remark=None), BackgroundTasks(), db=None)
     assert out == {"form_id": "ADV-2610-009"}
     if expect_mail:
-        assert calls == [(fm.CLEAR_APPROVED, {"approver_name": "ณรงค์กร อัตถะ", "amount_paid": 4500,
-                                               "amount_actual": 4300, "settle_amount": 200})]
+        assert calls == [(fm.CLEAR_APPROVED, {"approver_name": "ณรงค์กร อัตถะ", "clear_due_date": "2026-10-27",
+                                               "amount_paid": 4500, "amount_actual": 4300, "settle_amount": 200})]
         assert adv.fin_status == r.logic.FIN_CLEARING_SUBMITTED
     else:  # ผ่านขั้น 1 แล้ว: แจ้งหัวหน้าขั้น 2 ไม่ใช่ผู้เบิก
         assert [c[0] for c in calls] == [fm.CLEAR_PENDING]

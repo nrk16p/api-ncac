@@ -682,7 +682,7 @@ def clear_approve(form_id: str, body: ClearApproveIn, background_tasks: Backgrou
     if nxt is None:  # ถึงมือบัญชีแล้ว: บอกผู้เบิกให้พิมพ์เอกสารส่งตัวจริง CC บัญชี (ผู้ใช้สั่ง 20/10/2026)
         approver = repo.people_by_employee_id(db, [body.action_by]).get(body.action_by) or {}
         mail.queue_event(background_tasks, db, mail.CLEAR_APPROVED, sub,
-                         approver_name=approver.get("name"), **amounts)
+                         approver_name=approver.get("name"), clear_due_date=adv.clear_due_date, **amounts)
     return detail
 
 

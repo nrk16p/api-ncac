@@ -309,10 +309,62 @@ def _legacy_rows(event: str, ctx: dict, form_id, requester) -> list:
     return rows
 
 
+def _first_name(full) -> str:
+    return (full or "").strip().split(" ")[0] if (full or "").strip() else ""
+
+
+def render_clear_approved_letter(ctx: dict):
+    """อีเมลถึงผู้เบิกหลังอนุมัติเคลียร์ครบทุกขั้น — ถ้อยคำตามที่ฝ่ายบัญชีให้มา (ผู้ใช้สั่ง 20/10/2026 แก้แค่คำผิด)
+    ช่องติดต่อเขียน accountbkk ตายตัว เพราะ FINANCE_ACCOUNT_EMAIL ช่วงทดสอบชี้ไปกล่องคนอื่น"""
+    e = lambda v: escape(str(v), quote=True)  # noqa: E731
+    form_id = ctx.get("form_id") or "-"
+    full = (ctx.get("requester_name") or "").strip()
+    first = _first_name(full) or full or "-"
+    amount = _fmt_money(ctx.get("amount_paid")) or _fmt_money(ctx.get("amount")) or "-"
+    amount = amount.replace(" บาท", "")
+    due = _fmt_date(ctx.get("clear_due_date")) or "-"
+    subject = _one_line(f"การเคลียร์เงิน Advance ผ่านการอนุมัติครบทุกขั้นแล้ว {full}".strip())
+    p = 'margin:0 0 14px;font-size:14px;line-height:1.75;color:#1f2937'
+    indent = p + ';text-indent:2.5em'
+    link = advance_link(ctx.get("fe_base_url"), form_id, False)
+    button = ""
+    if link:
+        button = ('<p style="margin:22px 0 0"><a href="' + escape(link, quote=True) + '" style="display:inline-block;'
+                  'padding:11px 22px;background:#1a7a36;color:#ffffff;text-decoration:none;border-radius:8px;'
+                  'font-size:14px;font-weight:700">เปิดรายการเพื่อพิมพ์เอกสาร</a></p>')
+    body = (
+        f'<p style="{p}">เรียน คุณ{e(first)},</p>'
+        f'<p style="{indent}">อีเมลฉบับนี้ส่งมาเพื่อแจ้งการเคลียร์เงินยืมทดรองจ่าย หลังจากผ่านการอนุมัติครบทุกขั้นแล้ว '
+        f'จากใบคำขอเบิกเงิน {e(form_id)} จำนวน {e(amount)} บาท ซึ่งจะครบกำหนดชำระในวันที่ {e(due)}</p>'
+        f'<p style="{indent}">โดยมีขั้นตอนการเคลียร์เงินยืมทดรอง หลังผ่านการอนุมัติครบทุกขั้นแล้ว ดังนี้</p>'
+        f'<ol style="margin:0 0 14px;padding-left:22px;font-size:14px;line-height:1.75;color:#1f2937">'
+        '<li>พิมพ์แบบฟอร์มใบสรุปการเคลียร์เงินในระบบขอเบิกจ่ายเงินทดรอง</li>'
+        '<li>ส่งมอบเอกสารฉบับจริง (เท่านั้น) เช่น ใบเสร็จรับเงินและเอกสารประกอบเพื่อเคลียร์ค่าใช้จ่าย '
+        '(หลักฐานการโอนเงินคืนบริษัท <i>ถ้ามีการคืนเงิน</i>)</li></ol>'
+        f'<p style="{p}">รบกวนส่งเอกสารตัวจริงให้ทางบัญชีทันทีหลังจากที่มีการเคลียร์เงินทดรองในระบบเรียบร้อยแล้ว</p>'
+        f'<p style="{indent}">หากคุณ{e(first)} มีข้อติดขัด หรือต้องการสอบถามรายละเอียดเพิ่มเติม '
+        f'สามารถติดต่อฝ่ายบัญชีได้โดยตรงทางอีเมล {e(ACCOUNT_MAILBOX_DEFAULT)} ค่ะ</p>'
+        f'<p style="{p}">ขอขอบคุณสำหรับความร่วมมือค่ะ</p>{button}'
+    )
+    html = (
+        '<!DOCTYPE html><html lang="th"><head><meta charset="UTF-8"></head>'
+        '<body style="margin:0;padding:0;background-color:#eef2f7;font-family:Tahoma,Arial,sans-serif">'
+        '<table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#eef2f7;'
+        'padding:32px 16px 32px 24px"><tr><td align="left">'
+        '<table width="620" cellpadding="0" cellspacing="0" border="0" style="max-width:620px;width:100%;'
+        'background-color:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #e0e6ed">'
+        '<tr><td style="background:#2ea84f;height:6px;line-height:6px;font-size:0">&nbsp;</td></tr>'
+        f'<tr><td style="padding:28px 36px">{body}</td></tr></table></td></tr></table></body></html>'
+    )
+    return subject, html
+
+
 def render_event_email(event: str, ctx: dict):
     """ctx: form_id, requester_name, amount, remark, step, total_steps, step_label, transfer_date, clear_due_date,
     fe_base_url. Returns (subject, html). Every interpolated value is HTML-escaped; the link only when
     FE_BASE_URL is a bare http(s) origin."""
+    if event == CLEAR_APPROVED:
+        return render_clear_approved_letter(ctx)
     badge, headline, sub, for_approver = _TITLES[event]
     e = lambda v: escape(str(v), quote=True)  # noqa: E731
     form_id = ctx.get("form_id") or "-"

@@ -364,11 +364,15 @@ CTX = {"form_id": "ADV-2610-001", "requester_name": '<b>สมชาย</b> & "�
 def test_every_event_renders_and_escapes(event):
     subject, html = fm.render_event_email(event, CTX)
     # สองฉบับที่ CC บัญชีใช้หัวข้อเดียวกับไลน์กลุ่ม ที่เหลือคงรูปเดิม
-    assert subject.startswith("[Finance Advance] ADV-2610-001") or (
-        subject.startswith("เบิกเงิน Advance · ") and subject.endswith("ADV-2610-001"))
+    if event == fm.CLEAR_APPROVED:  # จดหมายตามถ้อยคำบัญชี หัวเรื่องลงท้ายด้วยชื่อผู้เบิก (20/10/2026)
+        assert subject.startswith("การเคลียร์เงิน Advance ผ่านการอนุมัติครบทุกขั้นแล้ว ")
+    else:
+        assert subject.startswith("[Finance Advance] ADV-2610-001") or (
+            subject.startswith("เบิกเงิน Advance · ") and subject.endswith("ADV-2610-001"))
     assert "\n" not in subject
     assert "<script>" not in html and "<b>" not in html
-    assert "&lt;b&gt;" in html and "&amp;" in html
+    # จดหมายอนุมัติเคลียร์ใช้แค่ชื่อต้นในเนื้อความ ตัว & อยู่ในนามสกุลส่วนหลังเลยไม่โผล่ใน html
+    assert "&lt;b&gt;" in html and ("&amp;" in html or event == fm.CLEAR_APPROVED)
     assert "15,000.00" in html
 
 
