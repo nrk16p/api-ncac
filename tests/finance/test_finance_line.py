@@ -168,3 +168,35 @@ def test_queue_line_is_a_noop_while_the_switch_is_off():
     fl.queue_line(type("BT", (), {"add_task": lambda *a, **k: calls.append(a)})(), None,
                   fl.SUBMITTED, type("S", (), {"id": 1, "form_id": "A", "created_by": "x"})())
     assert calls == []
+
+
+# ---- อนุมัติครบ รอตั้งเบิก ส่งเข้ากลุ่มทุกแผนก · ใบคำขอเบิกใหม่ เฉพาะแผนกบัญชี (ผู้ใช้สั่ง 20/10/2026) ----
+
+class _BT:
+    def __init__(self):
+        self.tasks = []
+
+    def add_task(self, fn, *a, **k):
+        self.tasks.append((fn, a, k))
+
+
+def _queue(monkeypatch, event, department_id):
+    monkeypatch.setenv("FINANCE_LINE_TOKEN", "x")
+    monkeypatch.setattr(fl, "_department_of", lambda db, eid: department_id)
+    monkeypatch.setattr(fl.advance_repo, "request_values_by_submission", lambda db, ids: {1: {"amount": 5000}})
+    monkeypatch.setattr(fl.advance_repo, "people_by_employee_id", lambda db, ids: {"E1": {"name": "กฤตบุญ"}})
+    bt = _BT()
+    fl.queue_line(bt, object(), event, type("S", (), {"id": 1, "form_id": "ADV-2610-007", "created_by": "E1"})())
+    return bt.tasks
+
+
+@pytest.mark.parametrize("dept", [6, 11, 4, None])
+def test_ready_for_voucher_goes_to_the_group_from_any_department(monkeypatch, dept):
+    tasks = _queue(monkeypatch, fl.READY_FOR_VOUCHER, dept)
+    assert len(tasks) == 1 and "อนุมัติครบทุกขั้นแล้ว" in tasks[0][1][0]
+
+
+@pytest.mark.parametrize("event", [fl.SUBMITTED, fl.CLEARING_APPROVAL])
+def test_other_events_stay_accounting_only(monkeypatch, event):
+    assert _queue(monkeypatch, event, 11) == []
+    assert len(_queue(monkeypatch, event, 6)) == 1

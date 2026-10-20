@@ -22,6 +22,9 @@ log = logging.getLogger(__name__)
 SUBMITTED = "submitted"
 READY_FOR_VOUCHER = "ready_for_voucher"
 CLEARING_APPROVAL = "clearing_approval"
+# ส่งเข้ากลุ่มทุกแผนก: อนุมัติครบ = ใบเข้าคิวบัญชีตั้งเบิก (ผู้ใช้สั่ง 20/10/2026)
+# ใบคำขอเบิกใหม่ กับ ส่งเคลียร์เงินแล้ว ยังส่งเฉพาะผู้เบิกแผนกบัญชี
+ANY_DEPARTMENT_EVENTS = frozenset({READY_FOR_VOUCHER})
 
 PUSH_URL = "https://api.line.me/v2/bot/message/push"
 DEFAULT_GROUP_ID = "C1a62beae8781d841fb849d1cc7ee48cc"
@@ -149,11 +152,12 @@ def _department_of(db, employee_id):
 
 
 def queue_line(background_tasks, db, event: str, submission, **extra) -> None:
-    """เตรียมข้อความตอนนี้ ส่งเบื้องหลัง — เงียบเมื่อปิดสวิตช์หรือผู้เบิกไม่ได้อยู่แผนกที่กำหนด"""
+    """เตรียมข้อความตอนนี้ ส่งเบื้องหลัง — เงียบเมื่อปิดสวิตช์หรือผู้เบิกไม่ได้อยู่แผนกที่กำหนด
+    ยกเว้น อนุมัติครบ รอตั้งเบิก ส่งทุกแผนก เพราะเป็นงานของบัญชีเสมอ"""
     if not line_enabled():
         return
     try:
-        if not should_notify(_department_of(db, submission.created_by)):
+        if event not in ANY_DEPARTMENT_EVENTS and not should_notify(_department_of(db, submission.created_by)):
             return
         sid = submission.id
         values = advance_repo.request_values_by_submission(db, [sid]).get(sid) or {}
