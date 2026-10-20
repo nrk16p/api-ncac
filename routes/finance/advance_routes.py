@@ -27,6 +27,7 @@ from services.finance import advance_logic as logic
 from services.finance import advance_repo as repo
 from services.finance import approval_logic as approval_rules
 from services.finance import approval_repo
+from services.finance import finance_line as line_notify
 from services.finance import finance_mail as mail
 from services.finance import overdue_reminder
 from services.finance import permission_logic as perms
@@ -502,7 +503,8 @@ def pay_advance(form_id: str, body: PayIn, background_tasks: BackgroundTasks,
 
 
 @router.put("/advances/{form_id}/clear")
-def clear_advance(form_id: str, body: ClearIn, db: Session = Depends(get_db)):
+def clear_advance(form_id: str, body: ClearIn, background_tasks: BackgroundTasks,
+                  db: Session = Depends(get_db)):
     sub, adv, status = _load_for_update(db, form_id)
     if adv is None:
         raise HTTPException(status_code=409, detail="การเงินยังไม่ได้จ่ายเงิน จึงยังเคลียร์ไม่ได้")
@@ -540,7 +542,14 @@ def clear_advance(form_id: str, body: ClearIn, db: Session = Depends(get_db)):
     changes = {**logic.diff_fields(before, values), "items": [old_count, len(rows)], "items_total": [None if old_total is None else str(old_total), str(total_net)]}
     db.add(FinAdvanceLog(advance_id=adv.id, action=action, changes=changes,
                          remark=body.remark, action_by=body.action_by))
-    return _commit_and_return(db, form_id)
+    pending_approval = adv.fin_status == logic.FIN_CLEAR_PENDING
+    detail = _commit_and_return(db, form_id)
+    if pending_approval:  # กลุ่มไลน์: รออนุมัติเคลียร์
+        line_notify.queue_line(background_tasks, db, line_notify.CLEARING_APPROVAL, sub,
+                               amount_paid=adv.amount_paid, amount_actual=total_net,
+                               settle_amount=settle, step=clr.STEP_LEADER,
+                               total_steps=len(info.get("steps") or []), clause=info.get("clause"))
+    return detail
 
 
 # ---------------------------- อนุมัติการเคลียร์ (ผู้ใช้สั่ง 19/10/2026) ----------------------------

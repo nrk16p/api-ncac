@@ -26,6 +26,7 @@ PEOPLE = {p["employee_id"]: p for p in [
     person("L5x", 5, 5, 20),     # MGR other dept, mapped to 10
     person("L8", 6, 8, 30),      # CL mapped to 10
     person("N9", 7, 9, 99),      # org-wide
+    person("BOSS8", 8, 8, 50),   # ผู้เบิกระดับ 8 คนละแผนก: แผนเหลือขั้นเดียว
 ]}
 MAP = {"L5x": {10}, "L8": {10}}
 CTX = R.ApprovalContext(tiers=TIERS, people=PEOPLE, mappings=MAP)
@@ -100,10 +101,10 @@ def test_round_logs_grouped_per_submission_in_one_query():
 
 # ---------------------------- decision + transitions ----------------------------
 
-def _decide(monkeypatch, approver, level=1, amount="15000", logs=()):
+def _decide(monkeypatch, approver, level=1, amount="15000", logs=(), created_by="R"):
     monkeypatch.setattr(R, "_amount_of", lambda db, sid: Decimal(amount))
     monkeypatch.setattr(R, "current_round_logs", lambda db, sid: list(logs))
-    return R.approval_decision(None, sub(level=level), approver)
+    return R.approval_decision(None, sub(level=level, created_by=created_by), approver)
 
 
 def test_decision_uses_current_step_and_excludes_step_1_approver(ctx, monkeypatch):
@@ -162,11 +163,12 @@ def test_record_step_2_approves(ctx, monkeypatch):
 
 
 def test_record_single_step_approves(ctx, monkeypatch):
-    s = sub()
-    decision = _decide(monkeypatch, "L4", amount="1500")
+    """แผนขั้นเดียวเหลือไว้ให้ผู้เบิกระดับ 8 ขึ้นไปเท่านั้น (ผู้ใช้สั่ง 19/10/2026)"""
+    s = sub(created_by="BOSS8")
+    decision = _decide(monkeypatch, "N9", amount="1500", created_by="BOSS8")
     db = _AddDb()
-    R.record_approval(db, s, 2, decision)
-    assert _logs(db) == [(1, "APPROVED", 2, None)] and s.status_approve == "Approved"
+    R.record_approval(db, s, 7, decision)
+    assert _logs(db) == [(1, "APPROVED", 7, None)] and s.status_approve == "Approved"
 
 
 # ---------------------------- pending queue ----------------------------
@@ -188,11 +190,11 @@ def _queue(employee_id):
 
 
 def test_pending_leader_sees_step_1_only(queue):
-    assert _queue("L4") == {21: (1, 2, "mine"), 23: (1, 1, "mine")}
+    assert _queue("L4") == {21: (1, 2, "mine"), 23: (1, 2, "mine")}
 
 
 def test_pending_toa_sees_step_2_as_mine_and_step_1_as_delegable(queue):
-    assert _queue("L5") == {21: (1, 2, "delegable"), 22: (2, 2, "mine"), 23: (1, 1, "delegable")}
+    assert _queue("L5") == {21: (1, 2, "delegable"), 22: (2, 2, "mine"), 23: (1, 2, "delegable")}
 
 
 def test_pending_item_shape(queue):
