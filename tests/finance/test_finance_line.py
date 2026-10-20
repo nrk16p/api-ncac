@@ -191,12 +191,13 @@ def _queue(monkeypatch, event, department_id):
 
 
 @pytest.mark.parametrize("dept", [6, 11, 4, None])
-def test_ready_for_voucher_goes_to_the_group_from_any_department(monkeypatch, dept):
-    tasks = _queue(monkeypatch, fl.READY_FOR_VOUCHER, dept)
-    assert len(tasks) == 1 and "อนุมัติครบทุกขั้นแล้ว" in tasks[0][1][0]
+@pytest.mark.parametrize("event, head", [(fl.READY_FOR_VOUCHER, "อนุมัติครบทุกขั้นแล้ว"),
+                                         (fl.CLEARING_APPROVAL, "ส่งเคลียร์เงินแล้ว")])
+def test_accounting_work_goes_to_the_group_from_any_department(monkeypatch, dept, event, head):
+    tasks = _queue(monkeypatch, event, dept)
+    assert len(tasks) == 1 and head in tasks[0][1][0]
 
 
-@pytest.mark.parametrize("event", [fl.SUBMITTED, fl.CLEARING_APPROVAL])
-def test_other_events_stay_accounting_only(monkeypatch, event):
-    assert _queue(monkeypatch, event, 11) == []
-    assert len(_queue(monkeypatch, event, 6)) == 1
+def test_new_request_stays_accounting_only(monkeypatch):
+    assert _queue(monkeypatch, fl.SUBMITTED, 11) == []
+    assert len(_queue(monkeypatch, fl.SUBMITTED, 6)) == 1
