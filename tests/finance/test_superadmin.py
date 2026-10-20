@@ -82,3 +82,33 @@ def test_superadmin_may_approve_any_clearing_step():
     assert clr.can_approve(info, PEOPLE, {}, "REQ", SA, 1)
     assert clr.can_approve(info, PEOPLE, {}, "REQ", SA, 2, (7,))
     assert not clr.can_approve(info, PEOPLE, {}, SA, SA, 1)
+
+
+# ---- /finance/permissions/me ต้องส่งสิทธิ์ครบให้ superadmin ไม่งั้นหน้าเว็บซ่อนทุกปุ่ม (เจอจริงกับ ADV-2610-008) ----
+
+class _Q:
+    def __init__(self, row): self.row = row
+    def filter(self, *a): return self
+    def first(self): return self.row
+
+
+class _Db:
+    def __init__(self, row): self.row = row
+    def query(self, *a): return _Q(self.row)
+
+
+def test_permissions_me_gives_superadmin_every_button(monkeypatch):
+    from types import SimpleNamespace as NS
+    from routes.finance import advance_routes as ar
+    monkeypatch.setattr(ar.permission_repo, "load_grants", lambda db, **k: {"voucher": {"690041"}})
+    out = ar.my_permissions(SA, _Db(NS(employee_id=SA, department_id=11)))
+    assert out["is_finance"] is True
+    assert out["permissions"] == list(perms.ALL_PERMISSIONS)
+
+
+def test_permissions_me_outsider_still_gets_nothing(monkeypatch):
+    from types import SimpleNamespace as NS
+    from routes.finance import advance_routes as ar
+    monkeypatch.setattr(ar.permission_repo, "load_grants", lambda db, **k: {})
+    out = ar.my_permissions("680043", _Db(NS(employee_id="680043", department_id=11)))
+    assert out == {"employee_id": "680043", "is_finance": False, "permissions": []}

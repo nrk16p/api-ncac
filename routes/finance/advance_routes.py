@@ -121,7 +121,8 @@ def my_permissions(employee_id: str, db: Session = Depends(get_db)):
     """สิทธิ์ตามหน้าที่ของคนนี้ — หน้าเว็บใช้ซ่อนปุ่มที่กดไม่ได้ (ตัวจริงยังกันที่ endpoint)"""
     user = db.query(User).filter(User.employee_id == employee_id).first()
     depts, emps = _finance_ids()
-    is_finance = user is not None and logic.is_finance_user(user.department_id, user.employee_id, depts, emps)
+    is_finance = user is not None and (perms.is_superadmin(user.employee_id)
+                                       or logic.is_finance_user(user.department_id, user.employee_id, depts, emps))
     grants = permission_repo.load_grants(db)
     return {
         "employee_id": employee_id,
