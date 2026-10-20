@@ -43,10 +43,11 @@ PAID = "paid"
 SENT_BACK = "sent_back"
 CLOSED = "closed"
 CLEAR_SUBMITTED = "clear_submitted"
+CLEAR_APPROVED = "clear_approved"
 APPROVER_EVENTS = (SUBMITTED, RESUBMITTED, STEP_PENDING)
 REQUESTER_EVENTS = (APPROVED, REJECTED, RETURNED, PAID, SENT_BACK, CLOSED, CLEAR_SUBMITTED)
 # งานถึงมือบัญชี: สรุปเลขที่ ผู้เบิก ยอดเงิน และ CC กล่องบัญชี (ผู้ใช้สั่ง 20/10/2026)
-ACCOUNT_CC_EVENTS = (APPROVED, CLEAR_SUBMITTED)
+ACCOUNT_CC_EVENTS = (APPROVED, CLEAR_SUBMITTED, CLEAR_APPROVED)
 
 
 # ---------------------------- switch + sender ----------------------------
@@ -215,7 +216,29 @@ _TITLES = {
     SENT_BACK: ("ตีกลับเคลียร์", "บัญชีตีกลับเอกสารเคลียร์", "กรุณาแก้ไขเอกสารเคลียร์และส่งใหม่", False),
     CLOSED: ("ปิดรายการ", "รายการเบิกเงินปิดเรียบร้อย", "บัญชีตรวจสอบและปิดรายการแล้ว", False),
     CLEAR_SUBMITTED: ("เบิกเงิน Advance", "ส่งเคลียร์เงินแล้ว", "ผู้เบิกส่งเอกสารเคลียร์เงินแล้ว", False),
+    CLEAR_APPROVED: ("เบิกเงิน Advance", "อนุมัติเคลียร์แล้ว",
+                     "หัวหน้าอนุมัติการเคลียร์แล้ว พิมพ์เอกสารแล้วส่งตัวจริงให้บัญชีได้เลย", False),
 }
+
+# เคลียร์ถึงมือบัญชีแล้ว ผู้เบิกต้องพิมพ์เอกสาร 2 ส่วนจากระบบ แล้วส่งตัวจริงให้บัญชี (ผู้ใช้สั่ง 20/10/2026)
+_PRINT_STEPS = (
+    'เปิดรายการ แล้วกดปุ่ม "พิมพ์เอกสาร" ที่มุมขวาบน',
+    "พิมพ์ให้ครบ 2 ส่วน คือ Part 1 : Cash Advance Request ใบคำขอเบิกเงินล่วงหน้า "
+    "และ Part 2 : Expense Claim Form ใบขอเบิกค่าใช้จ่าย/เคลียร์เบิกล่วงหน้า",
+    "นำเอกสารตัวจริงส่งให้ฝ่ายบัญชี บัญชีจะตรวจแล้วปิดรายการให้",
+)
+
+
+def _needs_print_steps(event: str, ctx: dict) -> bool:
+    return event == CLEAR_APPROVED or (event == CLEAR_SUBMITTED and not ctx.get("pending"))
+
+
+def _print_steps_html() -> str:
+    items = "".join(f'<li style="margin:0 0 6px">{escape(t, quote=True)}</li>' for t in _PRINT_STEPS)
+    return ('<div style="margin:24px 0 0;padding:16px 20px;background:#f0f9f3;border:1px solid #cdebd6;'
+            'border-radius:10px"><div style="font-size:14px;font-weight:700;color:#1a7a36;margin-bottom:8px">'
+            'ขั้นต่อไป ส่งเอกสารตัวจริงให้บัญชี</div>'
+            f'<ol style="margin:0;padding-left:20px;font-size:14px;color:#1f2937;line-height:1.6">{items}</ol></div>')
 
 
 def _account_rows(event: str, ctx: dict) -> list:
@@ -225,7 +248,7 @@ def _account_rows(event: str, ctx: dict) -> list:
         who = f"{who} ({ctx['department']})"
     rows = [("เลขที่", ctx.get("form_id") or "-"), ("ผู้เบิก", who)]
     money = lambda key: _fmt_money(ctx.get(key))  # noqa: E731
-    if event == CLEAR_SUBMITTED:
+    if event in (CLEAR_SUBMITTED, CLEAR_APPROVED):
         for label, key in (("จ่ายไปแล้ว", "amount_paid"), ("ยอดใช้จริง", "amount_actual")):
             if money(key):
                 rows.append((label, money(key)))
@@ -247,6 +270,10 @@ def _account_rows(event: str, ctx: dict) -> list:
         if ctx.get("approver_name"):
             rows.append(("ผู้อนุมัติขั้นสุดท้าย", ctx["approver_name"]))
         rows.append(("สถานะ", "รอตั้งเบิก"))
+    elif event == CLEAR_APPROVED:
+        if ctx.get("approver_name"):
+            rows.append(("ผู้อนุมัติเคลียร์", ctx["approver_name"]))
+        rows.append(("สถานะ", "รอบัญชีตรวจ"))
     else:
         pending = bool(ctx.get("pending"))
         if pending and ctx.get("total_steps"):
@@ -295,6 +322,7 @@ def render_event_email(event: str, ctx: dict):
         f'<tr><td style="padding:6px 16px 6px 0;font-size:13px;color:#6b7280;white-space:nowrap">{e(label)}</td>'
         f'<td style="padding:6px 0;font-size:14px;color:#1f2937">{e(value)}</td></tr>' for label, value in rows)
     link = advance_link(ctx.get("fe_base_url"), form_id, for_approver)
+    steps = _print_steps_html() if _needs_print_steps(event, ctx) else ""
     button = ""
     if link:
         button = ('<p style="margin:24px 0 0"><a href="' + escape(link, quote=True) + '" style="display:inline-block;'
@@ -314,7 +342,7 @@ def render_event_email(event: str, ctx: dict):
         f'<div style="font-size:24px;font-weight:700;color:#ffffff;margin-bottom:6px">{e(headline)}</div>'
         f'<div style="font-size:13px;color:#e8f5ec">{e(sub)}</div></td></tr>'
         f'<tr><td style="padding:28px 36px"><table cellpadding="0" cellspacing="0" border="0">{table}</table>'
-        f'{button}</td></tr></table></td></tr></table></body></html>'
+        f'{steps}{button}</td></tr></table></td></tr></table></body></html>'
     )
     return subject, html
 
