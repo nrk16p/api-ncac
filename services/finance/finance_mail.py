@@ -44,10 +44,13 @@ SENT_BACK = "sent_back"
 CLOSED = "closed"
 CLEAR_SUBMITTED = "clear_submitted"
 CLEAR_APPROVED = "clear_approved"
+CLEAR_PENDING = "clear_pending"
 APPROVER_EVENTS = (SUBMITTED, RESUBMITTED, STEP_PENDING)
 REQUESTER_EVENTS = (APPROVED, REJECTED, RETURNED, PAID, SENT_BACK, CLOSED, CLEAR_SUBMITTED)
 # งานถึงมือบัญชี: สรุปเลขที่ ผู้เบิก ยอดเงิน และ CC กล่องบัญชี (ผู้ใช้สั่ง 20/10/2026)
 ACCOUNT_CC_EVENTS = (APPROVED, CLEAR_SUBMITTED, CLEAR_APPROVED)
+# หน้าตาแบบสรุปยอด (หัวเรื่อง "เบิกเงิน Advance · …") — รอท่านอนุมัติการเคลียร์ใช้แบบเดียวกันแต่ CC ผู้เบิก ไม่ใช่บัญชี
+SUMMARY_STYLE_EVENTS = ACCOUNT_CC_EVENTS + (CLEAR_PENDING,)
 
 
 # ---------------------------- switch + sender ----------------------------
@@ -216,6 +219,8 @@ _TITLES = {
     SENT_BACK: ("ตีกลับเคลียร์", "บัญชีตีกลับเอกสารเคลียร์", "กรุณาแก้ไขเอกสารเคลียร์และส่งใหม่", False),
     CLOSED: ("ปิดรายการ", "รายการเบิกเงินปิดเรียบร้อย", "บัญชีตรวจสอบและปิดรายการแล้ว", False),
     CLEAR_SUBMITTED: ("เบิกเงิน Advance", "ส่งเคลียร์เงินแล้ว", "ผู้เบิกส่งเอกสารเคลียร์เงินแล้ว", False),
+    CLEAR_PENDING: ("เบิกเงิน Advance", "รอท่านอนุมัติการเคลียร์",
+                    "ผู้เบิกส่งเคลียร์เงินแล้ว ตรวจรายการกับใบเสร็จก่อนส่งต่อให้บัญชี", True),
     CLEAR_APPROVED: ("เบิกเงิน Advance", "อนุมัติเคลียร์แล้ว",
                      "หัวหน้าอนุมัติการเคลียร์แล้ว พิมพ์เอกสารแล้วส่งตัวจริงให้บัญชีได้เลย", False),
 }
@@ -248,7 +253,7 @@ def _account_rows(event: str, ctx: dict) -> list:
         who = f"{who} ({ctx['department']})"
     rows = [("เลขที่", ctx.get("form_id") or "-"), ("ผู้เบิก", who)]
     money = lambda key: _fmt_money(ctx.get(key))  # noqa: E731
-    if event in (CLEAR_SUBMITTED, CLEAR_APPROVED):
+    if event in (CLEAR_SUBMITTED, CLEAR_APPROVED, CLEAR_PENDING):
         for label, key in (("จ่ายไปแล้ว", "amount_paid"), ("ยอดใช้จริง", "amount_actual")):
             if money(key):
                 rows.append((label, money(key)))
@@ -275,7 +280,7 @@ def _account_rows(event: str, ctx: dict) -> list:
             rows.append(("ผู้อนุมัติเคลียร์", ctx["approver_name"]))
         rows.append(("สถานะ", "รอบัญชีตรวจ"))
     else:
-        pending = bool(ctx.get("pending"))
+        pending = event == CLEAR_PENDING or bool(ctx.get("pending"))
         if pending and ctx.get("total_steps"):
             tail = f" (TOA ข้อ {ctx['clause']})" if ctx.get("clause") else ""
             rows.append(("ขั้นอนุมัติ", f"ขั้นที่ {ctx.get('step') or 1} จาก {ctx['total_steps']}{tail}"))
@@ -312,7 +317,7 @@ def render_event_email(event: str, ctx: dict):
     e = lambda v: escape(str(v), quote=True)  # noqa: E731
     form_id = ctx.get("form_id") or "-"
     requester = ctx.get("requester_name")
-    if event in ACCOUNT_CC_EVENTS:
+    if event in SUMMARY_STYLE_EVENTS:
         subject = _one_line(f"{badge} · {headline} · {form_id}")
         rows = _account_rows(event, ctx)
     else:
@@ -321,7 +326,10 @@ def render_event_email(event: str, ctx: dict):
     table = "".join(
         f'<tr><td style="padding:6px 16px 6px 0;font-size:13px;color:#6b7280;white-space:nowrap">{e(label)}</td>'
         f'<td style="padding:6px 0;font-size:14px;color:#1f2937">{e(value)}</td></tr>' for label, value in rows)
-    link = advance_link(ctx.get("fe_base_url"), form_id, for_approver)
+    if event == CLEAR_PENDING:  # เปิดแท็บรออนุมัติเคลียร์ในหน้าอนุมัติ พร้อมเปิดใบนี้
+        link = build_link(ctx.get("fe_base_url"), f"/finance/approvals?tab=clear&doc={_q(form_id)}")
+    else:
+        link = advance_link(ctx.get("fe_base_url"), form_id, for_approver)
     steps = _print_steps_html() if _needs_print_steps(event, ctx) else ""
     button = ""
     if link:
@@ -409,6 +417,7 @@ def queue_event(background_tasks, db, event: str, submission, **extra) -> None:
     """Resolve recipients and content now, send in the background. A no-op while the switch is off."""
     if not email_enabled():
         return
+    approver_emails = extra.pop("approver_emails", None)  # CLEAR_PENDING: route คิดผู้อนุมัติขั้นเคลียร์มาให้
     try:
         sid = submission.id
         values = advance_repo.request_values_by_submission(db, [sid]).get(sid) or {}
@@ -428,6 +437,8 @@ def queue_event(background_tasks, db, event: str, submission, **extra) -> None:
             except Exception:  # noqa: BLE001 - the step line is optional
                 _rollback(db)
             to = step_approver_emails(db, submission)
+        elif event == CLEAR_PENDING:
+            to = pick_recipients(approver_emails or [])
         else:
             to = requester_email(db, submission)
         if not to:
@@ -437,7 +448,7 @@ def queue_event(background_tasks, db, event: str, submission, **extra) -> None:
         # งานถึงมือบัญชี: CC กล่องบัญชี · อีเมลขออนุมัติ: CC ผู้เบิกให้รู้ว่าใบไปถึงใครแล้ว (ผู้ใช้สั่ง 20/10/2026)
         if event in ACCOUNT_CC_EVENTS:
             cc = [account_mailbox()]
-        elif event in APPROVER_EVENTS:
+        elif event in APPROVER_EVENTS or event == CLEAR_PENDING:
             try:
                 cc = requester_email(db, submission)
             except Exception:  # noqa: BLE001 - the CC is optional, the approvers' email still goes

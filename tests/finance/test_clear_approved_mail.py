@@ -92,6 +92,7 @@ def test_route_sends_only_on_the_last_clearing_step(monkeypatch, next_step, expe
     monkeypatch.setattr(r, "_clear_log", lambda *a: None)
     monkeypatch.setattr(r, "_commit_and_return", lambda db, fid: {"form_id": fid})
     monkeypatch.setattr(r.repo, "people_by_employee_id", lambda db, ids: {"A9": {"name": "ณรงค์กร อัตถะ"}})
+    monkeypatch.setattr(r, "_clear_approver_emails", lambda db, s, info, ctx, step: [f"step{step}@x.com"])
     calls = []
     monkeypatch.setattr(r.mail, "queue_event", lambda bg, db, event, s, **kw: calls.append((event, kw)))
 
@@ -101,5 +102,58 @@ def test_route_sends_only_on_the_last_clearing_step(monkeypatch, next_step, expe
         assert calls == [(fm.CLEAR_APPROVED, {"approver_name": "ณรงค์กร อัตถะ", "amount_paid": 4500,
                                                "amount_actual": 4300, "settle_amount": 200})]
         assert adv.fin_status == r.logic.FIN_CLEARING_SUBMITTED
-    else:
-        assert calls == []
+    else:  # ผ่านขั้น 1 แล้ว: แจ้งหัวหน้าขั้น 2 ไม่ใช่ผู้เบิก
+        assert [c[0] for c in calls] == [fm.CLEAR_PENDING]
+        assert calls[0][1]["approver_emails"] == ["step2@x.com"] and calls[0][1]["step"] == 2
+
+
+# ---- รอท่านอนุมัติการเคลียร์: ถึงหัวหน้า CC ผู้เบิก (ผู้ใช้สั่ง 20/10/2026) ----
+
+def test_clear_pending_email_for_heads():
+    subject, html = fm.render_event_email(fm.CLEAR_PENDING, {**CTX, "step": 1, "total_steps": 2, "clause": "6.6"})
+    assert subject == "เบิกเงิน Advance · รอท่านอนุมัติการเคลียร์ · ADV-2610-009"
+    for text in ("รอท่านอนุมัติการเคลียร์", "จ่ายไปแล้ว", "4,500.00", "ยอดใช้จริง", "4,300.00", "คืนบริษัท",
+                 "ขั้นที่ 1 จาก 2 (TOA ข้อ 6.6)", "รออนุมัติเคลียร์",
+                 "/finance/approvals?tab=clear&amp;doc=ADV-2610-009"):
+        assert text in html, text
+    assert "Expense Claim Form" not in html, "ขั้นตอนพิมพ์เอกสารเป็นของผู้เบิก ไม่ใช่หัวหน้า"
+
+
+def test_clear_pending_goes_to_given_heads_and_ccs_requester(monkeypatch):
+    for k in ("FINANCE_ACCOUNT_EMAIL", "FINANCE_EMAIL_TEST_TO"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("FINANCE_EMAIL_ENABLED", "true")
+    monkeypatch.setenv("FINANCE_SMTP_USER", "itops@x.com")
+    monkeypatch.setenv("FINANCE_SMTP_PASSWORD", "pw")
+    sent = []
+
+    class FakeSMTP:
+        def __init__(self, *a, **k): pass
+        def starttls(self): pass
+        def login(self, u, p): pass
+        def sendmail(self, frm, to, body): sent.append(to)
+        def quit(self): pass
+
+    monkeypatch.setattr(smtplib, "SMTP", FakeSMTP)
+    monkeypatch.setattr(fm.advance_repo, "request_values_by_submission", lambda db, ids: {1: {"amount": 4500}})
+    monkeypatch.setattr(fm.advance_repo, "people_by_employee_id", lambda db, ids: {"E1": {"name": "กฤตบุญ"}})
+
+    class _Q:
+        def filter(self, *a): return self
+        def first(self): return NS(email="req@x.com")
+
+    bg = BackgroundTasks()
+    fm.queue_event(bg, NS(query=lambda *a: _Q()), fm.CLEAR_PENDING, NS(id=1, form_id="ADV-2610-009", created_by="E1"),
+                   approver_emails=["lead@x.com", "mgr@x.com"], step=1, total_steps=1)
+    for t in bg.tasks:
+        t.func(*t.args, **t.kwargs)
+    assert sent == [["lead@x.com", "req@x.com"], ["mgr@x.com"]]
+
+
+def test_clear_pending_with_no_heads_sends_nothing(monkeypatch):
+    monkeypatch.setenv("FINANCE_EMAIL_ENABLED", "true")
+    monkeypatch.setattr(fm.advance_repo, "request_values_by_submission", lambda db, ids: {})
+    monkeypatch.setattr(fm.advance_repo, "people_by_employee_id", lambda db, ids: {})
+    bg = BackgroundTasks()
+    fm.queue_event(bg, None, fm.CLEAR_PENDING, NS(id=1, form_id="ADV-2610-009", created_by="E1"), approver_emails=[])
+    assert bg.tasks == []

@@ -531,7 +531,7 @@ def clear_advance(form_id: str, body: ClearIn, background_tasks: BackgroundTasks
     db.add_all([FinAdvanceClearItem(advance_id=adv.id, **row) for row in rows])
     # ผู้ใช้สั่ง 19/10/2026: ส่งเคลียร์แล้วต้องผ่านหัวหน้าก่อนถึงบัญชี
     # ขึ้นอนุมัติใหม่เฉพาะตอนยอดใหม่ข้ามชั้น (แก้เล็กน้อยหลังบัญชีส่งกลับ ไม่กวนหัวหน้า)
-    info, _ctx = _clear_plan(db, sub, total_net)
+    info, clear_ctx = _clear_plan(db, sub, total_net)
     if clr.needs_reapproval(adv.clear_approved_clause, info["clause"]) and clr.needs_approval(info):
         adv.fin_status = logic.FIN_CLEAR_PENDING
         adv.clear_approval_level = clr.STEP_LEADER
@@ -551,7 +551,39 @@ def clear_advance(form_id: str, body: ClearIn, background_tasks: BackgroundTasks
     mail.queue_event(background_tasks, db, mail.CLEAR_SUBMITTED, sub, amount_paid=amount_paid,
                      amount_actual=total_net, settle_amount=settle, pending=pending_approval,
                      step=clr.STEP_LEADER, total_steps=len(info.get("steps") or []), clause=info.get("clause"))
+    if pending_approval:  # หัวหน้าขั้น 1 ต้องรู้ว่ามีใบรอ (ผู้ใช้สั่ง 20/10/2026)
+        _queue_clear_pending(background_tasks, db, sub, info, clear_ctx, clr.STEP_LEADER,
+                             amount_paid=amount_paid, amount_actual=total_net, settle_amount=settle)
     return detail
+
+
+def _clear_approver_emails(db: Session, sub, info, ctx, step) -> list:
+    """อีเมลคนที่อนุมัติการเคลียร์ขั้นนี้ได้ — กติกาเดียวกับอีเมลขออนุมัติเบิก (หยุดที่ระดับผู้จัดการ ไม่รวมคนที่กดขั้นก่อน)"""
+    from models.user_model import User
+
+    spec = clr.step_spec(info, step)
+    requester = ctx.people.get(sub.created_by)
+    if requester is None:
+        return []
+    eligible = approval_rules.eligible_approvers(ctx.people.values(), requester, spec["required_level"],
+                                                 ctx.mappings, _clear_round_approvers(db, sub.form_id))
+    eligible = approval_rules.notify_approvers(eligible, spec["required_level"])
+    eligible.sort(key=lambda p: (p["level"], p["employee_id"]))
+    ids = [p["id"] for p in eligible if p.get("id") is not None]
+    by_id = {u.id: u.email for u in db.query(User).filter(User.id.in_(ids)).all()} if ids else {}
+    return [by_id.get(p.get("id")) for p in eligible if by_id.get(p.get("id"))]
+
+
+def _queue_clear_pending(background_tasks, db: Session, sub, info, ctx, step, **amounts) -> None:
+    """อีเมล รอท่านอนุมัติการเคลียร์ ถึงหัวหน้าขั้นนี้ CC ผู้เบิก — หาผู้รับพลาดต้องไม่ทำให้การเคลียร์ล้ม"""
+    try:
+        emails = _clear_approver_emails(db, sub, info, ctx, step)
+    except Exception:  # noqa: BLE001
+        db.rollback()
+        logger.exception("clear approver emails for %s could not be resolved", sub.form_id)
+        return
+    mail.queue_event(background_tasks, db, mail.CLEAR_PENDING, sub, approver_emails=emails, step=step,
+                     total_steps=len(info.get("steps") or []), clause=info.get("clause"), **amounts)
 
 
 # ---------------------------- อนุมัติการเคลียร์ (ผู้ใช้สั่ง 19/10/2026) ----------------------------
@@ -604,8 +636,16 @@ def clear_approvals_pending(employee_id: str, db: Session = Depends(get_db)):
         if clr.can_approve(info, ctx.people, ctx.mappings, sub.created_by, employee_id, step,
                            _clear_round_approvers(db, adv.form_id)):
             out.append({"form_id": adv.form_id, "amount_actual": logic.jsonable(adv.amount_actual),
+                        "amount_paid": logic.jsonable(adv.amount_paid),
+                        "settle_amount": logic.jsonable(adv.settle_amount),
                         "step": step, "total_steps": len(info["steps"]),
-                        "clause": info["clause"], "requester_employee_id": sub.created_by})
+                        "clause": info["clause"], "requester_employee_id": sub.created_by,
+                        "clear_submitted_at": repo._iso(adv.clear_submitted_at)})
+    # ชื่อ/แผนกผู้เบิก ให้การ์ดในแท็บรออนุมัติเคลียร์อ่านง่าย
+    people = repo.people_by_employee_id(db, [o["requester_employee_id"] for o in out]) if out else {}
+    for o in out:
+        person = people.get(o["requester_employee_id"]) or {}
+        o["requester_name"], o["requester_department"] = person.get("name"), person.get("department")
     return out
 
 
@@ -637,6 +677,8 @@ def clear_approve(form_id: str, body: ClearApproveIn, background_tasks: Backgrou
     amounts = {"amount_paid": adv.amount_paid, "amount_actual": adv.amount_actual,
                "settle_amount": adv.settle_amount}
     detail = _commit_and_return(db, form_id)
+    if nxt is not None:  # ผ่านขั้น 1 แล้ว แจ้งผู้อนุมัติขั้นถัดไป
+        _queue_clear_pending(background_tasks, db, sub, info, ctx, nxt, **amounts)
     if nxt is None:  # ถึงมือบัญชีแล้ว: บอกผู้เบิกให้พิมพ์เอกสารส่งตัวจริง CC บัญชี (ผู้ใช้สั่ง 20/10/2026)
         approver = repo.people_by_employee_id(db, [body.action_by]).get(body.action_by) or {}
         mail.queue_event(background_tasks, db, mail.CLEAR_APPROVED, sub,
