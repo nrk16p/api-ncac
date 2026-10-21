@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""อีเมลหยุดที่ระดับผู้จัดการ (ผู้ใช้สั่ง 19/10/2026) — สิทธิ์กดอนุมัติไม่เปลี่ยน"""
+"""อีเมลส่งเฉพาะคนระดับที่ TOA กำหนด (ผู้ใช้สั่ง 21/10/2026) — สิทธิ์กดอนุมัติไม่เปลี่ยน"""
 from services.finance import approval_logic as rules
 
 
@@ -10,21 +10,25 @@ def p(eid, level):
 ELIGIBLE = [p("1", 3), p("2", 3), p("3", 5), p("4", 8), p("5", 9)]
 
 
-def test_stops_at_manager_level():
+def test_only_the_lowest_eligible_level_gets_the_email():
     got = rules.notify_approvers(ELIGIBLE, required=2)
-    assert [x["level"] for x in got] == [3, 3, 5]
+    assert [x["employee_id"] for x in got] == ["1", "2"]
 
 
-def test_step_that_needs_a_high_level_keeps_its_own_floor():
-    """ขั้นที่ต้องการระดับ 8 กดเพดานลงมาต่ำกว่านั้นไม่ได้"""
+def test_step_that_needs_a_high_level_mails_that_level():
     high = [p("4", 8), p("5", 9)]
     got = rules.notify_approvers(high, required=8)
     assert [x["level"] for x in got] == [8]
 
 
-def test_falls_back_to_the_lowest_band_when_the_cap_clears_everyone():
-    got = rules.notify_approvers([p("5", 9), p("6", 9), p("7", 8)], required=2)
+def test_nobody_exactly_at_toa_level_mails_the_next_band_up():
+    got = rules.notify_approvers([p("5", 9), p("6", 9), p("7", 8)], required=5)
     assert [x["employee_id"] for x in got] == ["7"]
+
+
+def test_people_below_the_required_level_are_never_mailed():
+    got = rules.notify_approvers([p("1", 3), p("3", 5), p("4", 8)], required=5)
+    assert [x["employee_id"] for x in got] == ["3"]
 
 
 def test_empty_stays_empty():

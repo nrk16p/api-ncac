@@ -1,4 +1,5 @@
-"""v3 §5 two-step approval (หัวหน้าถัดไป → TOA) + approval rounds — pure rules."""
+"""ขั้นเดียวตาม TOA (ผู้ใช้สั่ง 21/10/2026) + กลไกขั้น/รอบอนุมัติ — pure rules.
+กลไกหลายขั้นยังรองรับอยู่ เทสต์กลไกจึงสร้าง steps เองแทนการเรียก plan_steps"""
 import pytest
 
 from services.finance import approval_logic as A
@@ -22,48 +23,39 @@ def levels(steps):
     return [s["required_level"] for s in steps]
 
 
+def mk(*levels_):
+    """steps หลายขั้นที่สร้างเอง ใช้ทดสอบกลไก (ระบบจริงตอนนี้มีขั้นเดียว)"""
+    return [{"step": i + 1, "required_level": lv, "label": f"L{lv}"} for i, lv in enumerate(levels_)]
+
+
 class TestPlanSteps:
     @pytest.mark.parametrize("amount,expected", [
-        ("1500", [4, 5]),      # 6.7: TOA ขอแค่ 2 แต่ทุกใบต้องมีขั้น 2 → 4 แล้วต่อ 5
-        ("15000", [4, 5]),     # 6.5
-        ("60000", [4, 8]),     # 6.4
+        ("1500", [4]),     # 6.7: TOA ขอ 2 แต่ต้องสูงกว่าผู้เบิก (3) → 4
+        ("4000", [4]),     # 6.6: TOA 3 → ยังต้อง 4
+        ("15000", [5]),    # 6.5: TOA 5
+        ("60000", [8]),    # 6.4: TOA 8 ตรงไปเลย ไม่ไล่หัวหน้าก่อน
     ])
-    def test_spec_examples_requester_level_3(self, amount, expected):
+    def test_one_step_at_toa_level_for_requester_level_3(self, amount, expected):
         assert levels(A.plan_steps(3, A.pick_tier(TIERS, amount))) == expected
 
     def test_labels_verbatim(self):
-        steps = A.plan_steps(3, tier("6.5"))
-        assert steps == [
-            {"step": 1, "required_level": 4, "label": "หัวหน้าระดับ 4 ขึ้นไป"},
-            {"step": 2, "required_level": 5, "label": "ระดับ 5 ขึ้นไป (ข้อ 6.5 · MGR / SM / DPCL (ระดับ 5–7))"},
+        assert A.plan_steps(3, tier("6.5")) == [
+            {"step": 1, "required_level": 5, "label": "ระดับ 5 ขึ้นไป (ข้อ 6.5 · MGR / SM / DPCL (ระดับ 5–7))"},
         ]
 
-    def test_level_5_asks_15000_still_gets_a_second_step(self):
-        """ขั้น 1 = 6 · TOA ขอ 5 ซึ่งต่ำกว่า จึงดันขั้น 2 เป็น 7 (ผู้ใช้สั่ง 19/10/2026)"""
-        assert levels(A.plan_steps(5, tier("6.5"))) == [6, 7]
-
-    def test_level_5_asks_15000_is_one_step_under_the_old_rule(self):
-        steps = A.plan_steps(5, tier("6.5"), force_second=False)
-        assert steps == [{"step": 1, "required_level": 6, "label": "หัวหน้าระดับ 6 ขึ้นไป"}]
-
-    def test_level_8_and_above_keep_a_single_step(self):
-        """ข้อยกเว้นที่ผู้ใช้กำหนด: ผู้เบิกระดับ 8 ขึ้นไป ขั้นเดียวจบ"""
-        assert levels(A.plan_steps(8, tier("6.7"))) == [9]
-        assert levels(A.plan_steps(9, tier("6.7"))) == [9]
+    def test_toa_below_requester_goes_one_level_up(self):
+        assert levels(A.plan_steps(5, tier("6.5"))) == [6]
 
     @pytest.mark.parametrize("clause", ["6.7", "6.5", "6.3", "6.1"])
     def test_level_9_requester_is_one_step_at_9(self, clause):
         assert levels(A.plan_steps(9, tier(clause))) == [9]
 
-    def test_level_8_requester_big_amount_one_step_at_9(self):
+    def test_level_8_requester_any_amount_one_step_at_9(self):
+        assert levels(A.plan_steps(8, tier("6.7"))) == [9]
         assert levels(A.plan_steps(8, tier("6.4"))) == [9]
 
-    def test_step_2_is_capped_like_v2(self):
-        # requester+1 = 10 never becomes a step (v2 rule caps at the org-wide level)
-        assert levels(A.plan_steps(9, tier("6.3"))) == [9]
-
-    def test_future_tier_above_org_wide_is_a_second_step(self):
-        assert levels(A.plan_steps(9, {**tier("6.1"), "min_level": 10})) == [9, 10]
+    def test_future_tier_above_org_wide_is_still_one_step(self):
+        assert levels(A.plan_steps(9, {**tier("6.1"), "min_level": 10})) == [10]
 
     def test_no_level(self):
         with pytest.raises(AdvanceRuleError, match=A.MSG_NO_LEVEL):
@@ -71,9 +63,9 @@ class TestPlanSteps:
 
 
 class TestNextAfterApproval:
-    TWO = A.plan_steps(3, tier("6.5"))    # [4, 5]
-    BIG = A.plan_steps(3, tier("6.4"))    # [4, 8]
-    ONE = A.plan_steps(8, tier("6.4"))    # [9] — ผู้เบิกระดับ 8 ขั้นเดียว
+    TWO = mk(4, 5)
+    BIG = mk(4, 8)
+    ONE = A.plan_steps(3, tier("6.4"))    # [8] — ระบบจริงขั้นเดียว
 
     def test_step_1_moves_on(self):
         assert A.next_after_approval(self.TWO, 1, 4) == (A.OUTCOME_STEP, 2)
@@ -92,7 +84,8 @@ class TestNextAfterApproval:
         assert A.skipped_steps(self.TWO, 2, 9) == []
 
     def test_single_step_finishes(self):
-        assert A.next_after_approval(self.ONE, 1, 4) == (A.OUTCOME_APPROVED, None)
+        assert A.next_after_approval(self.ONE, 1, 8) == (A.OUTCOME_APPROVED, None)
+        assert A.skipped_steps(self.ONE, 1, 9) == []
 
     def test_unknown_level_never_skips(self):
         assert A.next_after_approval(self.TWO, 1, None) == (A.OUTCOME_STEP, 2)
@@ -103,7 +96,7 @@ class TestCurrentStepOf:
         (None, 2, 1), (0, 2, 1), (1, 2, 1), (2, 2, 2), (3, 2, 2), (2, 1, 1), ("x", 2, 1), ("2", 2, 2),
     ])
     def test_clamped(self, raw, count, expected):
-        steps = A.plan_steps(3, tier("6.5"))[:count]
+        steps = mk(4, 5)[:count]
         assert A.current_step_of(steps, raw) == expected
 
 
@@ -165,11 +158,11 @@ def ev(amount, requester="R", people=PEOPLE):
 
 
 class TestEvaluateSteps:
-    def test_required_level_is_final_step(self):
+    def test_required_level_is_the_toa_step(self):
         res = ev("15000")
-        assert (res["required_level"], levels(res["steps"]), res["direct_level"]) == (5, [4, 5], 5)
+        assert (res["required_level"], levels(res["steps"]), res["direct_level"]) == (5, [5], 5)
 
-    def test_no_final_step_approver(self):
+    def test_no_approver_at_toa_level(self):
         people = {k: v for k, v in PEOPLE.items() if k in ("R", "L4")}
         with pytest.raises(AdvanceRuleError, match=A.MSG_NO_APPROVER):
             ev("15000", people=people)
@@ -185,54 +178,39 @@ class TestEvaluateSteps:
 
     def test_step_1_direct_level_and_tab(self):
         state = A.evaluate_step(ev("15000"), PEOPLE, MAP, "R", 1)
-        assert (state["step"], state["total_steps"], state["required_level"], state["direct_level"]) == (1, 2, 4, 4)
-        assert state["label"] == "หัวหน้าระดับ 4 ขึ้นไป"
-        assert A.approval_tab(4, state["direct_level"]) == A.TAB_MINE
-        assert A.approval_tab(5, state["direct_level"]) == A.TAB_DELEGABLE
+        assert (state["step"], state["total_steps"], state["required_level"], state["direct_level"]) == (1, 1, 5, 5)
+        assert state["label"] == "ระดับ 5 ขึ้นไป (ข้อ 6.5 · MGR / SM / DPCL (ระดับ 5–7))"
+        assert A.approval_tab(5, state["direct_level"]) == A.TAB_MINE
+        assert A.approval_tab(8, state["direct_level"]) == A.TAB_DELEGABLE
 
-    def test_step_2_direct_level_skips_excluded(self):
-        # L5 (users.id 4) somehow approved step 1 → at step 2 only L5x remains at level 5
-        state = A.evaluate_step(ev("15000"), PEOPLE, MAP, "R", 2, [log(1, 1, "APPROVED", 4)])
-        assert state["excluded"] == frozenset({4}) and state["direct_level"] == 5
-        assert not A.can_approve(PEOPLE["L5"], REQ, 5, (), state["excluded"])
-        assert A.can_approve(PEOPLE["L5x"], REQ, 5, MAP["L5x"], state["excluded"])
+    def test_leader_below_toa_cannot_approve(self):
+        assert not A.can_approve(PEOPLE["L4"], REQ, 5, ())
 
 
 class TestDecide:
-    def test_step_1_leader_moves_to_step_2(self):
-        d = A.decide(ev("15000"), PEOPLE, MAP, "R", "L4", 1, [])
-        assert (d["allowed"], d["step"], d["outcome"], d["next_step"], d["skipped"]) == (True, 1, "step", 2, [])
-
-    def test_step_1_by_toa_level_completes(self):
+    def test_toa_level_completes_in_one_click(self):
         d = A.decide(ev("15000"), PEOPLE, MAP, "R", "L5", 1, [])
-        assert (d["allowed"], d["outcome"], d["next_step"], d["skipped"]) == (True, "approved", None, [2])
+        assert (d["allowed"], d["outcome"], d["next_step"], d["skipped"]) == (True, "approved", None, [])
 
-    def test_step_1_approver_never_approves_step_2(self):
-        logs = [log(1, 1, "APPROVED", PEOPLE["L8"]["id"])]
-        d = A.decide(ev("60000"), PEOPLE, MAP, "R", "L8", 2, logs)
-        assert d["allowed"] is False
-        assert A.decide(ev("60000"), PEOPLE, MAP, "R", "N9", 2, logs)["allowed"] is True
+    def test_leader_below_toa_denied(self):
+        assert A.decide(ev("15000"), PEOPLE, MAP, "R", "L4", 1, [])["allowed"] is False
 
-    def test_step_2_below_level_denied(self):
-        logs = [log(1, 1, "APPROVED", PEOPLE["L4"]["id"])]
-        assert A.decide(ev("15000"), PEOPLE, MAP, "R", "L4b", 2, logs)["allowed"] is False
-        d = A.decide(ev("15000"), PEOPLE, MAP, "R", "L5", 2, logs)
-        assert (d["allowed"], d["outcome"]) == (True, "approved")
+    def test_higher_level_may_approve_through_the_link(self):
+        """ใครระดับสูงกว่า TOA เปิดลิงก์ใบแล้วอนุมัติแทนได้ (ผู้ใช้สั่ง 21/10/2026)"""
+        for who in ("L5x", "L8", "N9"):
+            d = A.decide(ev("15000"), PEOPLE, MAP, "R", who, 1, [])
+            assert (d["allowed"], d["outcome"]) == (True, "approved"), who
 
-    def test_round_1_step_1_approver_may_approve_step_2_in_round_2(self):
-        logs = [log(1, 1, "APPROVED", PEOPLE["L5x"]["id"]), log(2, 0, "RETURNED", 90),
-                log(3, 0, "RESUBMITTED", 1), log(4, 1, "APPROVED", PEOPLE["L4"]["id"])]
-        assert A.decide(ev("15000"), PEOPLE, MAP, "R", "L5x", 2, A.current_round(logs))["allowed"] is True
-        # ...but the round-2 step-1 approver may not
-        assert A.decide(ev("15000"), PEOPLE, MAP, "R", "L4", 2, A.current_round(logs))["allowed"] is False
+    def test_big_amount_goes_straight_to_level_8(self):
+        assert A.decide(ev("60000"), PEOPLE, MAP, "R", "L5", 1, [])["allowed"] is False
+        assert A.decide(ev("60000"), PEOPLE, MAP, "R", "L8", 1, [])["outcome"] == "approved"
 
     def test_requester_and_strangers_denied(self):
         assert A.decide(ev("15000"), PEOPLE, MAP, "R", "R", 1, [])["allowed"] is False
         assert A.decide(ev("15000"), PEOPLE, MAP, "R", "NOPE", 1, [])["allowed"] is False
 
-    def test_plan_shrank_clamps_to_last_step(self):
-        """ใบที่แผนเหลือขั้นเดียว (ผู้เบิกระดับ 8) แต่ current_level ค้างที่ 2 ต้องหนีบกลับมาขั้น 1"""
-        boss = person("BOSS", 8, 8, 10)
-        people = {**PEOPLE, "BOSS": boss}
-        d = A.decide(ev("1500", requester="BOSS", people=people), people, MAP, "BOSS", "N9", 2, [])
+    def test_old_two_step_document_clamps_to_the_single_step(self):
+        """ใบที่ค้าง current_level = 2 จากกติกาเดิม ต้องหนีบกลับมาขั้นเดียว และคนระดับ TOA กดจบได้"""
+        logs = [log(1, 1, "APPROVED", PEOPLE["L4"]["id"])]
+        d = A.decide(ev("15000"), PEOPLE, MAP, "R", "L5", 2, logs)
         assert (d["step"], d["total_steps"], d["allowed"], d["outcome"]) == (1, 1, True, "approved")

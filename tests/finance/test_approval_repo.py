@@ -1,4 +1,7 @@
-"""v3 §5 two-step approval — repo wiring (DB-free: loaders are monkeypatched, queries faked)."""
+"""Approval repo wiring (DB-free: loaders are monkeypatched, queries faked).
+
+ระบบจริงตอนนี้ขั้นเดียวตาม TOA (ผู้ใช้สั่ง 21/10/2026) แต่สายไฟของ repo ยังรองรับหลายขั้น
+เทสต์ที่ใช้ fixture `two_step` จึงแทน plan_steps ด้วยแผนสองขั้นแบบเดิมเพื่อคุมกลไกนั้นไว้"""
 import os
 
 os.environ.setdefault("DATABASE_URL", "postgresql://u:p@localhost:5432/x")
@@ -45,6 +48,22 @@ def log(lid, level_no, action, action_by, at=None):
 @pytest.fixture
 def ctx(monkeypatch):
     monkeypatch.setattr(R, "load_context", lambda db, fresh=False: CTX)
+
+
+def _two_step_plan(requester_level, tier):
+    """แผนสองขั้นแบบก่อน 21/10/2026: หัวหน้าถัดไป → ผู้มีอำนาจตาม TOA (ผู้เบิกระดับ 8+ ขั้นเดียว)"""
+    final = A.required_level(tier["min_level"], requester_level)
+    if requester_level >= 8:
+        return [{"step": 1, "required_level": final, "label": A.toa_label(final, tier["clause"], tier["approver_label"])}]
+    first = min(requester_level + 1, A.ORG_WIDE_LEVEL)
+    second = max(final, min(first + 1, A.ORG_WIDE_LEVEL))
+    return [{"step": 1, "required_level": first, "label": f"หัวหน้าระดับ {first} ขึ้นไป"},
+            {"step": 2, "required_level": second, "label": A.toa_label(second, tier["clause"], tier["approver_label"])}]
+
+
+@pytest.fixture
+def two_step(monkeypatch):
+    monkeypatch.setattr(A, "plan_steps", _two_step_plan)
 
 
 # ---------------------------- rounds ----------------------------
@@ -107,7 +126,7 @@ def _decide(monkeypatch, approver, level=1, amount="15000", logs=(), created_by=
     return R.approval_decision(None, sub(level=level, created_by=created_by), approver)
 
 
-def test_decision_uses_current_step_and_excludes_step_1_approver(ctx, monkeypatch):
+def test_decision_uses_current_step_and_excludes_step_1_approver(ctx, two_step, monkeypatch):
     assert _decide(monkeypatch, "L4")["allowed"] is True
     logs = [log(1, 1, "APPROVED", PEOPLE["L4"]["id"])]
     assert _decide(monkeypatch, "L4", level=2, logs=logs)["allowed"] is False   # below level 5 and step-1 approver
@@ -134,7 +153,7 @@ def _logs(db):
     return [(l.level_no, l.action, l.action_by, l.remark) for l in db.added]
 
 
-def test_record_step_1_moves_to_step_2(ctx, monkeypatch):
+def test_record_step_1_moves_to_step_2(ctx, two_step, monkeypatch):
     s = sub()
     decision = _decide(monkeypatch, "L4")
     db = _AddDb()
@@ -143,7 +162,7 @@ def test_record_step_1_moves_to_step_2(ctx, monkeypatch):
     assert (s.status_approve, s.current_approval_level) == ("In Progress", 2)
 
 
-def test_record_dynamic_skip_logs_step_2_and_approves(ctx, monkeypatch):
+def test_record_dynamic_skip_logs_step_2_and_approves(ctx, two_step, monkeypatch):
     s = sub()
     decision = _decide(monkeypatch, "L5")
     db = _AddDb()
@@ -153,7 +172,7 @@ def test_record_dynamic_skip_logs_step_2_and_approves(ctx, monkeypatch):
     assert (s.status_approve, s.current_approval_level) == ("Approved", 1)
 
 
-def test_record_step_2_approves(ctx, monkeypatch):
+def test_record_step_2_approves(ctx, two_step, monkeypatch):
     s = sub(level=2)
     decision = _decide(monkeypatch, "L5", level=2, logs=[log(1, 1, "APPROVED", 2)])
     db = _AddDb()
@@ -163,7 +182,7 @@ def test_record_step_2_approves(ctx, monkeypatch):
 
 
 def test_record_single_step_approves(ctx, monkeypatch):
-    """แผนขั้นเดียวเหลือไว้ให้ผู้เบิกระดับ 8 ขึ้นไปเท่านั้น (ผู้ใช้สั่ง 19/10/2026)"""
+    """ผู้เบิกระดับ 8 ขั้นเดียวที่ระดับ 9"""
     s = sub(created_by="BOSS8")
     decision = _decide(monkeypatch, "N9", amount="1500", created_by="BOSS8")
     db = _AddDb()
@@ -175,6 +194,15 @@ def test_record_single_step_approves(ctx, monkeypatch):
 
 @pytest.fixture
 def queue(ctx, monkeypatch):
+    _install_queue(monkeypatch)
+
+
+@pytest.fixture
+def queue2(ctx, two_step, monkeypatch):
+    _install_queue(monkeypatch)
+
+
+def _install_queue(monkeypatch):
     subs = [sub(21, level=1), sub(22, level=2), sub(23, level=1)]
     amounts = {21: Decimal("15000"), 22: Decimal("15000"), 23: Decimal("1500")}
     rounds = {22: [log(1, 1, "APPROVED", PEOPLE["L4"]["id"])]}
@@ -189,15 +217,15 @@ def _queue(employee_id):
     return {i["submission_id"]: (i["step"], i["total_steps"], i["tab"]) for i in R.pending_for(None, employee_id)}
 
 
-def test_pending_leader_sees_step_1_only(queue):
+def test_pending_leader_sees_step_1_only(queue2):
     assert _queue("L4") == {21: (1, 2, "mine"), 23: (1, 2, "mine")}
 
 
-def test_pending_toa_sees_step_2_as_mine_and_step_1_as_delegable(queue):
+def test_pending_toa_sees_step_2_as_mine_and_step_1_as_delegable(queue2):
     assert _queue("L5") == {21: (1, 2, "delegable"), 22: (2, 2, "mine"), 23: (1, 2, "delegable")}
 
 
-def test_pending_item_shape(queue):
+def test_pending_item_shape(queue2):
     item = next(i for i in R.pending_for(None, "L5") if i["submission_id"] == 22)
     assert item["tier"] == {"clause": "6.5", "approver_label": "MGR / SM / DPCL (ระดับ 5–7)", "required_level": 5}
     assert (item["step"], item["total_steps"]) == (2, 2)
@@ -212,7 +240,7 @@ def test_pending_unknown_or_levelless_user_empty(queue):
 
 # ---------------------------- suggested approvers + detail ----------------------------
 
-def test_suggested_approvers_are_for_current_step(ctx, monkeypatch):
+def test_suggested_approvers_are_for_current_step(ctx, two_step, monkeypatch):
     monkeypatch.setattr(R, "_amount_of", lambda db, sid: Decimal("60000"))
     monkeypatch.setattr(R.advance_repo, "people_by_employee_id",
                         lambda db, ids: {e: {"name": e, "position": None, "department": None} for e in ids})
@@ -226,7 +254,7 @@ def test_suggested_approvers_are_for_current_step(ctx, monkeypatch):
     assert s2["step_label"] == "ระดับ 8 ขึ้นไป (ข้อ 6.4 · CL (ระดับ 8))"
 
 
-def test_detail_approval_contract(ctx, monkeypatch):
+def test_detail_approval_contract(ctx, two_step, monkeypatch):
     at = datetime(2026, 10, 5, 3, 0)
     monkeypatch.setattr(R, "current_round_logs", lambda db, sid: [log(9, 1, "APPROVED", 2, at)])
     monkeypatch.setattr(R, "_users_by_id",
@@ -246,3 +274,35 @@ def test_detail_approval_raises_rule_error_for_bad_amount(ctx, monkeypatch):
     monkeypatch.setattr(R, "current_round_logs", lambda db, sid: [])
     with pytest.raises(AdvanceRuleError):
         R.detail_approval(None, sub(), None)
+
+
+# ---------------------------- ขั้นเดียวตาม TOA (ผู้ใช้สั่ง 21/10/2026) ----------------------------
+
+def test_single_step_leader_below_toa_denied_toa_level_approves(ctx, monkeypatch):
+    assert _decide(monkeypatch, "L4")["allowed"] is False          # 15,000 ต้องระดับ 5
+    d = _decide(monkeypatch, "L5")
+    assert (d["allowed"], d["outcome"], d["total_steps"]) == (True, "approved", 1)
+    assert _decide(monkeypatch, "L8")["allowed"] is True            # ระดับสูงกว่าอนุมัติแทนได้
+
+
+def test_single_step_record_approves_in_one_click(ctx, monkeypatch):
+    s = sub()
+    decision = _decide(monkeypatch, "L5")
+    db = _AddDb()
+    R.record_approval(db, s, 4, decision, "ok")
+    assert _logs(db) == [(1, "APPROVED", 4, "ok")]
+    assert s.status_approve == "Approved"
+
+
+def test_single_step_pending_queue(queue):
+    # 21/22 = 15,000 (ระดับ 5) · 23 = 1,500 (TOA 2 แต่ต้องสูงกว่าผู้เบิกระดับ 3 → 4)
+    assert _queue("L4") == {23: (1, 1, "mine")}
+    assert _queue("L5") == {21: (1, 1, "mine"), 22: (1, 1, "mine"), 23: (1, 1, "delegable")}
+
+
+def test_single_step_detail_contract(ctx, monkeypatch):
+    monkeypatch.setattr(R, "current_round_logs", lambda db, sid: [])
+    monkeypatch.setattr(R, "_users_by_id", lambda db, ids: {})
+    got = R.detail_approval(None, sub(level=1), 60000.0)
+    assert got["steps"] == [{"step": 1, "required_level": 8, "label": "ระดับ 8 ขึ้นไป (ข้อ 6.4 · CL (ระดับ 8))"}]
+    assert (got["required_level"], got["current_step"], got["step_approvals"]) == (8, 1, [])

@@ -452,9 +452,10 @@ def test_step_approver_emails_selection(monkeypatch):
              NS(id=5, email="map@x.com"), NS(id=1, email="r@x.com"), NS(id=8, email="ex@x.com"),
              NS(id=9, email=None), NS(id=10, email="big@x.com")]
     sub = NS(id=1, created_by="R", current_approval_level=2)
-    # BIG (ระดับ 9) ยังกดอนุมัติได้ แต่ไม่ได้รับอีเมลแล้ว — อีเมลหยุดที่ระดับผู้จัดการ (19/10/2026)
+    # อีเมลเฉพาะระดับที่ขั้นนั้นต้องการ (ผู้ใช้สั่ง 21/10/2026) — A2 (6), EX (5), BIG (9) ยังกดได้แต่ไม่ได้อีเมล
     assert fm.step_approver_emails(_Db(users), sub) == ["a@x.com", "map@x.com"]
     sub1 = NS(id=1, created_by="R", current_approval_level=1)
     monkeypatch.setattr(approval_repo, "current_round_logs", lambda db, sid: [])
     out = fm.step_approver_emails(_Db(users), sub1)
-    assert "ex@x.com" in out and "r@x.com" not in out and "out@x.com" not in out
+    assert out == ["a@x.com", "map@x.com"]
+    assert "ex@x.com" not in out and "r@x.com" not in out and "out@x.com" not in out and "big@x.com" not in out

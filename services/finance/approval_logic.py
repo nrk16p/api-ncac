@@ -1,10 +1,10 @@
 """Pure rules: ADV approval by amount (menait-service spec 2026-09-29-finance-advance-v2-design.md §3),
-two steps since v3 (spec 2026-10-05-finance-advance-v3-design.md §5).
+one step at the TOA level since 21/10/2026 (user: "ส่งอนุมัติสูงสุดตาม TOA").
 
 No DB, no FastAPI. Inputs are plain dicts so everything is unit-testable.
 Person: {"employee_id", "id", "level", "department_id", "active"}.
 Tier:   {"clause", "amount_max" (Decimal | None = no cap), "min_level", "approver_label", "sort_order"}.
-Step:   {"step", "required_level", "label"} — step 1 = หัวหน้าถัดไป, step 2 = ผู้มีอำนาจตาม TOA.
+Step:   {"step", "required_level", "label"} — one step: ผู้มีอำนาจตาม TOA.
 Log:    {"id", "level_no", "action", "action_by" (users.id), "action_at", "remark"} (form_approval_logs).
 """
 from __future__ import annotations
@@ -16,8 +16,6 @@ from services.finance.advance_logic import AdvanceRuleError
 from services.finance.permission_logic import is_superadmin
 
 ORG_WIDE_LEVEL = 9
-NOTIFY_MAX_LEVEL = 5
-SELF_SUFFICIENT_LEVEL = 8  # ผู้เบิกตั้งแต่ระดับนี้ขึ้นไป อนุมัติขั้นเดียวได้ (ผู้ใช้สั่ง 19/10/2026)  # ผู้ใช้สั่ง 19/10/2026: อีเมลขอให้หยุดที่ระดับผู้จัดการ ไม่ต้องรบกวนผู้บริหาร
 TAB_MINE = "mine"
 TAB_DELEGABLE = "delegable"
 
@@ -65,50 +63,19 @@ def required_level(tier_min_level: int, requester_level: Optional[int]) -> int:
     return max(tier_min_level, min(requester_level + 1, ORG_WIDE_LEVEL))
 
 
-def leader_level(requester_level: Optional[int]) -> int:
-    """Step 1 (หัวหน้าถัดไป): the next level up, capped at the org-wide level."""
-    if requester_level is None:
-        raise AdvanceRuleError(MSG_NO_LEVEL)
-    return min(requester_level + 1, ORG_WIDE_LEVEL)
-
-
-def leader_label(level: int) -> str:
-    return f"หัวหน้าระดับ {level} ขึ้นไป"
-
-
 def toa_label(level: int, clause, approver_label) -> str:
     return f"ระดับ {level} ขึ้นไป (ข้อ {clause} · {approver_label})"
 
 
-def second_step_label(level: int) -> str:
-    """ขั้นที่สองที่เกิดจากกติกา "ทุกใบต้องมีคนเหนือขึ้นไปอนุมัติ" ไม่ใช่เพราะ TOA เรียกร้อง"""
-    return f"ระดับ {level} ขึ้นไป (ขั้นที่สอง · ทุกใบต้องผ่านผู้อนุมัติเหนือขึ้นไป)"
+def plan_steps(requester_level: Optional[int], tier: Mapping) -> list:
+    """ขั้นเดียวตาม TOA (ผู้ใช้สั่ง 21/10/2026 "ส่งอนุมัติสูงสุดตาม TOA" แทนกติกา 2 ขั้นของ 19/10/2026)
 
-
-def plan_steps(requester_level: Optional[int], tier: Mapping, force_second: bool = True) -> list:
-    """ขั้น 1 เสมอ แล้วบวกขั้น 2 (ผู้ใช้สั่ง 19/10/2026: ทุกใบต้องมีคนเหนือขึ้นไปอนุมัติ).
-
-    ขั้น 2 ใช้ระดับที่สูงกว่าระหว่าง TOA ของยอดนั้น กับหนึ่งระดับเหนือขั้น 1 เพดาน ORG_WIDE_LEVEL
-    ยกเว้นผู้เบิกตั้งแต่ระดับ SELF_SUFFICIENT_LEVEL ขึ้นไป ที่ยังจบขั้นเดียวได้ตามเดิม
-    (ขั้น 1 ของเขาคือระดับ 9 อยู่แล้ว จะบวกขั้นอีกก็ไม่มีใครสูงกว่านั้น)
-
-    force_second=False = กติกาเดิม (ขั้น 2 เฉพาะตอน TOA เรียก) ใช้กับการอนุมัติ "เคลียร์เงิน"
-    ซึ่งผู้ใช้ยังไม่ได้สั่งให้เปลี่ยน
+    ระดับที่ต้องการ = ระดับ TOA ของยอดนั้น แต่ต้องสูงกว่าผู้เบิกอย่างน้อยหนึ่งระดับ (เพดาน ORG_WIDE_LEVEL)
+    ใช้ทั้งตอนขอเบิกและตอนอนุมัติเคลียร์ ใครระดับถึงขึ้นไปเปิดลิงก์แล้วกดอนุมัติได้
     """
-    first = leader_level(requester_level)
-    steps = [{"step": STEP_LEADER, "required_level": first, "label": leader_label(first)}]
     final = required_level(tier["min_level"], requester_level)
-    if not force_second or (requester_level is not None and requester_level >= SELF_SUFFICIENT_LEVEL):
-        if final > first:
-            steps.append({"step": STEP_TOA, "required_level": final,
-                          "label": toa_label(final, tier["clause"], tier["approver_label"])})
-        return steps
-    second = max(final, min(first + 1, ORG_WIDE_LEVEL))
-    if second > first:
-        label = (toa_label(second, tier["clause"], tier["approver_label"]) if second <= final
-                 else second_step_label(second))
-        steps.append({"step": STEP_TOA, "required_level": second, "label": label})
-    return steps
+    return [{"step": STEP_LEADER, "required_level": final,
+             "label": toa_label(final, tier["clause"], tier["approver_label"])}]
 
 
 def current_step_of(steps: list, current_level) -> int:
@@ -222,23 +189,16 @@ def _eligible(people: Iterable[Mapping], requester: Mapping, required: int,
             if can_approve(p, requester, required, mappings.get(p["employee_id"], ()), excluded)]
 
 
-def notify_approvers(eligible: Iterable[Mapping], required: int, ceiling: int = NOTIFY_MAX_LEVEL) -> list:
-    """ใครควร "ได้รับอีเมล" จากกลุ่มที่อนุมัติได้ (ผู้ใช้สั่ง 19/10/2026).
-
-    สิทธิ์กดอนุมัติไม่เปลี่ยน ใครที่ระดับถึงก็ยังกดได้เหมือนเดิม แต่อีเมลหยุดที่ระดับผู้จัดการ
-    ไม่งั้นใบ 3,000 บาทก็เด้งถึง DCEO ทุกครั้ง เพดานจริงคือ max(ระดับที่ขั้นนั้นต้องการ, ceiling)
-    เพราะขั้นที่ต้องการระดับ 8 อยู่แล้วจะกดให้ต่ำกว่านั้นไม่ได้ และถ้ากรองแล้วไม่เหลือใคร
-    ให้ถอยไปใช้ชั้นต่ำสุดที่ผ่านเกณฑ์ เพื่อไม่ให้ใบค้างโดยไม่มีใครรู้
+def notify_approvers(eligible: Iterable[Mapping], required: int) -> list:
+    """ใครควร "ได้รับอีเมล" (ผู้ใช้สั่ง 21/10/2026): เฉพาะคนระดับที่ TOA กำหนด
+    = ชั้นต่ำสุดในกลุ่มที่อนุมัติได้ (ถ้าไม่มีใครระดับตรงพอดี ใช้ชั้นถัดขึ้นไปที่มีคน)
+    คนระดับสูงกว่ายังกดอนุมัติได้เหมือนเดิมผ่านลิงก์ใบ แค่ไม่ได้อีเมล
     """
-    people = list(eligible)
+    people = [p for p in eligible if p.get("level") is not None and p["level"] >= required]
     if not people:
         return []
-    cap = max(required, ceiling)
-    picked = [p for p in people if p.get("level") is not None and p["level"] <= cap]
-    if picked:
-        return picked
-    lowest = min(p["level"] for p in people if p.get("level") is not None)
-    return [p for p in people if p.get("level") == lowest]
+    lowest = min(p["level"] for p in people)
+    return [p for p in people if p["level"] == lowest]
 
 
 def eligible_approvers(people: Iterable[Mapping], requester: Mapping, required: int,
@@ -266,12 +226,11 @@ def approval_tab(approver_level: int, direct: Optional[int]) -> str:
     return TAB_MINE if direct is not None and approver_level <= direct else TAB_DELEGABLE
 
 
-def evaluate(tiers, people: Mapping[str, Mapping], mappings, requester_employee_id: str, amount,
-             force_second: bool = True) -> dict:
+def evaluate(tiers, people: Mapping[str, Mapping], mappings, requester_employee_id: str, amount) -> dict:
     """The whole chain. `required_level` / `direct_level` are the final step's (the TOA, as in v2)."""
     tier = pick_tier(tiers, amount)
     requester = people.get(requester_employee_id)
-    steps = plan_steps(requester.get("level") if requester else None, tier, force_second)
+    steps = plan_steps(requester.get("level") if requester else None, tier)
     required = steps[-1]["required_level"]
     direct = direct_level(people.values(), requester, required, mappings)
     if direct is None:  # the final step's approvers also qualify for step 1, so this covers every step

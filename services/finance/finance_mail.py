@@ -462,7 +462,7 @@ def step_approver_emails(db, submission) -> list:
         return []
     eligible = rules.eligible_approvers(ctx.people.values(), requester, state["required_level"], ctx.mappings,
                                         state["excluded"])
-    # อีเมลหยุดที่ระดับผู้จัดการ สิทธิ์กดอนุมัติไม่เปลี่ยน (ผู้ใช้สั่ง 19/10/2026)
+    # อีเมลถึงเฉพาะคนระดับที่ TOA กำหนด คนระดับสูงกว่ายังกดอนุมัติผ่านลิงก์ได้ (ผู้ใช้สั่ง 21/10/2026)
     eligible = rules.notify_approvers(eligible, state["required_level"])
     eligible.sort(key=lambda p: (p["level"], p["employee_id"]))
     ids = [p["id"] for p in eligible if p.get("id") is not None]

@@ -76,7 +76,7 @@ class Form:
         return d
 
     def mail_to(self):
-        """อีเมลขั้นปัจจุบันจะถึงใครบ้าง (หลังกฎเพดานผู้จัดการ)"""
+        """อีเมลขั้นปัจจุบันจะถึงใครบ้าง (เฉพาะระดับที่ TOA ต้องการ)"""
         state = rules.evaluate_step(self.plan, ORG, NO_MAP, self.requester["employee_id"], self.level,
                                     rules.current_round(self.logs))
         el = rules.eligible_approvers(ORG.values(), self.requester, state["required_level"], NO_MAP,
@@ -87,13 +87,13 @@ class Form:
 # ======================= เส้นทางหลัก =======================
 
 def test_happy_path_small_amount_from_staff():
-    """พนักงาน lv1 เบิก 3,000 · 2 ขั้น · เคลียร์ใช้ไม่หมด · คืนเงิน · ปิดรายการ"""
+    """พนักงาน lv1 เบิก 3,000 · ขั้นเดียวตาม TOA · เคลียร์ใช้ไม่หมด · คืนเงิน · ปิดรายการ"""
     f = Form(STAFF, 3000)
     assert f.status == L.PENDING_APPROVAL
-    assert [s["required_level"] for s in f.plan["steps"]] == [2, 3]
-    assert f.mail_to() == ["LEAD", "MGR"], "อีเมลขั้น 1 หยุดที่ผู้จัดการ ไม่ถึง CL/DCEO"
+    assert [s["required_level"] for s in f.plan["steps"]] == [3]
+    assert f.mail_to() == ["LEAD"], "อีเมลถึงเฉพาะระดับที่ TOA ต้องการ (lv3)"
 
-    f.approve("LEAD")                                     # lv3 ≥ ขั้น 2 ที่ต้อง lv3 → ข้ามขั้นจบในคลิกเดียว
+    f.approve("LEAD")                                     # lv3 = TOA → จบในคลิกเดียว
     assert f.status_approve == "Approved"
     assert f.status == L.AWAITING_VOUCHER
 
@@ -128,22 +128,20 @@ def test_happy_path_small_amount_from_staff():
     assert f.status == L.CLOSED
 
 
-def test_two_different_people_sign_when_the_leader_is_not_senior_enough():
-    f = Form(STAFF, 15000)                                 # ข้อ 6.5 → ขั้น 1 lv2 · ขั้น 2 lv5
-    assert [s["required_level"] for s in f.plan["steps"]] == [2, 5]
-    f.approve("LEAD")
-    assert f.status_approve == "In Progress" and f.level == 2
-    with pytest.raises(NotAllowed):
-        f.approve("LEAD")                                  # คนเดิมกดขั้น 2 ไม่ได้
+def test_leader_below_toa_cannot_approve_the_manager_signs_alone():
+    f = Form(STAFF, 15000)                                 # ข้อ 6.5 → ขั้นเดียว lv5
+    assert [s["required_level"] for s in f.plan["steps"]] == [5]
     assert f.mail_to() == ["MGR"]
+    with pytest.raises(NotAllowed):
+        f.approve("LEAD")                                  # หัวหน้า lv3 ไม่ถึง TOA
     f.approve("MGR")
     assert f.status_approve == "Approved"
 
 
-def test_every_form_needs_a_second_approver_even_at_the_smallest_tier():
-    f = Form(STAFF, 1500)
-    assert len(f.plan["steps"]) == 2
-    assert "ขั้นที่สอง" in f.plan["steps"][1]["label"]
+def test_higher_level_may_approve_through_the_link():
+    f = Form(STAFF, 3000)
+    f.approve("CL")                                        # lv8 ไม่ได้อีเมล แต่เปิดลิงก์กดได้
+    assert f.status_approve == "Approved"
 
 
 def test_level_8_requester_keeps_a_single_step():
@@ -169,7 +167,6 @@ def test_rejected_form_stops_there():
 
 def test_accounting_returns_the_form_and_the_requester_resubmits():
     f = Form(STAFF, 15000)
-    f.approve("LEAD")
     f.approve("MGR")
     L.check_return(f.status, remark="ใส่ศูนย์ค่าใช้จ่ายผิด")
     f.fin_status = L.FIN_RETURNED              # ยังเป็น Approved อยู่ สถานะจึงเป็น "ตีกลับให้แก้ไข"
@@ -180,9 +177,9 @@ def test_accounting_returns_the_form_and_the_requester_resubmits():
     f.logs += [{"id": 90, "level_no": 0, "action": rules.MARKER_RETURNED, "action_by": None, "action_at": None},
                {"id": 91, "level_no": 0, "action": rules.MARKER_RESUBMITTED, "action_by": None, "action_at": None}]
     f.level = 1
-    assert f.mail_to() == ["LEAD", "MGR"], "รอบใหม่ หัวหน้าคนเดิมกลับมาอยู่ในคิว"
-    f.approve("LEAD")
-    assert f.level == 2
+    assert f.mail_to() == ["MGR"], "รอบใหม่ ผู้จัดการคนเดิมกลับมาอยู่ในคิว"
+    f.approve("MGR")
+    assert f.status_approve == "Approved"
 
 
 def test_return_without_a_reason_is_refused():
@@ -192,7 +189,7 @@ def test_return_without_a_reason_is_refused():
 
 def test_clearing_rejected_by_the_leader_goes_back_to_the_requester():
     f = Form(STAFF, 15000)
-    f.approve("LEAD"); f.approve("MGR")
+    f.approve("MGR")
     f.fin_status, f.amount_paid = L.FIN_PAID, Decimal("15000")
     rows, total = L.check_clear_items([{"expense_date": TODAY, "description": "ค่าที่พัก",
                                         "amount_before_vat": 9000}])

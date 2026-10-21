@@ -1,4 +1,4 @@
-"""อนุมัติการเคลียร์ — ตรรกะล้วน (ผู้ใช้สั่ง 19/10/2026)"""
+"""อนุมัติการเคลียร์ — ตรรกะล้วน (ผู้ใช้สั่ง 19/10/2026 · ขั้นเดียวตาม TOA ตั้งแต่ 21/10/2026)"""
 import os
 from decimal import Decimal
 
@@ -33,45 +33,42 @@ def plan(amount, who=AE):
 
 
 def test_ตัดชั้นด้วยยอดที่ใช้จริงไม่ใช่ยอดที่เบิก():
-    """เบิก 25,000 ใช้จริง 18,000 → ต้องเข้าข้อ 6.5 ไม่ใช่ 6.4"""
+    """เบิก 25,000 ใช้จริง 18,000 → ต้องเข้าข้อ 6.5 ไม่ใช่ 6.4 · ขั้นเดียวระดับ 5"""
     p = plan(Decimal("18000"))
     assert p["clause"] == "6.5"
-    assert [s["required_level"] for s in p["steps"]] == [3, 5]
+    assert [s["required_level"] for s in p["steps"]] == [5]
 
 
 def test_ใช้จริงน้อยลงชั้นอนุมัติลดตาม():
     assert plan(Decimal("1800"))["clause"] == "6.7"
-    assert [s["step"] for s in plan(Decimal("1800"))["steps"]] == [1]
+    assert [s["required_level"] for s in plan(Decimal("1800"))["steps"]] == [3]
 
 
 def test_ใช้เกินที่เบิกชั้นอนุมัติสูงขึ้น():
     p = plan(Decimal("30000"))
     assert p["clause"] == "6.4"
-    assert [s["required_level"] for s in p["steps"]] == [3, 8]
+    assert [s["required_level"] for s in p["steps"]] == [8]
 
 
-def test_หัวหน้าถัดไปอนุมัติขั้น1ได้_ผู้เบิกอนุมัติเองไม่ได้():
+def test_ระดับถึง_TOA_อนุมัติได้_ผู้เบิกอนุมัติเองไม่ได้():
     p = plan(Decimal("18000"))
-    assert cl.can_approve(p, PEOPLE, MAPS, AE, PU, step=1)
+    assert cl.can_approve(p, PEOPLE, MAPS, AE, BANK, step=1)
     assert not cl.can_approve(p, PEOPLE, MAPS, AE, AE, step=1)
 
 
-def test_ระดับไม่ถึงอนุมัติขั้น2ไม่ได้():
-    p = plan(Decimal("30000"))          # ขั้น 2 ต้องระดับ 8
-    assert not cl.can_approve(p, PEOPLE, MAPS, AE, BANK, step=2)
-    assert cl.can_approve(p, PEOPLE, MAPS, AE, PONG, step=2)
+def test_หัวหน้าที่ระดับไม่ถึง_TOA_อนุมัติไม่ได้():
+    assert not cl.can_approve(plan(Decimal("18000")), PEOPLE, MAPS, AE, PU, step=1)
+    p = plan(Decimal("30000"))          # ต้องระดับ 8
+    assert not cl.can_approve(p, PEOPLE, MAPS, AE, BANK, step=1)
+    assert cl.can_approve(p, PEOPLE, MAPS, AE, PONG, step=1)
 
 
-def test_คนที่กดขั้น1แล้วกดขั้น2ไม่ได้():
-    p = plan(Decimal("18000"))          # ขั้น 2 ต้องระดับ 5 คุณแบงค์ถึง
-    assert cl.can_approve(p, PEOPLE, MAPS, AE, BANK, step=2)
-    assert not cl.can_approve(p, PEOPLE, MAPS, AE, BANK, step=2, already=(PEOPLE[BANK]["id"],))
+def test_ระดับสูงกว่าอนุมัติแทนได้():
+    assert cl.can_approve(plan(Decimal("1800")), PEOPLE, MAPS, AE, BANK, step=1)
 
 
-def test_ขั้นถัดไป():
-    p = plan(Decimal("18000"))
-    assert cl.next_step(p, 1) == 2
-    assert cl.next_step(p, 2) is None
+def test_กดครั้งเดียวจบ():
+    assert cl.next_step(plan(Decimal("18000")), 1) is None
     assert cl.next_step(plan(Decimal("1800")), 1) is None
 
 
