@@ -446,7 +446,7 @@ def test_happy_path_refund(api):
     letter = got[letter_subject]["html"][0]
     for text in ("เรียน คุณสมชาย,", f"จากใบคำขอเบิกเงิน {fid} จำนวน 12,000.00 บาท",
                  f"ครบกำหนดชำระในวันที่ {due.strftime('%d/%m/%Y')}", "พิมพ์แบบฟอร์มใบสรุปการเคลียร์เงิน",
-                 "ส่งมอบเอกสารฉบับจริง", ACCOUNT_BOX, f"{FE}/finance/advance/{fid}"):
+                 "สแกนเอกสารการเคลียร์ให้ทางบัญชีก่อน", "ติดต่อคุณเบล", ACCOUNT_BOX, f"{FE}/finance/advance/{fid}"):
         assert text in letter, text
 
     a.put(fid, "confirm", {"action_by": FR}, expect=403)  # reviewer has no close permission
