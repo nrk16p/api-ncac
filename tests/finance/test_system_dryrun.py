@@ -258,8 +258,8 @@ def test_clearing_rows_must_carry_an_amount():
     perms.PERM_CLOSE, perms.PERM_PAYEE_ADMIN, perms.PERM_OVERDUE_REMIND,
 ])
 def test_each_permission_belongs_to_one_department(permission):
-    """จ่ายเงิน = การเงิน (4) · ปุ่มอื่น = บัญชี (6) · แผนกอื่นไม่ได้สักปุ่ม (ผู้ใช้สั่ง 21/10/2026)"""
-    owner, other = (4, 6) if permission == perms.PERM_PAY else (6, 4)
+    """จ่ายเงิน + บัญชีรับเงิน = การเงิน (4) · ปุ่มอื่น = บัญชี (6) · แผนกอื่นไม่ได้สักปุ่ม (ผู้ใช้สั่ง 21/10/2026)"""
+    owner, other = (4, 6) if permission in (perms.PERM_PAY, perms.PERM_PAYEE_ADMIN) else (6, 4)
     assert perms.allowed(permission, "STAFF", owner) is True
     assert perms.allowed(permission, "STAFF", other) is False
     assert perms.allowed(permission, "STAFF", 11) is False
@@ -268,7 +268,7 @@ def test_each_permission_belongs_to_one_department(permission):
 def test_permissions_for_lists_what_a_person_may_do():
     got = perms.permissions_for("ACC", 6)
     assert perms.PERM_VOUCHER in got and perms.PERM_PAY not in got
-    assert perms.permissions_for("FIN", 4) == [perms.PERM_PAY]
+    assert perms.permissions_for("FIN", 4) == [perms.PERM_PAY, perms.PERM_PAYEE_ADMIN]
 
 
 # ======================= แจ้งเตือน =======================

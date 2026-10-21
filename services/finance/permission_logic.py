@@ -1,6 +1,6 @@
 """สิทธิ์กดปุ่มของงานเบิกเงิน Advance ตามแผนก (ผู้ใช้สั่ง 21/10/2026 "ตั้งง่าย ๆ ตาม department")
 
-บันทึกจ่ายเงินเป็นของแผนกการเงิน (4) ปุ่มอื่นทั้งหมดเป็นของแผนกบัญชี (6) · superadmin กดได้ทุกปุ่ม
+บันทึกจ่ายเงินกับจัดการบัญชีรับเงินเป็นของแผนกการเงิน (4) ปุ่มอื่นทั้งหมดเป็นของแผนกบัญชี (6) · superadmin กดได้ทุกปุ่ม
 เลิกใช้ตาราง fin_permissions รายคนแล้ว (ตารางยังอยู่ แต่ระบบไม่อ่าน)
 ไม่มี DB ไม่มี FastAPI — เทสต์ได้โดยไม่ต้องต่อฐาน
 """
@@ -44,6 +44,7 @@ DEPARTMENT_LABELS = {FINANCE_DEPARTMENT_ID: "แผนกการเงิน",
 
 PERMISSION_DEPARTMENT = {perm: ACCOUNTING_DEPARTMENT_ID for perm in ALL_PERMISSIONS}
 PERMISSION_DEPARTMENT[PERM_PAY] = FINANCE_DEPARTMENT_ID
+PERMISSION_DEPARTMENT[PERM_PAYEE_ADMIN] = FINANCE_DEPARTMENT_ID  # ผู้ใช้สั่ง 21/10/2026 บัญชีรับเงินเป็นงานการเงิน
 
 DENIED = "คุณไม่มีสิทธิ์{label} ปุ่มนี้สำหรับ{dept}"
 
@@ -61,7 +62,7 @@ def _dept(department_id):
 
 
 def allowed(permission: str, employee_id, department_id) -> bool:
-    """จ่ายเงิน = แผนกการเงิน · ปุ่มอื่น = แผนกบัญชี · superadmin ได้ทุกปุ่ม"""
+    """จ่ายเงิน + บัญชีรับเงิน = แผนกการเงิน · ปุ่มอื่น = แผนกบัญชี · superadmin ได้ทุกปุ่ม"""
     if is_superadmin(employee_id):
         return True
     if permission not in PERMISSION_DEPARTMENT:
