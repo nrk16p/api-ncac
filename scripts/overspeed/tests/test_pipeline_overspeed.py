@@ -68,8 +68,12 @@ class DeleteResult:
 
 
 class FakeTarget:
-    def __init__(self):
-        self.deletes, self.inserts = [], []
+    def __init__(self, besttech=()):
+        self.deletes, self.inserts, self.besttech = [], [], list(besttech)
+
+    def distinct(self, field, query):
+        assert field == "vehicle" and query["source"] == "besttech"
+        return self.besttech
 
     def delete_many(self, query):
         self.deletes.append(query)
@@ -154,3 +158,12 @@ def test_bad_parameters_are_logged_as_a_failed_run(monkeypatch):
         pipeline_overspeed.main()
     assert jobs[0].meta["min_records"] == "0"
     assert jobs[0].finished[0][0] == "failed" and "MIN_RECORDS" in jobs[0].finished[0][1]["error"]
+
+
+def test_plates_with_besttech_rows_are_left_alone():
+    rows = readings("71-0001", "08:00:00", [80] * 10) + readings("71-0002", "08:00:00", [80] * 10)
+    target = FakeTarget(besttech=["71-0002"])
+    stats = overspeed_day(FakeDrivingLog(rows), target, DAY, batch_pause_s=0)
+    assert stats["plates"] == 1
+    assert target.deletes[0]["vehicle"] == {"$in": ["71-0001"]}
+    assert [d["vehicle"] for d in target.inserts] == ["71-0001"]

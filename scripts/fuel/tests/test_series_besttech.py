@@ -134,3 +134,18 @@ def test_string_numbers_are_accepted():
     d = by_plate(besttech_day_docs(DAY, [], windows, {}))["สบ.71-8635"]
     cols = decode_columns(d["cols"], d["n"])
     assert cols["fuel"].tolist() == [9280] and cols["speed"].tolist() == [12] and cols["lat"].tolist() == [1379576]
+
+
+class TrackClient(FakeClient):
+    def track(self):
+        return TRACK
+
+
+def test_run_days_hands_the_raw_points_to_derive():
+    from fake_mongo import FakeClient as FakeMongo
+    seen = []
+    db = FakeMongo()["analytics"]
+    run_days(TrackClient(), db, [DAY], derive=lambda day, windows: seen.append((day, windows)))
+    assert len(seen) == 1 and seen[0][0] == DAY
+    assert seen[0][1][0][0]["vehicle_no"] == "ME152 (71-8635 สบ.)"
+    assert db["gps_series"].count_documents({"date_key": "2026-10-05"}) == 3

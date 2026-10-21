@@ -251,6 +251,8 @@ async def startup_event():
     scheduler.add_job(_run, CronTrigger(hour=23, minute=30), args=["engineon_trip_summary"], id="sched_engineon_trip_summary")  # 06:30 BKK
     # fuel series (fuel-control-center spec 2026-10-06) — BKK→UTC −7:
     # Besttech per-vehicle /history for yesterday at 01:30 BKK → 18:30 UTC (~76 min at 35 s per call;
+    # the same raw points also give Besttech engine-on → summary_engineon and overspeed → analytics.overspeed,
+    # which the Terminus engineon 04:00 / overspeed 04:30 jobs then leave alone — scripts/fuel/besttech_derived.py;
     # /history_all is avoided — it locks the key out); fuel_nightly at 04:15 BKK → 21:15 UTC:
     # Besttech catch-up only if the 01:30 run left nothing and is not still running, then Terminus
     # once engine-on (21:00 UTC, ~1 min) has read the same day — done before stockmovement 22:00 UTC

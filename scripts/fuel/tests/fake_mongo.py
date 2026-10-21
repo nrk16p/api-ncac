@@ -72,6 +72,11 @@ class FakeCollection:
             if matches(d, query):
                 d.update(update.get("$set", {}))
 
+    def insert_many(self, docs):
+        for i, d in enumerate(docs):
+            d = copy.deepcopy(d)
+            self.docs[d.get("_id", f"auto{len(self.docs)}_{i}")] = d
+
     def delete_many(self, query):
         for key in [k for k, d in self.docs.items() if matches(d, query)]:
             del self.docs[key]

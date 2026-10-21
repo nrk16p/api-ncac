@@ -7,7 +7,8 @@ MAX_DISTANCE (meters, default 200) — passed through POST /pipeline/run/engineo
 ENGINE_LOGIC=v2 (manual runs only; the nightly stays "current"): boxes whose firmware reports no
 voltage ("v1") count every parked reading as engine-on, and every record gets engine_logic +
 confirmed_by_voltage. ENGINEON_RAW_COLLECTION / ENGINEON_SUMMARY_COLLECTION redirect the writes
-(smoke tests only).
+(smoke tests only). Summary docs with version_type "besttech" (written by fuel_series_besttech from
+Besttech points) are never overwritten here.
 
 Ported from api-engineon app/etl_engineon.py (low-mem streaming version).
 """
@@ -291,8 +292,10 @@ def process_engineon_data_optimized(
             plant_min = float(plant_events["total_engine_on_min"].sum()) if not plant_events.empty else 0.0
             not_plant_min = float(not_plant_events["total_engine_on_min"].sum()) if not not_plant_events.empty else 0.0
 
-            if plant_min > 0 or not_plant_min > 0:
-                sum_id = f"{plate}_{date_key}"
+            sum_id = f"{plate}_{date_key}"
+            if sum_id in besttech_ids:
+                pass   # Besttech had points for this truck/day (fuel_series_besttech) — its doc wins
+            elif plant_min > 0 or not_plant_min > 0:
 
                 sum_ops.append(
                     ReplaceOne(
@@ -321,7 +324,10 @@ def process_engineon_data_optimized(
         gc.collect()
 
     # -------- MAIN LOOP --------
+    besttech_ids: set[str] = set()
     for target_date in date_list:
+        # truck/days already written from Besttech points are left alone (dual-box trucks use Besttech)
+        besttech_ids = set(col_sum.distinct("_id", {"date": target_date, "version_type": "besttech"}))
         cursor = (
             col_log.find({"วันที่": target_date}, projection)
             .sort("ทะเบียนพาหนะ", 1)

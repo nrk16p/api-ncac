@@ -8,6 +8,7 @@ MIN_DURATION_MIN (2), MIN_RECORDS (5), GAP_MINUTES (2). OVERSPEED_COLLECTION red
 Plates are read in batches of 50 through the วันที่-first index (only the five fields the segments
 need; speed and distance through $getField because their names contain dots). For every batch the day's rows of each plate processed are deleted before the new segments are
 inserted — including plates that no longer have a segment, so a stricter re-run leaves no stale rows.
+Plates that already have rows with source "besttech" that day (written by fuel_series_besttech) are skipped.
 """
 import os
 import re
@@ -60,6 +61,10 @@ def overspeed_day(driving_log, target, day: date, plates: list[str] | None = Non
     day_start = datetime.combine(day, datetime.min.time())
     day_end = day_start + timedelta(days=1)
     stats = {"day": day.isoformat(), "plates": 0, "segments": 0, "deleted": 0}
+    # plates whose rows came from Besttech points (fuel_series_besttech) keep them — dual-box trucks use Besttech
+    besttech = set(target.distinct("vehicle", {"source": "besttech",
+                                               "start_datetime": {"$gte": day_start, "$lt": day_end}}))
+    raw = [p for p in raw if p not in besttech]
     for i in range(0, len(raw), BATCH):
         part = raw[i:i + BATCH]
         df = frame_from_rows(read_rows(driving_log, key, part))
