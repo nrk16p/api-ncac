@@ -126,6 +126,23 @@ def my_permissions(employee_id: str, db: Session = Depends(get_db)):
     }
 
 
+@router.get("/advances/duplicate-doc-no")
+def duplicate_doc_no(field: str, value: str, exclude_form_id: Optional[str] = None, db: Session = Depends(get_db)):
+    """ใบอื่นที่ใช้เลขเดียวกัน — หน้าเว็บถามก่อนบันทึกเลขที่ตั้งเบิก / เลขที่ทำจ่าย / เลขที่เอกสารเคลียร์
+    (ผู้ใช้สั่ง 21/10/2026 แจ้งเมื่อเลขซ้ำ) ไม่บล็อก ให้คนกดยืนยันเองถ้าตั้งใจใช้เลขเดียวกัน"""
+    if field not in logic.DOC_NO_FIELDS:
+        raise HTTPException(status_code=400, detail="ช่องนี้เช็กเลขซ้ำไม่ได้")
+    text = (value or "").strip()
+    if not text:
+        return {"field": field, "value": text, "form_ids": []}
+    column = getattr(FinAdvance, field)
+    query = db.query(FinAdvance.form_id).filter(func.upper(func.trim(column)) == text.upper())
+    if exclude_form_id:
+        query = query.filter(FinAdvance.form_id != exclude_form_id)
+    rows = query.order_by(FinAdvance.form_id).limit(10).all()
+    return {"field": field, "value": text, "form_ids": [row.form_id for row in rows]}
+
+
 # ---------------------------- advances (read) ----------------------------
 
 @router.get("/advances")
@@ -763,16 +780,20 @@ def confirm_advance(form_id: str, body: ConfirmIn, background_tasks: BackgroundT
         logic.check_fresh(body.expected_clear_submitted_at, adv.clear_submitted_at if adv is not None else None)
         extra_paid_on = logic.check_confirm(status, settle_amount=adv.settle_amount if adv is not None else None,
                                             settle_date=body.settle_date)
+        clear_doc_no = logic.check_clear_doc_no(body.clear_doc_no)
+        received_on = logic.check_original_received(body.original_received_date, repo.today_bkk())
     except logic.AdvanceRuleError as exc:
         raise _rule_error(exc)
     changes = {}
     if extra_paid_on is not None:
         changes = logic.diff_fields({"settle_date": adv.settle_date}, {"settle_date": extra_paid_on})
         adv.settle_date = extra_paid_on
-    if body.clear_doc_no is not None:  # เอกสารเคลียร์ is recorded by บัญชี at review
-        changes = {**changes, **logic.diff_fields({"clear_doc_no": adv.clear_doc_no},
-                                                  {"clear_doc_no": body.clear_doc_no})}
-        adv.clear_doc_no = body.clear_doc_no
+    # เอกสารเคลียร์ + วันที่รับเอกสารตัวจริง บันทึกโดยบัญชีตอนปิดรายการ
+    changes = {**changes, **logic.diff_fields(
+        {"clear_doc_no": adv.clear_doc_no, "original_received_date": adv.original_received_date},
+        {"clear_doc_no": clear_doc_no, "original_received_date": received_on})}
+    adv.clear_doc_no = clear_doc_no
+    adv.original_received_date = received_on
     adv.fin_status = logic.FIN_CLOSED
     adv.closed_by = body.action_by
     adv.closed_at = func.now()

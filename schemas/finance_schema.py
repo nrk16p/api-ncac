@@ -99,6 +99,7 @@ class ResubmitIn(_Body):
 class ConfirmIn(_Body):
     action_by: str
     clear_doc_no: Optional[str] = Field(default=None, max_length=100)
+    original_received_date: Optional[date] = None  # ติ๊กรับเอกสารตัวจริงแล้ว + วันที่รับ
     settle_date: Optional[date] = None
     expected_clear_submitted_at: Optional[datetime] = None
 

@@ -450,8 +450,12 @@ def test_happy_path_refund(api):
         assert text in letter, text
 
     a.put(fid, "confirm", {"action_by": FP}, expect=403)  # closing is accounting's job
-    d = a.put(fid, "confirm", {"action_by": FC, "clear_doc_no": "CL-1"})
-    assert d["status"] == "CLOSED" and d["fin"]["clear_doc_no"] == "CL-1"
+    got_today = today().isoformat()
+    a.put(fid, "confirm", {"action_by": FC, "clear_doc_no": "CL69100001"}, expect=400)  # ยังไม่ติ๊กรับเอกสารตัวจริง
+    a.put(fid, "confirm", {"action_by": FC, "clear_doc_no": "CL-1", "original_received_date": got_today}, expect=400)  # ไม่ครบ 10 หลัก
+    d = a.put(fid, "confirm", {"action_by": FC, "clear_doc_no": "CL69100001", "original_received_date": got_today})
+    assert d["status"] == "CLOSED" and d["fin"]["clear_doc_no"] == "CL69100001"
+    assert d["fin"]["original_received_date"] == got_today
     got = a.mails("9 confirm/close", fid)
     assert_mails(got, {legacy(fid, "รายการเบิกเงินปิดเรียบร้อย"): ([email_of(REQ)], [])})
 
@@ -490,7 +494,8 @@ def test_extra_pay_path_one_click_approval(api):
 
     a.put(fid, "confirm", {"action_by": FC}, expect=400)  # extra pay needs the transfer date
     extra_day = (today() + timedelta(days=1)).isoformat()
-    d = a.put(fid, "confirm", {"action_by": FC, "settle_date": extra_day})
+    d = a.put(fid, "confirm", {"action_by": FC, "settle_date": extra_day, "clear_doc_no": "CL69100002",
+                               "original_received_date": today().isoformat()})
     assert d["status"] == "CLOSED" and d["fin"]["settle_date"] == extra_day
     assert_mails(a.mails(), {legacy(fid, "รายการเบิกเงินปิดเรียบร้อย"): ([email_of(REQ)], [])})
 

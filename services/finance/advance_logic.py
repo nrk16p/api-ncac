@@ -325,6 +325,25 @@ def check_fresh(expected, actual):
         raise InvalidTransition("ข้อมูลเคลียร์ถูกแก้ไขหลังจากเปิดหน้านี้ กรุณารีเฟรชหน้าจอ")
 
 
+CLEAR_DOC_NO_RE = re.compile(r"^[A-Za-z0-9]{10}$")
+# เลขเอกสารที่บัญชี/การเงินกรอก — หน้าเว็บเช็กซ้ำก่อนบันทึก (ผู้ใช้สั่ง 21/10/2026 แจ้งเมื่อเลขซ้ำ)
+DOC_NO_FIELDS = ("voucher_no", "payment_doc_no", "clear_doc_no")
+
+
+def check_clear_doc_no(value) -> str:
+    """เลขที่เอกสารเคลียร์เงิน: บังคับกรอก ตัวอักษรอังกฤษหรือตัวเลขรวม 10 หลัก (ผู้ใช้สั่ง 21/10/2026)"""
+    text = (value or "").strip()
+    _require(bool(CLEAR_DOC_NO_RE.match(text)), "เลขที่เอกสารเคลียร์เงินต้องมี 10 หลัก (ตัวเลขหรือตัวอักษรอังกฤษ ไม่มีขีดหรือเว้นวรรค)")
+    return text
+
+
+def check_original_received(received_date, today) -> date:
+    """ปิดรายการได้เมื่อรับเอกสารตัวจริงแล้ว พร้อมวันที่รับ (ผู้ใช้สั่ง 21/10/2026)"""
+    _require(received_date is not None, "กรุณาติ๊กรับเอกสารตัวจริงแล้ว และใส่วันที่รับเอกสารตัวจริง")
+    _require(received_date <= today, "วันที่รับเอกสารตัวจริงต้องไม่เกินวันนี้")
+    return received_date
+
+
 def check_confirm(status, *, settle_amount, settle_date):
     _require_status(status, (AWAITING_REVIEW,), "ยืนยันปิดรายการ")
     if settle_amount is not None and Decimal(settle_amount) < 0:

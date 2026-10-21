@@ -178,6 +178,7 @@ def serialize_fin(adv, acc_names, people=None, clear_items=None):
         "clear_date": _iso(adv.clear_date),
         "amount_actual": _num(adv.amount_actual),
         "clear_doc_no": adv.clear_doc_no,
+        "original_received_date": _iso(getattr(adv, "original_received_date", None)),
         "settle_amount": _num(adv.settle_amount),
         "settle_date": _iso(adv.settle_date),
         "remark": adv.remark,

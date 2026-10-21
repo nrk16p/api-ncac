@@ -44,6 +44,7 @@ class FinAdvance(Base):
     clear_date = Column(Date)                # วันที่ส่งเอกสารเคลียร์
     amount_actual = Column(Numeric(12, 2))   # ยอดใช้จริง
     clear_doc_no = Column(String(100))       # เอกสารเคลียร์
+    original_received_date = Column(Date)    # วันที่รับเอกสารตัวจริง (ติ๊กตอนปิดรายการ 21/10/2026)
     settle_amount = Column(Numeric(12, 2))   # รับคืน (+) / เบิกเพิ่ม (−)
     settle_date = Column(Date)               # วันที่โอนเงินคืน
     remark = Column(Text)                    # หมายเหตุ
