@@ -1,11 +1,11 @@
-"""สิทธิ์ตามหน้าที่ของงานเบิกเงิน Advance (ผู้ใช้ตัดสิน 2026-10-19).
+"""สิทธิ์กดปุ่มของงานเบิกเงิน Advance ตามแผนก (ผู้ใช้สั่ง 21/10/2026 "ตั้งง่าย ๆ ตาม department")
 
-เดิมทุกคนในแผนกการเงิน/บัญชีกดได้ทุกปุ่ม ตอนนี้แยกเป็นสิทธิ์รายหน้าที่
-ไม่มี DB ไม่มี FastAPI — รับ dict ล้วน ๆ เพื่อให้เทสต์ได้โดยไม่ต้องต่อฐาน
+บันทึกจ่ายเงินเป็นของแผนกการเงิน (4) ปุ่มอื่นทั้งหมดเป็นของแผนกบัญชี (6) · superadmin กดได้ทุกปุ่ม
+เลิกใช้ตาราง fin_permissions รายคนแล้ว (ตารางยังอยู่ แต่ระบบไม่อ่าน)
+ไม่มี DB ไม่มี FastAPI — เทสต์ได้โดยไม่ต้องต่อฐาน
 """
 from __future__ import annotations
 
-from typing import Iterable, Mapping
 
 PERM_VOUCHER = "voucher"                 # ตั้งเบิก
 PERM_PAY = "pay"                         # จ่ายเงิน
@@ -38,30 +38,37 @@ PERMISSION_LABELS = {
     PERM_OVERDUE_REMIND: "ส่งแจ้งเตือนเกินกำหนด",
 }
 
-DENIED = "คุณไม่มีสิทธิ์{label} กรุณาติดต่อผู้ดูแลระบบ"
+FINANCE_DEPARTMENT_ID = 4      # แผนกการเงิน
+ACCOUNTING_DEPARTMENT_ID = 6   # แผนกบัญชี
+DEPARTMENT_LABELS = {FINANCE_DEPARTMENT_ID: "แผนกการเงิน", ACCOUNTING_DEPARTMENT_ID: "แผนกบัญชี"}
+
+PERMISSION_DEPARTMENT = {perm: ACCOUNTING_DEPARTMENT_ID for perm in ALL_PERMISSIONS}
+PERMISSION_DEPARTMENT[PERM_PAY] = FINANCE_DEPARTMENT_ID
+
+DENIED = "คุณไม่มีสิทธิ์{label} ปุ่มนี้สำหรับ{dept}"
 
 
 def denied_message(permission: str) -> str:
-    return DENIED.format(label=PERMISSION_LABELS.get(permission, permission))
+    return DENIED.format(label=PERMISSION_LABELS.get(permission, permission),
+                         dept=DEPARTMENT_LABELS[PERMISSION_DEPARTMENT.get(permission, ACCOUNTING_DEPARTMENT_ID)])
 
 
-def is_configured(permission: str, grants: Mapping[str, Iterable[str]]) -> bool:
-    """ยังไม่มีใครถูกกำหนดสิทธิ์นี้ = ยังไม่ได้ตั้งค่า (ใช้กติกาเดิมไปก่อน)."""
-    return bool(set(grants.get(permission) or ()))
+def _dept(department_id):
+    try:
+        return int(department_id)
+    except (TypeError, ValueError):
+        return None
 
 
-def allowed(permission: str, employee_id: str, grants: Mapping[str, Iterable[str]],
-            is_finance: bool) -> bool:
-    """ถ้าสิทธิ์นี้ยังไม่ได้ตั้งค่า ใช้กติกาเดิม (ใครอยู่การเงิน/บัญชีก็ทำได้)
-    เพื่อไม่ให้ระบบล็อกตัวเองตอน deploy ก่อนรัน SQL · superadmin ได้ทุกสิทธิ์เสมอ"""
+def allowed(permission: str, employee_id, department_id) -> bool:
+    """จ่ายเงิน = แผนกการเงิน · ปุ่มอื่น = แผนกบัญชี · superadmin ได้ทุกปุ่ม"""
     if is_superadmin(employee_id):
         return True
-    if not is_configured(permission, grants):
-        return bool(is_finance)
-    return employee_id is not None and employee_id in set(grants.get(permission) or ())
+    if permission not in PERMISSION_DEPARTMENT:
+        return False
+    return _dept(department_id) == PERMISSION_DEPARTMENT[permission]
 
 
-def permissions_for(employee_id: str, grants: Mapping[str, Iterable[str]],
-                    is_finance: bool) -> list:
+def permissions_for(employee_id, department_id) -> list:
     """สิทธิ์ทั้งหมดที่คนนี้มี — FE ใช้ซ่อนปุ่มที่กดไม่ได้"""
-    return [p for p in ALL_PERMISSIONS if allowed(p, employee_id, grants, is_finance)]
+    return [p for p in ALL_PERMISSIONS if allowed(p, employee_id, department_id)]

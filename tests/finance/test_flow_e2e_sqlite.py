@@ -395,8 +395,8 @@ def test_happy_path_refund(api):
     assert_mails(got, {summary(fid, "อนุมัติครบทุกขั้นแล้ว"): ([email_of(REQ)], [ACCOUNT_BOX])})
 
     # voucher: permission enforced, no email
-    a.voucher(fid, who=FX, expect=403)
-    a.voucher(fid, who=FP, expect=403)
+    a.voucher(fid, who=LEAD, expect=403)  # not finance/accounting
+    a.voucher(fid, who=FP, expect=403)    # finance only records payments
     a.voucher(fid)
     assert a.status(fid) == "AWAITING_PAYMENT"
     assert a.mails("4 voucher", fid) == {}
@@ -449,7 +449,7 @@ def test_happy_path_refund(api):
                  "สแกนเอกสารการเคลียร์ให้ทางบัญชีก่อน", "ติดต่อคุณเบล", ACCOUNT_BOX, f"{FE}/finance/advance/{fid}"):
         assert text in letter, text
 
-    a.put(fid, "confirm", {"action_by": FR}, expect=403)  # reviewer has no close permission
+    a.put(fid, "confirm", {"action_by": FP}, expect=403)  # closing is accounting's job
     d = a.put(fid, "confirm", {"action_by": FC, "clear_doc_no": "CL-1"})
     assert d["status"] == "CLOSED" and d["fin"]["clear_doc_no"] == "CL-1"
     got = a.mails("9 confirm/close", fid)
@@ -520,7 +520,7 @@ def test_return_resubmit_reapprove_with_superadmin(api):
     a.mails()
 
     a.put(fid, "return", {"action_by": FV, "remark": " "}, expect=400)
-    a.put(fid, "return", {"action_by": FR, "remark": "แนบใบเสนอราคา"}, expect=403)
+    a.put(fid, "return", {"action_by": FP, "remark": "แนบใบเสนอราคา"}, expect=403)
     d = a.put(fid, "return", {"action_by": FV, "remark": "แนบใบเสนอราคา"})
     assert d["status"] == "RETURNED" and d["fin"]["voucher_no"] is None
     got = a.mails()
@@ -608,7 +608,7 @@ def test_send_back_then_reclear_same_and_crossing_tier(api):
     assert a.status(fid) == "AWAITING_REVIEW"
     a.mails()
 
-    a.put(fid, "send-back", {"action_by": FC, "review_remark": "ขาดใบเสร็จ"}, expect=403)
+    a.put(fid, "send-back", {"action_by": FP, "review_remark": "ขาดใบเสร็จ"}, expect=403)
     d = a.put(fid, "send-back", {"action_by": FR, "review_remark": "ขาดใบเสร็จ"})
     assert d["status"] == "SENT_BACK"
     got = a.mails()

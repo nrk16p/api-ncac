@@ -139,7 +139,7 @@ def test_job_sends_only_due(monkeypatch):
 def _endpoint(monkeypatch, enabled, items=()):
     if enabled:
         monkeypatch.setenv("FINANCE_EMAIL_ENABLED", "true")
-    monkeypatch.setattr(ar, "require_finance", lambda db, emp: NS(employee_id=emp))
+    monkeypatch.setattr(ar, "require_finance", lambda db, emp: NS(employee_id=emp, department_id=6))
     monkeypatch.setattr(od, "load_overdue", lambda db, ids=None: (
         [i for i in items if ids is None or i["form_id"] in ids], TODAY))
 

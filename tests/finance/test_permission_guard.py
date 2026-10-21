@@ -9,7 +9,6 @@ os.environ.setdefault("DATABASE_URL", "postgresql://u:p@localhost:5432/x")
 
 from routes.finance import advance_routes as r  # noqa: E402
 from services.finance import permission_logic as pl  # noqa: E402
-from services.finance import permission_repo  # noqa: E402
 
 BOW, NONG, OUTSIDER = "610197", "660548", "570245"
 PEOPLE = {
@@ -31,43 +30,26 @@ class FakeDB:
         return PEOPLE.get(self._wanted)
 
 
-@pytest.fixture
-def grants(monkeypatch):
-    table = {pl.PERM_PAY: {BOW}, pl.PERM_CLEARING_REVIEW: {NONG}}
-    monkeypatch.setattr(permission_repo, "load_grants", lambda db, fresh=False: table)
-    return table
-
-
-def test_เจ้าของสิทธิ์ผ่านด่าน(grants):
+def test_การเงินบันทึกจ่ายได้():
     assert r.require_permission(FakeDB(), BOW, pl.PERM_PAY).employee_id == BOW
 
 
-def test_คนการเงินที่ไม่มีสิทธิ์นั้นโดนปฏิเสธ_403(grants):
+def test_บัญชีบันทึกจ่ายไม่ได้_403():
     with pytest.raises(HTTPException) as exc:
         r.require_permission(FakeDB(), NONG, pl.PERM_PAY)
     assert exc.value.status_code == 403
-    assert "จ่ายเงิน" in exc.value.detail
+    assert exc.value.detail == "คุณไม่มีสิทธิ์จ่ายเงิน ปุ่มนี้สำหรับแผนกการเงิน"
 
 
-def test_คนนอกการเงินโดนปฏิเสธก่อนถึงด่านสิทธิ์(grants):
+def test_การเงินปิดรายการไม่ได้_ปุ่มอื่นเป็นของบัญชี():
+    with pytest.raises(HTTPException) as exc:
+        r.require_permission(FakeDB(), BOW, pl.PERM_CLOSE)
+    assert exc.value.status_code == 403
+    assert r.require_permission(FakeDB(), NONG, pl.PERM_CLOSE).employee_id == NONG
+
+
+def test_คนนอกการเงินโดนปฏิเสธก่อนถึงด่านสิทธิ์():
     with pytest.raises(HTTPException) as exc:
         r.require_permission(FakeDB(), OUTSIDER, pl.PERM_PAY)
     assert exc.value.status_code == 403
     assert exc.value.detail == "เฉพาะฝ่ายการเงินเท่านั้น"
-
-
-def test_สิทธิ์ที่ยังไม่ตั้งค่ายังทำได้ตามกติกาเดิม(grants):
-    # ยังไม่มีใครถือสิทธิ์ปิดรายการ คนการเงินจึงยังปิดได้
-    assert r.require_permission(FakeDB(), BOW, pl.PERM_CLOSE).employee_id == BOW
-
-
-def test_ด่านอ่านสิทธิ์สดเสมอ_ถอดสิทธิ์แล้วมีผลทันที(monkeypatch):
-    calls = []
-
-    def load(db, fresh=False):
-        calls.append(fresh)
-        return {pl.PERM_PAY: {BOW}}
-
-    monkeypatch.setattr(permission_repo, "load_grants", load)
-    r.require_permission(FakeDB(), BOW, pl.PERM_PAY)
-    assert calls == [True]

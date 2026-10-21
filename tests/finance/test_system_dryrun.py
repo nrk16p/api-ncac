@@ -39,17 +39,6 @@ ACCOUNTANT = person("ACC", 6, 3, dept=ACC_DEPT)
 ORG = {p["employee_id"]: p for p in (STAFF, LEAD, MGR, CL, DCEO, ACCOUNTANT)}
 NO_MAP = {}
 
-GRANTS = {
-    perms.PERM_VOUCHER: {"ACC"},
-    perms.PERM_PAY: {"FIN"},
-    perms.PERM_RETURN: {"ACC", "FIN"},
-    perms.PERM_CLEARING_REVIEW: {"ACC"},
-    perms.PERM_CLOSE: {"ACC"},
-    perms.PERM_PAYEE_ADMIN: {"ACC"},
-    perms.PERM_OVERDUE_REMIND: {"ACC"},
-}
-
-
 class Form:
     """ใบคำขอหนึ่งใบในหน่วยความจำ — เลียนแบบสองคอลัมน์จริง status_approve + fin_status"""
 
@@ -268,23 +257,18 @@ def test_clearing_rows_must_carry_an_amount():
     perms.PERM_VOUCHER, perms.PERM_PAY, perms.PERM_RETURN, perms.PERM_CLEARING_REVIEW,
     perms.PERM_CLOSE, perms.PERM_PAYEE_ADMIN, perms.PERM_OVERDUE_REMIND,
 ])
-def test_each_permission_blocks_an_outsider(permission):
-    holder = "FIN" if permission == perms.PERM_PAY else "ACC"
-    assert perms.allowed(permission, holder, GRANTS, False) is True
-    assert perms.allowed(permission, "STAFF", GRANTS, False) is False
-
-
-def test_an_unconfigured_permission_falls_back_to_the_old_department_rule():
-    """สิทธิ์ที่ยังไม่มีใครถูกกำหนด ต้องไม่ล็อกทุกคนออกจากระบบ"""
-    empty = {perms.PERM_VOUCHER: set()}
-    assert perms.is_configured(perms.PERM_VOUCHER, empty) is False
-    assert perms.allowed(perms.PERM_VOUCHER, "ANYONE", empty, True) is True    # อยู่ฝ่ายการเงิน/บัญชี
-    assert perms.allowed(perms.PERM_VOUCHER, "ANYONE", empty, False) is False
+def test_each_permission_belongs_to_one_department(permission):
+    """จ่ายเงิน = การเงิน (4) · ปุ่มอื่น = บัญชี (6) · แผนกอื่นไม่ได้สักปุ่ม (ผู้ใช้สั่ง 21/10/2026)"""
+    owner, other = (4, 6) if permission == perms.PERM_PAY else (6, 4)
+    assert perms.allowed(permission, "STAFF", owner) is True
+    assert perms.allowed(permission, "STAFF", other) is False
+    assert perms.allowed(permission, "STAFF", 11) is False
 
 
 def test_permissions_for_lists_what_a_person_may_do():
-    got = perms.permissions_for("ACC", GRANTS, False)
+    got = perms.permissions_for("ACC", 6)
     assert perms.PERM_VOUCHER in got and perms.PERM_PAY not in got
+    assert perms.permissions_for("FIN", 4) == [perms.PERM_PAY]
 
 
 # ======================= แจ้งเตือน =======================

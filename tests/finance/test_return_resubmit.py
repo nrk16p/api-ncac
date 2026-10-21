@@ -344,7 +344,7 @@ class _Db:
         return [o for o in self.added if isinstance(o, kind)]
 
 
-FINANCE = NS(id=77, employee_id="F1", department_id=4)
+FINANCE = NS(id=77, employee_id="F1", department_id=6)  # บัญชี: ตั้งเบิก/ตีกลับ (ผู้ใช้สั่ง 21/10/2026)
 REQUESTER = NS(id=55, employee_id="E1")
 
 
@@ -695,8 +695,10 @@ def test_voucher_after_reapproval_goes_to_awaiting_payment(wired):
     ("voucher_advance", {"voucher_date": "2026-10-06"}),
     ("pay_advance", {"amount_paid": "100", "transfer_date": "2026-10-06"}),
 ])
-def test_finance_cannot_continue_while_returned(wired, route, body):
+def test_finance_cannot_continue_while_returned(wired, route, body, monkeypatch):
     from schemas.finance_schema import PayIn, VoucherIn
+    if route == "pay_advance":  # บันทึกจ่ายเป็นของแผนกการเงิน
+        monkeypatch.setattr(ar, "require_finance", lambda db, employee_id: NS(id=78, employee_id="F2", department_id=4))
     schema = VoucherIn if route == "voucher_advance" else PayIn
     db = _Db(adv=_adv("RETURNED"))
     with pytest.raises(HTTPException) as ei:

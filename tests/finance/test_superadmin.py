@@ -36,14 +36,13 @@ def test_is_superadmin():
 
 
 @pytest.mark.parametrize("perm", perms.ALL_PERMISSIONS)
-def test_superadmin_holds_every_permission_even_when_configured(perm):
-    grants = {p: {"690041"} for p in perms.ALL_PERMISSIONS}
-    assert perms.allowed(perm, SA, grants, is_finance=False)
-    assert not perms.allowed(perm, "999999", grants, is_finance=True)
+def test_superadmin_holds_every_permission_whatever_department(perm):
+    assert perms.allowed(perm, SA, 12)
+    assert not perms.allowed(perm, "999999", 12)
 
 
 def test_permissions_for_lists_all():
-    assert perms.permissions_for(SA, {}, is_finance=False) == list(perms.ALL_PERMISSIONS)
+    assert perms.permissions_for(SA, None) == list(perms.ALL_PERMISSIONS)
 
 
 def test_superadmin_may_approve_a_step_above_their_level():
@@ -100,7 +99,6 @@ class _Db:
 def test_permissions_me_gives_superadmin_every_button(monkeypatch):
     from types import SimpleNamespace as NS
     from routes.finance import advance_routes as ar
-    monkeypatch.setattr(ar.permission_repo, "load_grants", lambda db, **k: {"voucher": {"690041"}})
     out = ar.my_permissions(SA, _Db(NS(employee_id=SA, department_id=11)))
     assert out["is_finance"] is True
     assert out["permissions"] == list(perms.ALL_PERMISSIONS)
@@ -109,6 +107,5 @@ def test_permissions_me_gives_superadmin_every_button(monkeypatch):
 def test_permissions_me_outsider_still_gets_nothing(monkeypatch):
     from types import SimpleNamespace as NS
     from routes.finance import advance_routes as ar
-    monkeypatch.setattr(ar.permission_repo, "load_grants", lambda db, **k: {})
     out = ar.my_permissions("680043", _Db(NS(employee_id="680043", department_id=11)))
     assert out == {"employee_id": "680043", "is_finance": False, "permissions": []}

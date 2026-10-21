@@ -30,7 +30,6 @@ from services.finance import approval_repo
 from services.finance import finance_mail as mail
 from services.finance import overdue_reminder
 from services.finance import permission_logic as perms
-from services.finance import permission_repo
 from services.finance import clear_approval_logic as clr
 from services.finance import approval_repo
 
@@ -56,11 +55,9 @@ def require_finance(db: Session, employee_id: str) -> User:
 
 
 def require_permission(db: Session, employee_id: str, permission: str) -> User:
-    """ฝ่ายการเงิน/บัญชีก่อน แล้วค่อยดูสิทธิ์ตามหน้าที่ (ผู้ใช้ตัดสิน 2026-10-19).
-    สิทธิ์ที่ยังไม่มีใครถูกกำหนด = ยังไม่ตั้งค่า ใช้กติกาเดิมไปก่อน ระบบจึงไม่ล็อกตัวเองก่อนรัน SQL"""
+    """ฝ่ายการเงิน/บัญชีก่อน แล้วดูแผนก: จ่ายเงิน = แผนกการเงิน ปุ่มอื่น = แผนกบัญชี (ผู้ใช้สั่ง 21/10/2026)"""
     user = require_finance(db, employee_id)
-    grants = permission_repo.load_grants(db, fresh=True)
-    if not perms.allowed(permission, employee_id, grants, is_finance=True):
+    if not perms.allowed(permission, user.employee_id, user.department_id):
         raise HTTPException(status_code=403, detail=perms.denied_message(permission))
     return user
 
@@ -122,11 +119,10 @@ def my_permissions(employee_id: str, db: Session = Depends(get_db)):
     depts, emps = _finance_ids()
     is_finance = user is not None and (perms.is_superadmin(user.employee_id)
                                        or logic.is_finance_user(user.department_id, user.employee_id, depts, emps))
-    grants = permission_repo.load_grants(db)
     return {
         "employee_id": employee_id,
         "is_finance": is_finance,
-        "permissions": perms.permissions_for(employee_id, grants, is_finance) if is_finance else [],
+        "permissions": perms.permissions_for(user.employee_id, user.department_id) if is_finance else [],
     }
 
 
