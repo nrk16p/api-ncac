@@ -18,9 +18,20 @@ OPTION_TYPES = ("single", "multiple", "ranking")
 RANK_MIN_OPTIONS = 2
 RANK_MAX_OPTIONS = 5
 
+# เป้าหมายของเส้นทาง: id คำถามที่อยู่ "หลัง" ข้อนี้ หรือ END = ส่งแบบฟอร์มเลย
+END = "end"
+GOTO_PATTERN = r"^[A-Za-z0-9_-]{1,64}$"
+
 
 def _clean_text(value: Optional[str]) -> str:
     return (value or "").strip()
+
+
+class FormBranch(BaseModel):
+    """ข้อ single: ถ้าตอบ option นี้ → ไปที่ goto"""
+
+    option: str = Field(..., max_length=500)
+    goto: str = Field(..., pattern=GOTO_PATTERN, description="id คำถามถัดไป หรือ 'end' = ส่งแบบฟอร์ม")
 
 
 class FormQuestion(BaseModel):
@@ -32,9 +43,15 @@ class FormQuestion(BaseModel):
     required: bool = False
     options: List[str] = Field(default_factory=list, description="เฉพาะ single / multiple / ranking")
     scale_labels: Optional[Tuple[str, str]] = Field(None, description="เฉพาะ point — ป้ายคะแนน 1 และ 5")
+    branches: List[FormBranch] = Field(default_factory=list, description="เฉพาะ single — ข้ามไปตามคำตอบ")
+    next: Optional[str] = Field(
+        None, pattern=GOTO_PATTERN, description="หลังข้อนี้ไปที่ id / 'end' — ไม่ใส่ = ข้อถัดไปตามลำดับ"
+    )
 
     @model_validator(mode="after")
     def _normalize(self) -> "FormQuestion":
+        if self.id == END:
+            raise ValueError(f"ห้ามใช้ '{END}' เป็นรหัสคำถาม")
         self.label = _clean_text(self.label)
         if not self.label:
             raise ValueError(f"คำถาม {self.id}: ต้องมีข้อความคำถาม")
@@ -58,6 +75,18 @@ class FormQuestion(BaseModel):
 
         if self.type != "point":
             self.scale_labels = None
+
+        if self.type == "single":
+            seen = set()
+            for b in self.branches:
+                b.option = _clean_text(b.option)
+                if b.option not in self.options:
+                    raise ValueError(f"คำถาม {self.id}: เส้นทางอ้างถึงตัวเลือก '{b.option}' ที่ไม่มี")
+                if b.option in seen:
+                    raise ValueError(f"คำถาม {self.id}: ตัวเลือก '{b.option}' มีเส้นทางซ้ำ")
+                seen.add(b.option)
+        else:
+            self.branches = []
         return self
 
 
@@ -65,7 +94,46 @@ def _check_unique_ids(questions: List[FormQuestion]) -> List[FormQuestion]:
     ids = [q.id for q in questions]
     if len(set(ids)) != len(ids):
         raise ValueError("รหัสคำถาม (id) ซ้ำกัน")
+    return _check_flow(questions)
+
+
+def _check_flow(questions: List[FormQuestion]) -> List[FormQuestion]:
+    """เส้นทางต้องชี้ไปข้างหน้าเท่านั้น (ไม่มีวนลูป) และต้องชี้ไปคำถามที่มีอยู่จริง"""
+    position = {q.id: i for i, q in enumerate(questions)}
+    for i, q in enumerate(questions):
+        targets = [b.goto for b in q.branches] + ([q.next] if q.next else [])
+        for target in targets:
+            if target == END:
+                continue
+            if target not in position:
+                raise ValueError(f"ข้อ {i + 1}: เส้นทางชี้ไปคำถามที่ไม่มีแล้ว")
+            if position[target] <= i:
+                raise ValueError(f"ข้อ {i + 1}: ข้ามได้เฉพาะไปข้อที่อยู่ถัดลงไป")
     return questions
+
+
+def answer_path(questions: List[Dict[str, Any]], answers: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    คำถามที่ผู้ตอบเดินผ่านจริงตามคำตอบ (เส้นทางชี้ไปข้างหน้าเสมอ จึงจบแน่นอน)
+    ข้อ single ที่ตอบตรงกับ branch → ไปตาม goto · ไม่ตรง/ไม่ตอบ → next ของข้อ → ข้อถัดไป
+    """
+    position = {q["id"]: i for i, q in enumerate(questions)}
+    path: List[Dict[str, Any]] = []
+    i = 0
+    while 0 <= i < len(questions):
+        q = questions[i]
+        path.append(q)
+        target = q.get("next")
+        answer = answers.get(q["id"])
+        for b in q.get("branches") or []:
+            if b["option"] == answer:
+                target = b["goto"]
+                break
+        if target == END:
+            break
+        j = position.get(target) if target else None
+        i = j if j is not None and j > i else i + 1
+    return path
 
 
 def _require_name(value: str) -> str:

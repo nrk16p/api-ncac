@@ -33,6 +33,7 @@ from schemas.campaign_forms import (
     CampaignFormOut,
     CampaignFormUpdate,
     PublicFormOut,
+    answer_path,
 )
 from services.mongo_service import get_mongo_db
 
@@ -288,13 +289,17 @@ def _check_answer(q: Dict[str, Any], value: Any) -> Tuple[Any, Optional[str]]:
 
 
 def _validate_answers(questions: List[Dict[str, Any]], answers: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    ตรวจเฉพาะข้อที่อยู่บนเส้นทางของคำตอบนี้ — ข้อที่ถูกข้ามไม่บังคับตอบ และคำตอบที่ค้างอยู่
+    (เช่น แอปเวอร์ชันเก่าที่ยังแสดงทุกข้อ หรือเปลี่ยนใจหลังตอบ) จะถูกตัดทิ้ง ไม่เก็บ
+    """
     by_id = {q["id"]: q for q in questions}
     errors: List[Dict[str, str]] = [
         {"question_id": qid, "message": "ไม่มีคำถามนี้ในฟอร์ม"} for qid in answers if qid not in by_id
     ]
     clean: Dict[str, Any] = {}
 
-    for q in questions:
+    for q in answer_path(questions, answers):
         value = answers.get(q["id"])
         if _is_empty(value):
             if q.get("required"):
