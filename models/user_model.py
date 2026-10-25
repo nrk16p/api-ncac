@@ -23,12 +23,43 @@ class Position(Base):
     level = relationship("PositionLevel", backref="positions")
 
 
+class Path(Base):
+    __tablename__ = "paths"
+    path_id = Column(Integer, primary_key=True, index=True)
+    path_th = Column(String(255))
+    path_eng = Column(String(255))
+    path_code = Column(String(10))
+
+
+class Division(Base):
+    __tablename__ = "divisions"
+    division_id = Column(Integer, primary_key=True, index=True)
+    division_th = Column(String(255))
+    division_eng = Column(String(255))
+    division_code = Column(String(50))
+    path_id = Column(Integer)
+
+    # DB ไม่มี FK จริงระหว่าง divisions.path_id → paths.path_id จึงระบุ join เอง
+    path = relationship(
+        "Path",
+        primaryjoin="foreign(Division.path_id) == Path.path_id",
+        viewonly=True,
+    )
+
+
 class Department(Base):
     __tablename__ = "departments"
     department_id = Column(Integer, primary_key=True, index=True)
     department_name_th = Column(String(255), nullable=False)
     department_name_en = Column(String(255), nullable=False)
     division_id = Column(Integer)  # ฝ่าย (divisions.division_id)
+
+    # DB ไม่มี FK จริง (และมีแผนกที่ชี้ฝ่ายที่ไม่มีอยู่) จึงระบุ join เอง เหมือน Division.path
+    division = relationship(
+        "Division",
+        primaryjoin="foreign(Department.division_id) == Division.division_id",
+        backref="departments",
+    )
 
 
 class Site(Base):

@@ -71,6 +71,7 @@ from routes import (
     users,
     clients,
     departments,
+    divisions,
     sites,
     locations,
     vehicles,
@@ -121,6 +122,7 @@ app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(clients.router)
 app.include_router(departments.router)
+app.include_router(divisions.router)
 app.include_router(sites.router)
 app.include_router(locations.router)
 app.include_router(vehicles.router)

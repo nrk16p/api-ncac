@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime
 from database import get_db
-from models import User , Department, Position,Site
+from models import User , Department, Division, Position,Site
 
 router = APIRouter(prefix="/users", tags=["Users"])
 from sqlalchemy.orm import Session
@@ -29,6 +29,25 @@ def build_user_response(user: User, db: Session):
     if user.department:
         department_name = user.department.department_name_en
 
+    # Division (ผูกผ่าน department.division_id) และ Path (ผูกผ่าน division.path_id)
+    division = None
+    path = None
+    if user.department and user.department.division:
+        d = user.department.division
+        division = {
+            "division_id": d.division_id,
+            "division_th": d.division_th,
+            "division_eng": d.division_eng,
+            "division_code": d.division_code,
+        }
+        if d.path:
+            path = {
+                "path_id": d.path.path_id,
+                "path_th": d.path.path_th,
+                "path_eng": d.path.path_eng,
+                "path_code": d.path.path_code,
+            }
+
     # Site
     site_name = None
     if user.site:
@@ -46,6 +65,8 @@ def build_user_response(user: User, db: Session):
         "site_id": user.site_id,
         "position_id": user.position_id,
         "department": department_name,
+        "division": division,
+        "path": path,
         "site": site_name,
         "position": position_name,
         "position_level": position_level,
@@ -68,6 +89,18 @@ class UserBase(BaseModel):
 class UserCreate(UserBase):
     password: str
 
+class DivisionInfo(BaseModel):
+    division_id: int
+    division_th: Optional[str] = None
+    division_eng: Optional[str] = None
+    division_code: Optional[str] = None
+
+class PathInfo(BaseModel):
+    path_id: int
+    path_th: Optional[str] = None
+    path_eng: Optional[str] = None
+    path_code: Optional[str] = None
+
 class UserResponse(BaseModel):
     id: int
     username: str
@@ -80,6 +113,8 @@ class UserResponse(BaseModel):
     site_id: Optional[int]
     position_id: Optional[int]
     department: Optional[str]
+    division: Optional[DivisionInfo] = None
+    path: Optional[PathInfo] = None
     site: Optional[str]
     position: Optional[str]
     position_level: Optional[str]
@@ -109,7 +144,7 @@ def update_user(
     user = (
         db.query(User)
         .options(
-            joinedload(User.department),
+            joinedload(User.department).joinedload(Department.division).joinedload(Division.path),
             joinedload(User.site),
             joinedload(User.position)
                 .joinedload(Position.level)
@@ -145,9 +180,11 @@ def update_user(
 
     return build_user_response(user, db)
 @router.get("/", response_model=List[UserResponse])
+@router.get("", response_model=List[UserResponse], include_in_schema=False)
 def get_users(
     employee_id: Optional[str] = Query(None),
     department_id: Optional[int] = Query(None),
+    division_id: Optional[int] = Query(None),
     site_id: Optional[int] = Query(None),
     employee_status: Optional[str] = Query(None),
     db: Session = Depends(get_db)
@@ -155,7 +192,7 @@ def get_users(
     query = (
         db.query(User)
         .options(
-            joinedload(User.department),
+            joinedload(User.department).joinedload(Department.division).joinedload(Division.path),
             joinedload(User.site),
             joinedload(User.position)
                 .joinedload(Position.level)
@@ -172,11 +209,15 @@ def get_users(
         if value is not None:
             query = query.filter(getattr(User, field) == value)
 
+    if division_id is not None:
+        query = query.join(User.department).filter(Department.division_id == division_id)
+
     users = query.all()
 
     return [build_user_response(u, db) for u in users]
 
 @router.post("/", response_model=UserResponse, status_code=201)
+@router.post("", response_model=UserResponse, status_code=201, include_in_schema=False)
 def create_user(payload: UserCreate, db: Session = Depends(get_db)):
     if db.query(User).filter_by(username=payload.username).first():
         raise HTTPException(status_code=400, detail="Username already exists")
@@ -202,7 +243,7 @@ def get_user_by_employee_id(
     user = (
         db.query(User)
         .options(
-            joinedload(User.department),
+            joinedload(User.department).joinedload(Department.division).joinedload(Division.path),
             joinedload(User.site),
             joinedload(User.position)
                 .joinedload(Position.level)
