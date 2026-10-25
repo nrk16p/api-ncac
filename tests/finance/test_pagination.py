@@ -458,7 +458,7 @@ def test_suggested_approvers_new_requester_no_keyerror(monkeypatch):
         AR.suggested_approvers(None, NS(id=1, created_by="R", current_approval_level=1))
 
 
-def test_department_mapping_writers_clear_cache(monkeypatch):
+def test_division_mapping_writers_clear_cache(monkeypatch):
     cleared = []
     monkeypatch.setattr(fa.approval_repo, "clear_context_cache", lambda: cleared.append(1))
 
@@ -479,8 +479,8 @@ def test_department_mapping_writers_clear_cache(monkeypatch):
         def commit(self):
             pass
 
-    fa.assign_departments(NS(employee_id="E", department_ids=[1, 2]), Db())
-    fa.remove_department("E", 1, Db())
+    fa.assign_divisions(NS(employee_id="E", division_ids=[1, 2]), Db())
+    fa.remove_division("E", 1, Db())
     assert cleared == [1, 1]
 
 

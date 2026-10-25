@@ -30,7 +30,7 @@ DEPT, OTHER = 10, 20
 
 
 def person(eid, uid, level, dept=DEPT, active=True):
-    return {"employee_id": eid, "id": uid, "level": level, "department_id": dept, "active": active}
+    return {"employee_id": eid, "id": uid, "level": level, "department_id": dept, "division_id": dept, "active": active}
 
 
 STAFF = person("STAFF", 1, 1)

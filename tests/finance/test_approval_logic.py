@@ -17,7 +17,7 @@ TIERS = [
 
 
 def person(eid, level, dept, active=True):
-    return {"employee_id": eid, "id": hash(eid) % 10000, "level": level, "department_id": dept, "active": active}
+    return {"employee_id": eid, "id": hash(eid) % 10000, "level": level, "department_id": dept, "division_id": dept, "active": active}
 
 
 class TestPickTier:
@@ -65,7 +65,7 @@ class TestRequiredLevel:
 
 
 class TestCanApprove:
-    REQ = {"employee_id": "R", "department_id": 3}
+    REQ = {"employee_id": "R", "department_id": 3, "division_id": 3}
 
     def test_same_department_at_level(self):
         assert A.can_approve(person("X", 5, 3), self.REQ, 5, ())
@@ -76,8 +76,14 @@ class TestCanApprove:
     def test_other_department_unmapped(self):
         assert not A.can_approve(person("X", 8, 4), self.REQ, 5, ())
 
-    def test_other_department_mapped(self):
+    def test_other_division_mapped(self):
         assert A.can_approve(person("X", 8, 1), self.REQ, 5, {3, 11})
+
+    def test_mapping_is_by_requester_division(self):
+        req = {"employee_id": "R", "department_id": 3, "division_id": 30}
+        assert A.can_approve(person("X", 8, 1), req, 5, {30})
+        assert not A.can_approve(person("X", 8, 1), req, 5, {3})
+        assert not A.can_approve(person("X", 8, 1), {"employee_id": "R", "department_id": 3}, 5, {3})
 
     def test_level_9_org_wide(self):
         assert A.can_approve(person("CEO", 9, 1), self.REQ, 9, ())

@@ -2,7 +2,7 @@
 one step at the TOA level since 21/10/2026 (user: "ส่งอนุมัติสูงสุดตาม TOA").
 
 No DB, no FastAPI. Inputs are plain dicts so everything is unit-testable.
-Person: {"employee_id", "id", "level", "department_id", "active"}.
+Person: {"employee_id", "id", "level", "department_id", "division_id", "active"}.
 Tier:   {"clause", "amount_max" (Decimal | None = no cap), "min_level", "approver_label", "sort_order"}.
 Step:   {"step", "required_level", "label"} — one step: ผู้มีอำนาจตาม TOA.
 Log:    {"id", "level_no", "action", "action_by" (users.id), "action_at", "remark"} (form_approval_logs).
@@ -161,7 +161,7 @@ def leader_approved(round_logs: Iterable[Mapping], current_level=None) -> bool:
 
 # ---------------------------- eligibility ----------------------------
 
-def can_approve(approver: Mapping, requester: Mapping, required: int, mapped_departments: Iterable[int],
+def can_approve(approver: Mapping, requester: Mapping, required: int, mapped_divisions: Iterable[int],
                 excluded: Iterable[int] = ()) -> bool:
     """`required` is the level of the step being approved; `excluded` holds users.id values (the earlier steps'
     approvers of the current round)."""
@@ -179,7 +179,10 @@ def can_approve(approver: Mapping, requester: Mapping, required: int, mapped_dep
     dept = requester.get("department_id")
     if dept is None:
         return False
-    return approver.get("department_id") == dept or dept in set(mapped_departments)
+    if approver.get("department_id") == dept:
+        return True
+    division = requester.get("division_id")
+    return division is not None and division in set(mapped_divisions)
 
 
 def _eligible(people: Iterable[Mapping], requester: Mapping, required: int,

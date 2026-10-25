@@ -425,7 +425,7 @@ def test_pick_recipients_dedupes_and_caps(caplog):
 
 
 def _person(eid, uid, level, dept, active=True):
-    return {"employee_id": eid, "id": uid, "level": level, "department_id": dept, "active": active}
+    return {"employee_id": eid, "id": uid, "level": level, "department_id": dept, "division_id": dept, "active": active}
 
 
 def test_step_approver_emails_selection(monkeypatch):

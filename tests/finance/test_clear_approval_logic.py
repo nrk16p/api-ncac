@@ -20,10 +20,10 @@ PU = "600181"    # คุณปู ระดับ 3
 BANK = "690604"  # คุณแบงค์ ระดับ 5
 PONG = "660057"  # คุณป้อง ระดับ 8 ฝ่ายบริหาร (ผูกฝ่ายบัญชีไว้)
 PEOPLE = {
-    AE:   {"employee_id": AE, "id": 1, "level": 2, "department_id": 6, "active": True},
-    PU:   {"employee_id": PU, "id": 2, "level": 3, "department_id": 6, "active": True},
-    BANK: {"employee_id": BANK, "id": 3, "level": 5, "department_id": 6, "active": True},
-    PONG: {"employee_id": PONG, "id": 4, "level": 8, "department_id": 1, "active": True},
+    AE:   {"employee_id": AE, "id": 1, "level": 2, "department_id": 6, "division_id": 6, "active": True},
+    PU:   {"employee_id": PU, "id": 2, "level": 3, "department_id": 6, "division_id": 6, "active": True},
+    BANK: {"employee_id": BANK, "id": 3, "level": 5, "department_id": 6, "division_id": 6, "active": True},
+    PONG: {"employee_id": PONG, "id": 4, "level": 8, "department_id": 1, "division_id": 1, "active": True},
 }
 MAPS = {PONG: {6}}
 

@@ -12,7 +12,7 @@ def tier(clause):
 
 
 def person(eid, uid, level, dept, active=True):
-    return {"employee_id": eid, "id": uid, "level": level, "department_id": dept, "active": active}
+    return {"employee_id": eid, "id": uid, "level": level, "department_id": dept, "division_id": dept, "active": active}
 
 
 def log(lid, level_no, action, action_by, at=None):

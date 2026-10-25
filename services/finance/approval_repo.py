@@ -6,9 +6,9 @@ import time
 from dataclasses import dataclass, field
 
 from models.finance_model import FinApprovalTier
-from models.form_approver_department import FormApproverDepartment
+from models.form_approver_division import FormApproverDivision
 from models.master_model import FormApprovalLog, FormMaster, FormSubmission
-from models.user_model import Position, User
+from models.user_model import Department, Position, User
 from services.finance import advance_repo
 from services.finance import approval_logic as rules
 from services.finance.advance_logic import AdvanceRuleError
@@ -35,27 +35,29 @@ def list_tiers(db):
 
 
 def load_people(db):
-    rows = db.query(User, Position.position_level_id).outerjoin(
-        Position, Position.position_id == User.position_id).all()
+    rows = db.query(User, Position.position_level_id, Department.division_id).outerjoin(
+        Position, Position.position_id == User.position_id).outerjoin(
+        Department, Department.department_id == User.department_id).all()
     return {
         user.employee_id: {"employee_id": user.employee_id, "id": user.id, "level": level,
-                           "department_id": user.department_id, "active": user.employee_status == "Active"}
-        for user, level in rows if user.employee_id
+                           "department_id": user.department_id, "division_id": division_id,
+                           "active": user.employee_status == "Active"}
+        for user, level, division_id in rows if user.employee_id
     }
 
 
 def load_mappings(db):
     mappings = {}
-    rows = db.query(FormApproverDepartment).filter(FormApproverDepartment.is_active == True).all()  # noqa: E712
+    rows = db.query(FormApproverDivision).filter(FormApproverDivision.is_active == True).all()  # noqa: E712
     for row in rows:
-        mappings.setdefault(row.employee_id, set()).add(row.department_id)
+        mappings.setdefault(row.employee_id, set()).add(row.division_id)
     return mappings
 
 
-# v3 §9: users/tiers/mappings change rarely, so the context is cached in-process for 60 s (level and department
+# v3 §9: users/tiers/mappings change rarely, so the context is cached in-process for 60 s (level, department and division
 # changes apply within a minute). One global entry (no key); the lock guards the swap, loading happens outside it.
 # The cached ApprovalContext is SHARED and READ-ONLY: never mutate tiers/people/mappings (copy first).
-# Authorization decisions (approve/reject) must use load_context(db, fresh=True); writers of approver-department
+# Authorization decisions (approve/reject) must use load_context(db, fresh=True); writers of approver-division
 # mappings / approval tiers must call clear_context_cache(); readers that look up a person use ensure_people().
 CONTEXT_TTL_SECONDS = 60
 _clock = time.monotonic

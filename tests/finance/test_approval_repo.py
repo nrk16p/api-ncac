@@ -19,7 +19,7 @@ from tests.finance.test_approval_logic import TIERS  # noqa: E402
 
 
 def person(eid, uid, level, dept, active=True):
-    return {"employee_id": eid, "id": uid, "level": level, "department_id": dept, "active": active}
+    return {"employee_id": eid, "id": uid, "level": level, "department_id": dept, "division_id": dept, "active": active}
 
 
 PEOPLE = {p["employee_id"]: p for p in [

@@ -63,7 +63,7 @@ TABLES = [
     "position_levels", "positions", "departments", "sites", "users",
     "form_masters", "form_questions", "form_question_options", "form_submissions", "form_submission_values",
     "form_sequences", "form_approval_logs", "form_approval_rules", "form_submission_logs",
-    "form_approver_departments",
+    "form_approver_divisions",
     "fin_accounts", "fin_advances", "fin_advance_logs", "fin_approval_tiers", "fin_advance_clear_items",
     "fin_payee_account_requests", "fin_payee_accounts", "fin_payee_account_logs", "fin_permissions",
     "fin_clear_approval_logs",

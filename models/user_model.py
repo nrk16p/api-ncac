@@ -28,6 +28,7 @@ class Department(Base):
     department_id = Column(Integer, primary_key=True, index=True)
     department_name_th = Column(String(255), nullable=False)
     department_name_en = Column(String(255), nullable=False)
+    division_id = Column(Integer)  # ฝ่าย (divisions.division_id)
 
 
 class Site(Base):
