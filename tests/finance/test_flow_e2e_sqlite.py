@@ -599,10 +599,34 @@ def test_clear_reject_should_email_requester(api):
     assert "ใบเสร็จไม่ชัด" in got[legacy(fid, "หัวหน้าไม่อนุมัติการเคลียร์")]["html"][0]
 
 
-def test_send_back_then_reclear_same_and_crossing_tier(api):
+def test_clear_waiting_past_the_last_step_counts_as_the_last_step(api):
+    """ใบที่ค้างรออนุมัติเคลียร์ตอนเปลี่ยนกติกา (26/10/2026) อาจรออยู่ขั้นที่สายใหม่ไม่มี
+    คิวรออนุมัติต้องไม่พังทั้งหน้า และกดอนุมัติขั้นสุดท้ายของสายใหม่ได้"""
+    a = api
+    fid = a.paid_advance(4000)                 # ใบขอ 6.6 → เคลียร์ขั้นเดียว lv3
+    a.clear(fid, [1500])
+    a.mails()
+    db = a.Session()
+    try:
+        adv = db.query(FinAdvance).filter(FinAdvance.form_id == fid).one()
+        adv.clear_approval_level = 2           # ค้างจากสายเดิมที่มีสองขั้น
+        db.commit()
+    finally:
+        db.close()
+
+    r = a.c.get("/finance/clear-approvals/pending", params={"employee_id": LEAD})
+    assert r.status_code == 200, r.text
+    assert [(x["form_id"], x["step"], x["total_steps"]) for x in r.json()] == [(fid, 1, 1)]
+    assert a.detail(fid)["clear_approval"]["step"] == 1
+    assert a.put(fid, "clear-approve", {"action_by": LEAD})["status"] == "AWAITING_REVIEW"
+
+
+def test_send_back_then_reclear_skips_a_second_approval(api):
+    """ขั้นอนุมัติเคลียร์ตามใบขอ (26/10/2026) จึงไม่มีทาง "ข้ามชั้น" ตอนแก้ส่งใหม่แล้ว
+    อนุมัติเคลียร์ครบไปแล้ว บัญชีส่งกลับ ผู้เบิกแก้ยอดเท่าไหร่ก็กลับไปรอบัญชีตรวจเลย"""
     a = api
     fid = a.paid_advance(4000)
-    a.clear(fid, [1500])  # 6.7 → clearing 1 step (lv3)
+    a.clear(fid, [1500])  # ใบขอ 4,000 (6.6) → เคลียร์ขั้นเดียว lv3
     a.put(fid, "clear-approve", {"action_by": LEAD})
     assert a.status(fid) == "AWAITING_REVIEW"
     a.mails()
@@ -614,19 +638,19 @@ def test_send_back_then_reclear_same_and_crossing_tier(api):
     assert_mails(got, {legacy(fid, "บัญชีตีกลับเอกสารเคลียร์"): ([email_of(REQ)], [])})
     assert "ขาดใบเสร็จ" in got[legacy(fid, "บัญชีตีกลับเอกสารเคลียร์")]["html"][0]
 
-    # same tier (6.7) → straight back to accounting, no head approval, print steps in the mail
+    # straight back to accounting, no head approval, print steps in the mail
     d = a.clear(fid, [1800])
     assert d["status"] == "AWAITING_REVIEW"
     got = a.mails()
     assert_mails(got, {summary(fid, "ส่งเคลียร์เงินแล้ว"): ([email_of(REQ)], [ACCOUNT_BOX])})
     assert "ขั้นต่อไป ส่งเอกสารตัวจริงให้บัญชี" in got[summary(fid, "ส่งเคลียร์เงินแล้ว")]["html"][0]
 
-    # send back again, re-clear crossing into 6.6 → head approval again
+    # send back again, re-clear far above the old amount → still straight back to accounting
     a.put(fid, "send-back", {"action_by": FR, "review_remark": "ยอดไม่ตรง"})
     a.mails()
-    d = a.clear(fid, [3900], settle_date=True)
-    assert d["status"] == "CLEARING_APPROVAL"
-    assert set(a.mails()) == {summary(fid, "ส่งเคลียร์เงินแล้ว"), summary(fid, "รอท่านอนุมัติการเคลียร์")}
+    d = a.clear(fid, [6000], settle_date=False)
+    assert d["status"] == "AWAITING_REVIEW"
+    assert set(a.mails()) == {summary(fid, "ส่งเคลียร์เงินแล้ว")}
 
 
 def test_clearing_follows_the_toa_ladder_and_a_manager_may_skip(api):
@@ -644,14 +668,54 @@ def test_clearing_follows_the_toa_ladder_and_a_manager_may_skip(api):
     assert [r["step"] for r in approved] == [1, 2] and {r["action_by"] for r in approved} == {MGR}
 
 
-def test_clear_with_zero_spent_is_handled(api):
+def test_clear_with_zero_spent_still_goes_through_the_request_steps(api):
+    """ADV-2610-018 (ผู้ใช้สั่ง 26/10/2026 "no matter what - still need approve same like when เบิก"):
+    คืนทั้งก้อน ใช้จริง 0 ก็ต้องอนุมัติเคลียร์ครบขั้นเหมือนตอนขอเบิก — เดิมส่งตรงไปรอบัญชีตรวจ
+    ผู้เบิกแผนกบัญชีขอ 5,000 → หัวหน้าบัญชี แล้ว 690041 ทั้งตอนขอและตอนเคลียร์"""
+    a = api
+    fid = a.submit(5000, who="F010")
+    a.approve(fid, "F003")
+    assert a.approve(fid, "690041")["status"] == "Approved"
+    a.voucher(fid)
+    a.pay(fid, 5000)
+    a.mails()
+
+    d = a.clear(fid, [0], who="F010")
+    assert d["status"] == "CLEARING_APPROVAL"
+    assert a.detail(fid)["clear_approval"] == {"step": 1, "total_steps": 2, "clause": "6.6", "required_level": 3}
+    got = a.mails()
+    assert set(got[summary(fid, "รอท่านอนุมัติการเคลียร์")]["to"]) == {email_of(x) for x in ("F001", "F003", "F004", "F005")}
+
+    a.put(fid, "clear-approve", {"action_by": "F003"})
+    assert a.status(fid) == "CLEARING_APPROVAL"
+    assert_mails(a.mails(), {summary(fid, "รอท่านอนุมัติการเคลียร์"): ([email_of("690041")], [email_of("F010")])})
+    a.put(fid, "clear-approve", {"action_by": "F001"}, expect=403)   # ขั้น 2 เป็นของ 690041 เท่านั้น
+    assert a.put(fid, "clear-approve", {"action_by": "690041"})["status"] == "AWAITING_REVIEW"
+
+
+def test_clear_spending_less_keeps_the_request_steps(api):
+    """ขอ 12,000 (6.5 → lv3 แล้ว lv5) ใช้จริง 1,000 ก็ยังสองขั้นเหมือนตอนขอ ไม่ลดเหลือขั้นเดียว"""
+    a = api
+    fid = a.paid_advance(12000, approver=MGR)
+    d = a.clear(fid, [1000])
+    assert d["status"] == "CLEARING_APPROVAL"
+    assert a.detail(fid)["clear_approval"] == {"step": 1, "total_steps": 2, "clause": "6.5", "required_level": 3}
+    q = a.c.get("/finance/clear-approvals/pending", params={"employee_id": LEAD}).json()
+    assert [(x["form_id"], x["step"], x["total_steps"], x["clause"]) for x in q] == [(fid, 1, 2, "6.5")]
+    a.put(fid, "clear-approve", {"action_by": LEAD})
+    assert a.status(fid) == "CLEARING_APPROVAL"
+    a.put(fid, "clear-approve", {"action_by": ASM}, expect=403)   # ขั้น 2 ต้อง lv5 ตามใบขอ
+    assert a.put(fid, "clear-approve", {"action_by": MGR})["status"] == "AWAITING_REVIEW"
+
+
+def test_clear_spending_more_still_follows_the_request(api):
+    """ขอ 4,000 (6.6 ขั้นเดียว lv3) ใช้จริง 6,000 ขั้นอนุมัติเคลียร์ยังตามใบขอ ไม่ขยับขึ้น"""
     a = api
     fid = a.paid_advance(4000)
-    r = a.c.put(f"/finance/advances/{fid}/clear", json={
-        "action_by": REQ, "clear_date": today().isoformat(), "settle_date": today().isoformat(),
-        "items": [{"expense_date": today().isoformat(), "description": "ไม่ได้ใช้", "amount_before_vat": "0"}]})
-    assert r.status_code == 200, r.text
-    assert r.json()["status"] == "AWAITING_REVIEW"  # nothing spent → no head approval, straight to accounting
+    d = a.clear(fid, [6000], settle_date=False)
+    assert d["status"] == "CLEARING_APPROVAL"
+    assert a.detail(fid)["clear_approval"] == {"step": 1, "total_steps": 1, "clause": "6.6", "required_level": 3}
+    assert a.put(fid, "clear-approve", {"action_by": LEAD})["status"] == "AWAITING_REVIEW"
 
 
 # ================================================================ 4. test-box redirect + account box override

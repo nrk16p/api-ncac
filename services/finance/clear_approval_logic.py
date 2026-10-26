@@ -2,9 +2,10 @@
 (ผู้ใช้สั่ง 19/10/2026: "ตอนเคลียร์ ก่อนถึงบัญชี ต้องผ่านการอนุมัติตามขั้น เหมือนตอนขอเบิก")
 
 กติกาที่ตกลงกันไว้
-- ชั้นอนุมัติตัดด้วย **ยอดที่ใช้จริง** (amount_actual) ไม่ใช่ยอดที่เบิกไป
-- ขั้นตอนเหมือนตอนขอเบิกทุกอย่าง: ขั้น 1 หัวหน้าถัดไป · ขั้น 2 ผู้มีอำนาจตาม TOA
-- บัญชีส่งกลับแก้ไข แล้วผู้เบิกแก้ส่งใหม่ → ขึ้นอนุมัติใหม่ **เฉพาะตอนยอดใหม่ข้ามชั้น**
+- ขั้นอนุมัติ **เหมือนตอนขอเบิกเสมอ** คิดจากยอดในใบขอ ไม่ว่าใช้จริงเท่าไหร่ ใช้ 0 ก็ต้องผ่าน
+  (ผู้ใช้สั่ง 26/10/2026 · เดิม 19/10 ตัดชั้นด้วยยอดที่ใช้จริง) — route เป็นคนส่งยอดในใบขอเข้ามา
+- ขั้นตอนเหมือนตอนขอเบิกทุกอย่าง: ไล่ขั้นตาม TOA และขั้นพิเศษแผนกบัญชี
+- บัญชีส่งกลับแก้ไข แล้วผู้เบิกแก้ส่งใหม่ → ขึ้นอนุมัติใหม่ **เฉพาะตอนยังไม่เคยผ่าน หรือชั้นเปลี่ยน**
 
 ไม่มี DB ไม่มี FastAPI — รับ dict ล้วน เพื่อให้เทสต์ได้โดยไม่ต้องต่อฐาน
 """
@@ -24,15 +25,13 @@ NOT_PENDING = "รายการนี้ไม่ได้รออนุม�
 REJECT_REMARK_REQUIRED = "กรุณาระบุเหตุผลที่ไม่อนุมัติการเคลียร์"
 
 
-def plan(tiers, people: Mapping[str, Mapping], mappings, requester_employee_id: str,
-         amount_actual) -> dict:
-    """สายอนุมัติของการเคลียร์ ตัดชั้นด้วยยอดที่ใช้จริง — คืนรูปเดียวกับตอนขอเบิก
-    ขั้นเดียวตาม TOA เหมือนตอนขอเบิก (ผู้ใช้สั่ง 21/10/2026)"""
-    return rules.evaluate(tiers, people, mappings, requester_employee_id, amount_actual)
+def plan(tiers, people: Mapping[str, Mapping], mappings, requester_employee_id: str, amount) -> dict:
+    """สายอนุมัติของการเคลียร์ — amount คือยอดในใบขอ จึงได้ขั้นเดียวกับตอนขอเบิกทุกอย่าง"""
+    return rules.evaluate(tiers, people, mappings, requester_employee_id, amount)
 
 
-def clause_for(tiers, amount_actual) -> str:
-    return rules.pick_tier(tiers, amount_actual)["clause"]
+def clause_for(tiers, amount) -> str:
+    return rules.pick_tier(tiers, amount)["clause"]
 
 
 def needs_approval(plan_info: Mapping) -> bool:

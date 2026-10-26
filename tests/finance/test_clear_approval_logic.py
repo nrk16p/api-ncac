@@ -1,4 +1,5 @@
-"""อนุมัติการเคลียร์ — ตรรกะล้วน (ผู้ใช้สั่ง 19/10/2026 · ขั้นเดียวตาม TOA ตั้งแต่ 21/10/2026)"""
+"""อนุมัติการเคลียร์ — ตรรกะล้วน (ผู้ใช้สั่ง 19/10/2026) · ตั้งแต่ 26/10/2026 route ส่งยอดในใบขอเข้ามา
+ขั้นจึงเหมือนตอนขอเบิกเสมอ ไม่ว่าใช้จริงเท่าไหร่ (ดู test_flow_e2e_sqlite)"""
 import os
 from decimal import Decimal
 
@@ -32,19 +33,18 @@ def plan(amount, who=AE):
     return cl.plan(TIERS, PEOPLE, MAPS, who, amount)
 
 
-def test_ตัดชั้นด้วยยอดที่ใช้จริงไม่ใช่ยอดที่เบิก():
-    """เบิก 25,000 ใช้จริง 18,000 → ต้องเข้าข้อ 6.5 ไม่ใช่ 6.4 · ไล่ขั้นตาม TOA: ระดับ 3 แล้วระดับ 5"""
+def test_ยอด_18000_เข้าข้อ_6_5_ไล่ระดับ_3_แล้ว_5():
     p = plan(Decimal("18000"))
     assert p["clause"] == "6.5"
     assert [s["required_level"] for s in p["steps"]] == [3, 5]
 
 
-def test_ใช้จริงน้อยลงชั้นอนุมัติลดตาม():
+def test_ยอดเล็กเข้าข้อ_6_7_ขั้นเดียว():
     assert plan(Decimal("1800"))["clause"] == "6.7"
     assert [s["required_level"] for s in plan(Decimal("1800"))["steps"]] == [3]
 
 
-def test_ใช้เกินที่เบิกชั้นอนุมัติสูงขึ้น():
+def test_ยอด_30000_เข้าข้อ_6_4_สามขั้น():
     p = plan(Decimal("30000"))
     assert p["clause"] == "6.4"
     assert [s["required_level"] for s in p["steps"]] == [3, 5, 8]

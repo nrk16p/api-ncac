@@ -109,7 +109,8 @@ def test_route_sends_only_on_the_last_clearing_step(monkeypatch, next_step, expe
              settle_amount=200, fin_status=None, clear_approved_clause=None)
     sub = NS(id=1, form_id="ADV-2610-009", created_by="E1")
     monkeypatch.setattr(r, "_load_for_update", lambda db, fid: (sub, adv, r.logic.CLEARING_APPROVAL))
-    monkeypatch.setattr(r, "_clear_plan", lambda db, s, amt: ({"clause": "6.6", "steps": [1, 2]}, NS(people={}, mappings={})))
+    monkeypatch.setattr(r, "_clear_plan", lambda db, s: ({"clause": "6.6", "steps": [{"step": 1}, {"step": 2}]},
+                                                            NS(people={}, mappings={})))
     monkeypatch.setattr(r, "_clear_round_approvers", lambda db, fid: set())
     monkeypatch.setattr(r, "_clear_round_steps", lambda db, fid: set())
     monkeypatch.setattr(r.clr, "can_approve", lambda *a: True)

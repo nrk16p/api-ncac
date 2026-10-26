@@ -113,7 +113,7 @@ def test_happy_path_small_amount_from_staff():
     assert (total, settle) == (Decimal("2500"), Decimal("500")), "ใช้ 2,500 จาก 3,000 ต้องคืน 500"
     f.amount_actual, f.settle_amount = total, settle
 
-    info = clr.plan(TIERS, ORG, NO_MAP, f.requester["employee_id"], total)
+    info = clr.plan(TIERS, ORG, NO_MAP, f.requester["employee_id"], f.amount)   # ขั้นตามใบขอ (26/10/2026)
     assert clr.needs_approval(info) is True
     f.fin_status, f.clear_level, f.clear_clause = L.FIN_CLEAR_PENDING, clr.STEP_LEADER, info["clause"]
     assert f.status == L.CLEARING_APPROVAL
@@ -205,17 +205,17 @@ def test_clearing_rejected_by_the_leader_goes_back_to_the_requester():
                                         "amount_before_vat": 9000}])
     L.check_clear(f.status, is_owner=True, amount_paid=f.amount_paid, clear_date=TODAY,
                   amount_actual=total, settle_date=TODAY)
-    info = clr.plan(TIERS, ORG, NO_MAP, "STAFF", total)
+    info = clr.plan(TIERS, ORG, NO_MAP, "STAFF", f.amount)
     f.fin_status, f.clear_clause = L.FIN_CLEAR_PENDING, info["clause"]
     with pytest.raises(AdvanceRuleError):
         clr.check_reject(True, True, "  ")                 # ไม่อนุมัติต้องมีเหตุผล
     clr.check_reject(True, True, "ใบเสร็จไม่ครบ")
     f.fin_status = L.FIN_SENT_BACK
     assert f.status == L.SENT_BACK
-    # แก้แล้วส่งใหม่ ยอดอยู่ชั้นเดิม ไม่ต้องขออนุมัติซ้ำ
+    # แก้แล้วส่งใหม่ ขั้นยังตามใบขอ ชั้นไม่เปลี่ยน ไม่ต้องขออนุมัติซ้ำ
     rows, total2 = L.check_clear_items([{"expense_date": TODAY, "description": "ค่าที่พัก",
                                          "amount_before_vat": 9500}])
-    new_clause = clr.clause_for(TIERS, total2)
+    new_clause = clr.clause_for(TIERS, f.amount)
     assert clr.needs_reapproval(f.clear_clause, new_clause) is False
 
 

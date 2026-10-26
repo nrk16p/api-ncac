@@ -229,8 +229,8 @@ def get_advance(form_id: str, db: Session = Depends(get_db)):
         sub = repo.get_advance_submission(db, form_id)
         adv = db.query(FinAdvance).filter(FinAdvance.submission_id == sub.id).first()
         try:
-            info, _ctx = _clear_plan(db, sub, adv.amount_actual)
-            step = adv.clear_approval_level or clr.STEP_LEADER
+            info, _ctx = _clear_plan(db, sub)
+            step = _clear_step(adv, info)
             detail["clear_approval"] = {
                 "step": step,
                 "total_steps": len(info["steps"]),
@@ -543,14 +543,12 @@ def clear_advance(form_id: str, body: ClearIn, background_tasks: BackgroundTasks
                  .delete(synchronize_session=False))
     db.add_all([FinAdvanceClearItem(advance_id=adv.id, **row) for row in rows])
     # ผู้ใช้สั่ง 19/10/2026: ส่งเคลียร์แล้วต้องผ่านหัวหน้าก่อนถึงบัญชี
-    # ขึ้นอนุมัติใหม่เฉพาะตอนยอดใหม่ข้ามชั้น (แก้เล็กน้อยหลังบัญชีส่งกลับ ไม่กวนหัวหน้า)
-    # ไม่ได้ใช้เงินเลย (คืนทั้งก้อน) ไม่มีชั้นอนุมัติให้ตัด ส่งถึงบัญชีตรง — เดิมพังเป็น 500
-    info, clear_ctx = {"clause": None, "steps": []}, None
-    if total_net > 0:
-        try:
-            info, clear_ctx = _clear_plan(db, sub, total_net)
-        except logic.AdvanceRuleError as exc:
-            raise _rule_error(exc)
+    # ผู้ใช้สั่ง 26/10/2026: ขั้นอนุมัติเหมือนตอนขอเบิกเสมอ ไม่ว่าใช้จริงเท่าไหร่ ใช้ 0 คืนทั้งก้อนก็ต้องผ่าน
+    # (ADV-2610-018 ใช้จริง 0 แล้วข้ามไปรอบัญชีตรวจ) · บัญชีส่งกลับแล้วแก้ส่งใหม่ ขึ้นอนุมัติใหม่เฉพาะตอนยังไม่เคยผ่าน
+    try:
+        info, clear_ctx = _clear_plan(db, sub)
+    except logic.AdvanceRuleError as exc:
+        raise _rule_error(exc)
     if clr.needs_reapproval(adv.clear_approved_clause, info["clause"]) and clr.needs_approval(info):
         adv.fin_status = logic.FIN_CLEAR_PENDING
         adv.clear_approval_level = clr.STEP_LEADER
@@ -608,11 +606,21 @@ def _queue_clear_pending(background_tasks, db: Session, sub, info, ctx, step, **
 
 # ---------------------------- อนุมัติการเคลียร์ (ผู้ใช้สั่ง 19/10/2026) ----------------------------
 
-def _clear_plan(db: Session, sub, amount_actual):
-    """สายอนุมัติของการเคลียร์ ตัดชั้นด้วยยอดที่ใช้จริง"""
+def _clear_plan(db: Session, sub):
+    """สายอนุมัติของการเคลียร์ = สายเดียวกับตอนขอเบิก คิดจากยอดในใบขอ ไม่ใช่ยอดที่ใช้จริง (ผู้ใช้สั่ง 26/10/2026)"""
     ctx = approval_repo.load_context(db, fresh=True)
     ctx = approval_repo.ensure_people(db, ctx, sub.created_by)
-    return clr.plan(ctx.tiers, ctx.people, ctx.mappings, sub.created_by, amount_actual), ctx
+    amount = approval_repo._amount_of(db, sub.id)
+    if amount is None:
+        raise logic.AdvanceRuleError("ไม่พบยอดเงินในใบคำขอเบิก จึงหาผู้อนุมัติการเคลียร์ไม่ได้")
+    return clr.plan(ctx.tiers, ctx.people, ctx.mappings, sub.created_by, amount), ctx
+
+
+def _clear_step(adv, info) -> int:
+    """ขั้นที่รออนุมัติเคลียร์อยู่ — ใบที่ค้างตอนสายเปลี่ยน (กติกา/ระดับคนเปลี่ยน) อาจรออยู่เลยขั้นสุดท้ายของสายใหม่
+    นับเป็นขั้นสุดท้าย ไม่ให้คิวรออนุมัติพังทั้งหน้า (26/10/2026)"""
+    last = max((s["step"] for s in info.get("steps") or ()), default=clr.STEP_LEADER)
+    return min(adv.clear_approval_level or clr.STEP_LEADER, last)
 
 
 def _clear_round_approvers(db: Session, form_id: str) -> tuple:
@@ -660,10 +668,10 @@ def clear_approvals_pending(employee_id: str, db: Session = Depends(get_db)):
         if sub is None or sub.created_by == employee_id:
             continue
         try:
-            info, _ctx = _clear_plan(db, sub, adv.amount_actual)
+            info, _ctx = _clear_plan(db, sub)
         except logic.AdvanceRuleError:
             continue
-        step = adv.clear_approval_level or clr.STEP_LEADER
+        step = _clear_step(adv, info)
         ctx = approval_repo.load_context(db)
         if clr.can_approve(info, ctx.people, ctx.mappings, sub.created_by, employee_id, step,
                            _clear_round_approvers(db, adv.form_id)):
@@ -689,8 +697,8 @@ def clear_approve(form_id: str, body: ClearApproveIn, background_tasks: Backgrou
     try:
         if adv is None or not pending:
             raise logic.InvalidTransition(clr.NOT_PENDING)
-        info, ctx = _clear_plan(db, sub, adv.amount_actual)
-        step = adv.clear_approval_level or clr.STEP_LEADER
+        info, ctx = _clear_plan(db, sub)
+        step = _clear_step(adv, info)
         eligible = clr.can_approve(info, ctx.people, ctx.mappings, sub.created_by, body.action_by,
                                    step, _clear_round_approvers(db, form_id))
         clr.check_approve(pending, eligible)
@@ -748,8 +756,8 @@ def clear_reject(form_id: str, body: ClearRejectIn, background_tasks: Background
     try:
         if adv is None or not pending:
             raise logic.InvalidTransition(clr.NOT_PENDING)
-        info, ctx = _clear_plan(db, sub, adv.amount_actual)
-        step = adv.clear_approval_level or clr.STEP_LEADER
+        info, ctx = _clear_plan(db, sub)
+        step = _clear_step(adv, info)
         eligible = clr.can_approve(info, ctx.people, ctx.mappings, sub.created_by, body.action_by,
                                    step, _clear_round_approvers(db, form_id))
         remark = clr.check_reject(pending, eligible, body.review_remark)
