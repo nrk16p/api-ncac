@@ -692,3 +692,31 @@ def test_load_people_carries_the_branch(api):
         assert approval_repo.load_people(db)[REQ]["site_id"] == 1
     finally:
         db.close()
+
+
+def test_three_toa_steps_through_the_routes(api):
+    """ไล่ทุกขั้นตามชั้น TOA (ผู้ใช้สั่ง 26/10/2026): ผู้เบิก lv2 ขอ 60,000 (6.4) → lv3 → lv5 → lv8
+    อีเมลแต่ละขั้นถึงคนของขั้นนั้นตอนถึงคิว"""
+    a = api
+    fid = a.submit(60000)
+    got = a.mails("3-step submit", fid)
+    assert_mails(got, {legacy(fid, "รอท่านอนุมัติ"): ([email_of(LEAD)], [email_of(REQ)])})
+    assert "ขั้นที่ 1 จาก 3" in got[legacy(fid, "รอท่านอนุมัติ")]["html"][0]
+
+    a.approve(fid, LEAD)
+    got = a.mails("3-step step 1", fid)
+    assert_mails(got, {legacy(fid, "รอท่านอนุมัติ"): ([email_of(MGR)], [email_of(REQ)])})
+    assert "ขั้นที่ 2 จาก 3" in got[legacy(fid, "รอท่านอนุมัติ")]["html"][0]
+
+    a.approve(fid, ASM, expect=403)   # lv4 ไม่ถึงขั้น 2 (lv5)
+    a.approve(fid, MGR)
+    got = a.mails("3-step step 2", fid)
+    assert_mails(got, {legacy(fid, "รอท่านอนุมัติ"): ([email_of(EXEC)], [email_of(REQ)])})
+    assert "ขั้นที่ 3 จาก 3" in got[legacy(fid, "รอท่านอนุมัติ")]["html"][0]
+
+    a.approve(fid, MGR, expect=403)   # คนกดขั้นก่อนกดขั้นนี้ไม่ได้ และระดับไม่ถึง
+    res = a.approve(fid, EXEC)
+    assert res["status"] == "Approved"
+    assert a.status(fid) == "AWAITING_VOUCHER"
+    steps = [s["step"] for s in a.detail(fid)["approval"]["step_approvals"]]
+    assert steps == [1, 2, 3]

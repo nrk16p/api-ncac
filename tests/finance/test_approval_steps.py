@@ -1,4 +1,4 @@
-"""ไล่ขั้นตามชั้น TOA สูงสุด 2 ขั้น (ผู้ใช้สั่ง 26/10/2026) + กลไกขั้น/รอบอนุมัติ — pure rules."""
+"""ไล่ทุกขั้นตามชั้น TOA (ผู้ใช้สั่ง 26/10/2026) + กลไกขั้น/รอบอนุมัติ — pure rules."""
 import pytest
 
 from services.finance import approval_logic as A
@@ -28,33 +28,34 @@ def mk(*levels_):
 
 
 class TestPlanSteps:
-    """ไล่ขั้นตามชั้น TOA สูงสุด 2 ขั้น (ผู้ใช้สั่ง 26/10/2026): ขั้น 1 = ชั้น TOA ถัดจากระดับผู้เบิก
-    ขั้น 2 = ชั้นที่ยอดนั้นต้องการ · ถ้าสองอย่างเป็นชั้นเดียวกันก็จบขั้นเดียว · ชั้น TOA ใน TIERS: 2, 3, 5, 8, 9"""
+    """ไล่ทุกขั้นตามชั้น TOA (ผู้ใช้สั่ง 26/10/2026 แทนสูงสุด 2 ขั้น): ทุกชั้น TOA ที่อยู่เหนือผู้เบิก
+    ไล่ขึ้นไปจนถึงระดับที่ยอดนั้นต้องการ · ชั้น TOA ใน TIERS: 2, 3, 5, 8, 9"""
 
     @staticmethod
     def plan(level, amount):
         return levels(A.plan_steps(level, A.pick_tier(TIERS, amount), TIERS))
 
     @pytest.mark.parametrize("amount,expected", [
-        ("1500", [3]),          # 610055: TOA 2 แต่ต้องสูงกว่าผู้เบิก → 3 ขั้นเดียว
+        ("1500", [3]),             # 610055: TOA 2 แต่ต้องสูงกว่าผู้เบิก → 3 ขั้นเดียว
         ("5000", [3]),
-        ("15000", [3, 5]),      # พุทธชาติ (3) → เจษฎา (5)
-        ("60000", [3, 8]),      # ไม่แวะ 5 เพราะสูงสุด 2 ขั้น
-        ("300000", [3, 9]),
-        ("99999999", [3, 9]),
+        ("15000", [3, 5]),         # พุทธชาติ (3) → เจษฎา (5)
+        ("60000", [3, 5, 8]),      # → กอบชัย (8)
+        ("300000", [3, 5, 8, 9]),
+        ("99999999", [3, 5, 8, 9]),
     ])
     def test_level_2_requester(self, amount, expected):
         assert self.plan(2, amount) == expected
 
-    def test_level_1_requester_starts_at_the_first_toa_level(self):
+    def test_level_1_requester_climbs_every_toa_level(self):
         assert self.plan(1, "1500") == [2]
-        assert self.plan(1, "15000") == [2, 5]
-        assert self.plan(1, "300000") == [2, 9]
+        assert self.plan(1, "15000") == [2, 3, 5]
+        assert self.plan(1, "300000") == [2, 3, 5, 8, 9]
 
     @pytest.mark.parametrize("amount,expected", [
-        ("1500", [4]),          # ต้องสูงกว่าผู้เบิก (3) → 4 ไม่มีชั้น TOA คั่น
-        ("15000", [5]),         # ชั้นถัดไปคือ 5 = ชั้นที่ยอดต้องการพอดี
-        ("60000", [5, 8]),      # ชั้น TOA ถัดจาก 3 คือ 5 ไม่ใช่ 4
+        ("1500", [4]),             # ต้องสูงกว่าผู้เบิก (3) → 4 ไม่มีชั้น TOA คั่น
+        ("15000", [5]),            # ชั้นถัดไปคือ 5 = ชั้นที่ยอดต้องการพอดี
+        ("60000", [5, 8]),         # ชั้น TOA ถัดจาก 3 คือ 5 ไม่ใช่ 4
+        ("300000", [5, 8, 9]),
     ])
     def test_level_3_requester_follows_toa_levels_not_plus_one(self, amount, expected):
         assert self.plan(3, amount) == expected
@@ -69,10 +70,11 @@ class TestPlanSteps:
         assert self.plan(8, amount) == [9]
         assert self.plan(9, amount) == [9]
 
-    def test_two_step_labels_verbatim(self):
-        assert A.plan_steps(2, tier("6.5"), TIERS) == [
+    def test_labels_verbatim(self):
+        assert A.plan_steps(2, tier("6.4"), TIERS) == [
             {"step": 1, "required_level": 3, "label": "หัวหน้าระดับ 3 ขึ้นไป (Sup / Asst.M (ระดับ 3–4))"},
-            {"step": 2, "required_level": 5, "label": "ระดับ 5 ขึ้นไป (ข้อ 6.5 · MGR / SM / DPCL (ระดับ 5–7))"},
+            {"step": 2, "required_level": 5, "label": "หัวหน้าระดับ 5 ขึ้นไป (MGR / SM / DPCL (ระดับ 5–7))"},
+            {"step": 3, "required_level": 8, "label": "ระดับ 8 ขึ้นไป (ข้อ 6.4 · CL (ระดับ 8))"},
         ]
 
     def test_one_step_keeps_the_toa_label(self):

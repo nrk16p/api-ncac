@@ -47,7 +47,7 @@ def test_ใช้จริงน้อยลงชั้นอนุมัต�
 def test_ใช้เกินที่เบิกชั้นอนุมัติสูงขึ้น():
     p = plan(Decimal("30000"))
     assert p["clause"] == "6.4"
-    assert [s["required_level"] for s in p["steps"]] == [3, 8]
+    assert [s["required_level"] for s in p["steps"]] == [3, 5, 8]
 
 
 def test_ระดับถึง_TOA_อนุมัติได้_ผู้เบิกอนุมัติเองไม่ได้():
@@ -56,14 +56,15 @@ def test_ระดับถึง_TOA_อนุมัติได้_ผู้�
     assert not cl.can_approve(p, PEOPLE, MAPS, AE, AE, step=1)
 
 
-def test_หัวหน้ากดขั้น_1_ได้_ขั้น_2_ต้องระดับ_TOA():
-    p = plan(Decimal("18000"))          # ขั้น 1 ระดับ 3 · ขั้น 2 ระดับ 5
+def test_หัวหน้ากดขั้นแรกได้_ขั้นถัดไปต้องระดับถึง():
+    p = plan(Decimal("18000"))          # ระดับ 3 → 5
     assert cl.can_approve(p, PEOPLE, MAPS, AE, PU, step=1)
     assert not cl.can_approve(p, PEOPLE, MAPS, AE, PU, step=2)
     assert cl.can_approve(p, PEOPLE, MAPS, AE, BANK, step=2)
-    p = plan(Decimal("30000"))          # ขั้น 2 ต้องระดับ 8
-    assert not cl.can_approve(p, PEOPLE, MAPS, AE, BANK, step=2)
-    assert cl.can_approve(p, PEOPLE, MAPS, AE, PONG, step=2)
+    p = plan(Decimal("30000"))          # ระดับ 3 → 5 → 8
+    assert cl.can_approve(p, PEOPLE, MAPS, AE, BANK, step=2)
+    assert not cl.can_approve(p, PEOPLE, MAPS, AE, BANK, step=3)
+    assert cl.can_approve(p, PEOPLE, MAPS, AE, PONG, step=3)
 
 
 def test_ระดับสูงกว่าอนุมัติแทนได้():

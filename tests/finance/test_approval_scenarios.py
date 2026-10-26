@@ -56,12 +56,12 @@ def approved_log(log_id, step, action_by):
 # ---------------------------- จำนวนขั้นตามยอดและระดับผู้เบิก ----------------------------
 
 @pytest.mark.parametrize("amount,clause,levels", [
-    (1500, "6.7", [2]),        # ชั้น TOA ถัดจากผู้เบิก = ชั้นที่ยอดต้องการ → ขั้นเดียว
-    (3000, "6.6", [2, 3]),     # ไล่ขั้นตาม TOA สูงสุด 2 ขั้น (ผู้ใช้สั่ง 26/10/2026)
-    (15000, "6.5", [2, 5]),
-    (60000, "6.4", [2, 8]),
-    (150000, "6.3", [2, 9]),
-    (900000, "6.1", [2, 9]),
+    (1500, "6.7", [2]),                # ชั้น TOA ถัดจากผู้เบิก = ชั้นที่ยอดต้องการ → ขั้นเดียว
+    (3000, "6.6", [2, 3]),             # ไล่ทุกขั้นตามชั้น TOA (ผู้ใช้สั่ง 26/10/2026)
+    (15000, "6.5", [2, 3, 5]),
+    (60000, "6.4", [2, 3, 5, 8]),
+    (150000, "6.3", [2, 3, 5, 8, 9]),
+    (900000, "6.1", [2, 3, 5, 8, 9]),
 ])
 def test_staff_steps_follow_the_toa_levels(amount, clause, levels):
     info = plan(STAFF, amount)
@@ -130,14 +130,15 @@ def test_lead_approving_a_small_form_finishes_it_in_one_click():
     assert (d["allowed"], d["outcome"], d["skipped"]) == (True, rules.OUTCOME_APPROVED, [2])
 
 
-def test_15000_lead_takes_step_1_then_the_manager_finishes():
-    """ยอด 15,000 (ขั้น lv2 → lv5): หัวหน้า lv3 กดขั้น 1 ได้ แต่ขั้น 2 ต้องเป็นผู้จัดการ lv5 ขึ้นไป"""
+def test_15000_lead_takes_steps_1_2_then_the_manager_finishes():
+    """ยอด 15,000 (ขั้น lv2 → lv3 → lv5): หัวหน้า lv3 กดขั้น 1 แล้วข้ามขั้น 2 ที่ระดับตัวเองถึง
+    ขั้น 3 ต้องเป็นผู้จัดการ lv5 ขึ้นไป"""
     info = plan(STAFF, 15000)
     d = rules.decide(info, ORG, NO_MAP, "STAFF", "LEAD", current_level=1, round_logs=[])
-    assert (d["allowed"], d["outcome"], d["next_step"]) == (True, rules.OUTCOME_STEP, 2)
-    logs = [approved_log(1, 1, LEAD["id"])]
-    assert rules.decide(info, ORG, NO_MAP, "STAFF", "LEAD2", current_level=2, round_logs=logs)["allowed"] is False
-    d = rules.decide(info, ORG, NO_MAP, "STAFF", "MGR", current_level=2, round_logs=logs)
+    assert (d["allowed"], d["outcome"], d["next_step"], d["skipped"]) == (True, rules.OUTCOME_STEP, 3, [2])
+    logs = [approved_log(1, 1, LEAD["id"]), approved_log(2, 2, LEAD["id"])]
+    assert rules.decide(info, ORG, NO_MAP, "STAFF", "LEAD2", current_level=3, round_logs=logs)["allowed"] is False
+    d = rules.decide(info, ORG, NO_MAP, "STAFF", "MGR", current_level=3, round_logs=logs)
     assert (d["allowed"], d["outcome"]) == (True, rules.OUTCOME_APPROVED)
 
 
@@ -187,8 +188,8 @@ def test_a_step_that_only_executives_can_do_still_emails_them():
 
 def test_15000_emails_the_leads_first_then_the_manager():
     info = plan(STAFF, 15000)
-    first, second = (s["required_level"] for s in info["steps"])
+    first, _second, last = (s["required_level"] for s in info["steps"])
     el = rules.eligible_approvers(ORG.values(), STAFF, first, NO_MAP, ())
     assert {p["employee_id"] for p in rules.notify_approvers(el, first)} == {"LEAD", "LEAD2"}
-    el = rules.eligible_approvers(ORG.values(), STAFF, second, NO_MAP, {LEAD["id"]})
-    assert {p["employee_id"] for p in rules.notify_approvers(el, second)} == {"MGR"}
+    el = rules.eligible_approvers(ORG.values(), STAFF, last, NO_MAP, {LEAD["id"]})
+    assert {p["employee_id"] for p in rules.notify_approvers(el, last)} == {"MGR"}

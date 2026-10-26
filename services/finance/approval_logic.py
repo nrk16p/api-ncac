@@ -1,10 +1,10 @@
 """Pure rules: ADV approval by amount (menait-service spec 2026-09-29-finance-advance-v2-design.md §3),
-up to two steps along the TOA levels since 26/10/2026 (user: "ไล่ทีละขั้นตาม TOA · สูงสุดแค่ 2 ขั้น").
+one step per TOA level since 26/10/2026 (user: "ทุกขั้นตามขั้น TOA").
 
 No DB, no FastAPI. Inputs are plain dicts so everything is unit-testable.
 Person: {"employee_id", "id", "level", "department_id", "division_id", "active"}.
 Tier:   {"clause", "amount_max" (Decimal | None = no cap), "min_level", "approver_label", "sort_order"}.
-Step:   {"step", "required_level", "label"} — step 1 = หัวหน้าชั้น TOA ถัดไป (when below the TOA), last = ผู้มีอำนาจตาม TOA.
+Step:   {"step", "required_level", "label"} — one per TOA level above the requester; last = ผู้มีอำนาจตาม TOA.
 Log:    {"id", "level_no", "action", "action_by" (users.id), "action_at", "remark"} (form_approval_logs).
 """
 from __future__ import annotations
@@ -72,21 +72,20 @@ def leader_label(level: int, approver_label) -> str:
 
 
 def plan_steps(requester_level: Optional[int], tier: Mapping, tiers: Iterable[Mapping]) -> list:
-    """ไล่ขั้นตามชั้น TOA สูงสุด 2 ขั้น (ผู้ใช้สั่ง 26/10/2026 แทนขั้นเดียวของ 21/10/2026)
+    """ไล่ทุกขั้นตามชั้น TOA (ผู้ใช้สั่ง 26/10/2026 "ทุกขั้นตามขั้น TOA" แทนขั้นเดียวของ 21/10/2026)
 
     ขั้นสุดท้าย = ระดับ TOA ของยอดนั้น แต่ต้องสูงกว่าผู้เบิกอย่างน้อยหนึ่งระดับ (เพดาน ORG_WIDE_LEVEL)
-    ขั้น 1 = ชั้น TOA ถัดจากระดับผู้เบิก (ชั้นต่ำสุดใน `tiers` ที่สูงกว่าผู้เบิก) ถ้ายังต่ำกว่าขั้นสุดท้าย
-    เช่น ผู้เบิกระดับ 2 ขอ 60,000 → ระดับ 3 แล้วระดับ 8 · ระดับ 3 ขอ 15,000 → ระดับ 5 ขั้นเดียว
+    ขั้นก่อนหน้า = ทุกชั้น TOA ใน `tiers` ที่สูงกว่าระดับผู้เบิกและต่ำกว่าขั้นสุดท้าย เรียงจากต่ำไปสูง
+    เช่น ผู้เบิกระดับ 2 ขอ 60,000 → ระดับ 3 → 5 → 8 · ระดับ 3 ขอ 15,000 → ระดับ 5 ขั้นเดียว
     ใช้ทั้งตอนขอเบิกและตอนอนุมัติเคลียร์ คนระดับสูงกว่ากดแทนได้และข้ามขั้นที่ระดับตัวเองถึง
     """
     final = required_level(tier["min_level"], requester_level)
-    above = sorted((t for t in tiers if t["min_level"] > requester_level),
-                   key=lambda t: (t["min_level"], t["sort_order"]))
-    steps = []
-    if above and above[0]["min_level"] < final:
-        first = above[0]
-        steps.append({"step": STEP_LEADER, "required_level": first["min_level"],
-                      "label": leader_label(first["min_level"], first["approver_label"])})
+    by_level = {}
+    for t in sorted(tiers, key=lambda t: t["sort_order"]):
+        if requester_level < t["min_level"] < final:
+            by_level.setdefault(t["min_level"], t)
+    steps = [{"step": i, "required_level": level, "label": leader_label(level, by_level[level]["approver_label"])}
+             for i, level in enumerate(sorted(by_level), start=STEP_LEADER)]
     steps.append({"step": len(steps) + 1, "required_level": final,
                   "label": toa_label(final, tier["clause"], tier["approver_label"])})
     return steps

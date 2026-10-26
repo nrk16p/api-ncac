@@ -129,12 +129,12 @@ def test_happy_path_small_amount_from_staff():
 
 
 def test_15000_goes_to_the_lead_then_the_manager():
-    """ไล่ขั้นตาม TOA สูงสุด 2 ขั้น (ผู้ใช้สั่ง 26/10/2026): ข้อ 6.5 → ขั้น lv2 แล้ว lv5"""
+    """ไล่ทุกขั้นตามชั้น TOA (ผู้ใช้สั่ง 26/10/2026): ข้อ 6.5 → lv2 → lv3 → lv5"""
     f = Form(STAFF, 15000)
-    assert [s["required_level"] for s in f.plan["steps"]] == [2, 5]
+    assert [s["required_level"] for s in f.plan["steps"]] == [2, 3, 5]
     assert f.mail_to() == ["LEAD"]
-    f.approve("LEAD")                                      # หัวหน้า lv3 ผ่านขั้น 1 ยังไม่ถึงขั้น 2
-    assert f.status_approve == "In Progress" and f.level == 2
+    f.approve("LEAD")                                      # หัวหน้า lv3 ผ่านขั้น 1 และข้ามขั้น 2 (lv3) ได้เลย
+    assert f.status_approve == "In Progress" and f.level == 3
     assert f.mail_to() == ["MGR"]
     with pytest.raises(NotAllowed):
         f.approve("LEAD")                                  # คนเดิมกดสองขั้นไม่ได้
@@ -144,8 +144,8 @@ def test_15000_goes_to_the_lead_then_the_manager():
 
 def test_the_manager_may_sign_step_1_alone():
     f = Form(STAFF, 15000)
-    d = f.approve("MGR")                                   # lv5 ถึงขั้น 2 → ข้ามขั้นได้
-    assert d["skipped"] == [2] and f.status_approve == "Approved"
+    d = f.approve("MGR")                                   # lv5 ถึงขั้น 2 และ 3 → ข้ามขั้นได้
+    assert d["skipped"] == [2, 3] and f.status_approve == "Approved"
 
 
 def test_higher_level_may_approve_through_the_link():
