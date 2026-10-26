@@ -348,10 +348,10 @@ DOC_NO_EDIT_STATUSES = (AWAITING_PAYMENT, AWAITING_CLEARING, SENT_BACK, CLEARING
 
 def check_doc_numbers(status, current: Mapping, new: Mapping, *, remark) -> dict:
     """การเงินแก้เลขเอกสารที่กรอกผิด (ผู้ใช้สั่ง 26/10/2026): เลขที่ตั้งเบิก / เลขที่ทำจ่าย / เลขที่เคลียร์ ทุกสถานะหลังตั้งเบิก
-    รวมปิดรายการแล้ว · แก้ได้เฉพาะเลขที่มีอยู่แล้ว · ต้องมีเหตุผล · เลขที่เคลียร์ใช้กฎเดียวกับตอนปิดรายการ
-    `new` = {field: value} ที่ส่งมา (None = ไม่แก้ช่องนั้น) · คืน {field: ค่าใหม่} เฉพาะช่องที่เปลี่ยนจริง"""
+    รวมปิดรายการแล้ว · แก้ได้เฉพาะเลขที่มีอยู่แล้ว · เหตุผลไม่บังคับ เก็บประวัติเลขเดิม → เลขใหม่ไว้พอ
+    เลขที่เคลียร์ใช้กฎเดียวกับตอนปิดรายการ · `new` = {field: value} ที่ส่งมา (None = ไม่แก้ช่องนั้น)
+    คืน {field: ค่าใหม่} เฉพาะช่องที่เปลี่ยนจริง · `remark` รับไว้เพื่อให้ผู้เรียกส่งต่อ ไม่ได้ตรวจ"""
     _require_status(status, DOC_NO_EDIT_STATUSES, "แก้ไขเลขที่เอกสาร")
-    _require(bool(remark and remark.strip()), "กรุณาระบุเหตุผลที่แก้ไข")
     changes = {}
     for field in DOC_NO_FIELDS:
         value = new.get(field)

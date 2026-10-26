@@ -479,7 +479,7 @@ def reject_voucher(form_id: str, body: RejectVoucherIn, db: Session = Depends(ge
 @router.put("/advances/{form_id}/doc-numbers")
 def edit_doc_numbers(form_id: str, body: DocNumbersIn, db: Session = Depends(get_db)):
     """การเงินแก้เลขที่ตั้งเบิก / เลขที่ทำจ่าย / เลขที่เคลียร์ที่กรอกผิด (ผู้ใช้สั่ง 26/10/2026) ทุกสถานะหลังตั้งเบิก รวมปิดแล้ว
-    ไม่เปลี่ยนสถานะ ไม่ส่งอีเมล · บันทึก DOC_NO_EDIT (เลขเดิม → เลขใหม่ + เหตุผล)"""
+    ไม่เปลี่ยนสถานะ ไม่ส่งอีเมล · บันทึก DOC_NO_EDIT (เลขเดิม → เลขใหม่ + เหตุผลถ้ามี) · บัญชีแก้เองไม่ได้"""
     require_permission(db, body.action_by, perms.PERM_PAY)
     _, adv, status = _load_for_update(db, form_id)
     current = _snapshot(adv, logic.DOC_NO_FIELDS)
@@ -491,7 +491,7 @@ def edit_doc_numbers(form_id: str, body: DocNumbersIn, db: Session = Depends(get
     for field, value in changes.items():
         setattr(adv, field, value)
     db.add(FinAdvanceLog(advance_id=adv.id, action="DOC_NO_EDIT", changes=logic.diff_fields(current, changes),
-                         remark=body.remark.strip(), action_by=body.action_by))
+                         remark=(body.remark or "").strip() or None, action_by=body.action_by))
     return _commit_and_return(db, form_id)
 
 

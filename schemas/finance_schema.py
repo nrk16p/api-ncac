@@ -105,7 +105,7 @@ class ConfirmIn(_Body):
 
 
 class DocNumbersIn(_Body):
-    """การเงินแก้เลขเอกสารที่กรอกผิด (26/10/2026): ส่งเฉพาะช่องที่จะแก้ · เหตุผลบังคับ (เช็กใน check_doc_numbers)"""
+    """การเงินแก้เลขเอกสารที่กรอกผิด (26/10/2026): ส่งเฉพาะช่องที่จะแก้ · เหตุผลไม่บังคับ"""
     action_by: str
     voucher_no: Optional[str] = Field(default=None, max_length=50)
     payment_doc_no: Optional[str] = Field(default=None, max_length=50)

@@ -538,7 +538,8 @@ def test_finance_sends_a_wrong_voucher_back_to_accounting(api):
 
 
 def test_finance_edits_wrong_doc_numbers_even_after_close(api):
-    """ผู้ใช้สั่ง 26/10/2026: บัญชีใส่เลขผิด การเงินแก้เลขที่ตั้งเบิก เลขที่ทำจ่าย และเลขที่เคลียร์ได้เอง (ต้องใส่เหตุผล)"""
+    """ผู้ใช้สั่ง 26/10/2026: บัญชีใส่เลขผิด การเงินแก้เลขที่ตั้งเบิก เลขที่ทำจ่าย และเลขที่เคลียร์ได้เอง
+    เหตุผลไม่บังคับ เก็บประวัติเลขเดิม → เลขใหม่ไว้พอ · บัญชีแก้เองไม่ได้ (ต้องให้การเงินส่งกลับไปรอตั้งเบิก)"""
     a = api
     fid = a.paid_advance(3000)  # PV-1 / PAY-1
 
@@ -546,14 +547,13 @@ def test_finance_edits_wrong_doc_numbers_even_after_close(api):
         return a.put(fid, "doc-numbers", {"action_by": who, "remark": "พิมพ์เลขผิด", **body}, expect)
 
     edit({"voucher_no": "PV-9"}, who=FV, expect=403)  # การเงิน (สิทธิ์จ่ายเงิน) เท่านั้น
-    edit({"voucher_no": "PV-9", "remark": "  "}, expect=400)
     edit({"clear_doc_no": "CL1"}, expect=409)  # ยังไม่มีเลขที่เคลียร์
     edit({"voucher_no": "PV-1"}, expect=400)  # ไม่มีอะไรเปลี่ยน
-    d = edit({"voucher_no": "PV-9", "payment_doc_no": "PAY-9"})
+    d = edit({"voucher_no": "PV-9", "payment_doc_no": "PAY-9", "remark": "  "})  # ไม่ใส่เหตุผลก็ได้
     assert d["status"] == "AWAITING_CLEARING"
     assert (d["fin"]["voucher_no"], d["fin"]["payment_doc_no"]) == ("PV-9", "PAY-9")
     log = d["fin_logs"][-1]
-    assert (log["action"], log["remark"], log["action_by"]) == ("DOC_NO_EDIT", "พิมพ์เลขผิด", FP)
+    assert (log["action"], log["remark"], log["action_by"]) == ("DOC_NO_EDIT", None, FP)
     assert log["changes"] == {"voucher_no": ["PV-1", "PV-9"], "payment_doc_no": ["PAY-1", "PAY-9"]}
 
     a.clear(fid, [3000], settle_date=False)
@@ -566,6 +566,7 @@ def test_finance_edits_wrong_doc_numbers_even_after_close(api):
     d = edit({"clear_doc_no": "CL691000000099"}, who=SUPER)
     assert d["status"] == "CLOSED" and d["fin"]["clear_doc_no"] == "CL691000000099"
     assert d["fin_logs"][-1]["changes"] == {"clear_doc_no": ["CL691000000001", "CL691000000099"]}
+    assert d["fin_logs"][-1]["remark"] == "พิมพ์เลขผิด"  # ใส่เหตุผลมาก็เก็บไว้
     assert a.mails() == {}  # แก้เลขไม่ส่งอีเมล
 
 

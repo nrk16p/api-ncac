@@ -543,9 +543,10 @@ class TestCheckDocNumbers:
         got = L.check_doc_numbers(L.AWAITING_CLEARING, self.CUR, {"voucher_no": " PV-9 ", "payment_doc_no": "PAY-1"}, remark="ผิด")
         assert got == {"voucher_no": "PV-9"}
 
-    def test_reason_required(self):
-        with pytest.raises(L.AdvanceRuleError, match="กรุณาระบุเหตุผลที่แก้ไข"):
-            L.check_doc_numbers(L.AWAITING_CLEARING, self.CUR, {"voucher_no": "PV-9"}, remark="  ")
+    def test_reason_is_optional(self):
+        """ผู้ใช้สั่ง 26/10/2026: การเงินแก้เองได้ เก็บประวัติไว้พอ ไม่ต้องใส่เหตุผล"""
+        for remark in (None, "", "  "):
+            assert L.check_doc_numbers(L.AWAITING_CLEARING, self.CUR, {"voucher_no": "PV-9"}, remark=remark) == {"voucher_no": "PV-9"}
 
     def test_a_number_not_entered_yet_cannot_be_edited(self):
         with pytest.raises(L.InvalidTransition, match="ยังไม่มีเลขที่เอกสารเคลียร์เงิน"):
