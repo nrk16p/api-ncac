@@ -50,7 +50,7 @@ def ctx(monkeypatch):
     monkeypatch.setattr(R, "load_context", lambda db, fresh=False: CTX)
 
 
-def _two_step_plan(requester_level, tier):
+def _two_step_plan(requester_level, tier, tiers=None):
     """แผนสองขั้นแบบก่อน 21/10/2026: หัวหน้าถัดไป → ผู้มีอำนาจตาม TOA (ผู้เบิกระดับ 8+ ขั้นเดียว)"""
     final = A.required_level(tier["min_level"], requester_level)
     if requester_level >= 8:
@@ -303,6 +303,19 @@ def test_single_step_pending_queue(queue):
 def test_single_step_detail_contract(ctx, monkeypatch):
     monkeypatch.setattr(R, "current_round_logs", lambda db, sid: [])
     monkeypatch.setattr(R, "_users_by_id", lambda db, ids: {})
+    got = R.detail_approval(None, sub(level=1), 15000.0)
+    assert got["steps"] == [{"step": 1, "required_level": 5,
+                             "label": "ระดับ 5 ขึ้นไป (ข้อ 6.5 · MGR / SM / DPCL (ระดับ 5–7))"}]
+    assert (got["required_level"], got["current_step"], got["step_approvals"]) == (5, 1, [])
+
+
+def test_toa_ladder_detail_contract(ctx, monkeypatch):
+    """ไล่ขั้นตาม TOA สูงสุด 2 ขั้น (ผู้ใช้สั่ง 26/10/2026): ผู้เบิกระดับ 3 ขอ 60,000 → ระดับ 5 แล้วระดับ 8"""
+    monkeypatch.setattr(R, "current_round_logs", lambda db, sid: [])
+    monkeypatch.setattr(R, "_users_by_id", lambda db, ids: {})
     got = R.detail_approval(None, sub(level=1), 60000.0)
-    assert got["steps"] == [{"step": 1, "required_level": 8, "label": "ระดับ 8 ขึ้นไป (ข้อ 6.4 · CL (ระดับ 8))"}]
-    assert (got["required_level"], got["current_step"], got["step_approvals"]) == (8, 1, [])
+    assert got["steps"] == [
+        {"step": 1, "required_level": 5, "label": "หัวหน้าระดับ 5 ขึ้นไป (MGR / SM / DPCL (ระดับ 5–7))"},
+        {"step": 2, "required_level": 8, "label": "ระดับ 8 ขึ้นไป (ข้อ 6.4 · CL (ระดับ 8))"},
+    ]
+    assert (got["required_level"], got["current_step"]) == (8, 1)

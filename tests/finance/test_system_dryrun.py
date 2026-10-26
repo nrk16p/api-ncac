@@ -87,13 +87,13 @@ class Form:
 # ======================= เส้นทางหลัก =======================
 
 def test_happy_path_small_amount_from_staff():
-    """พนักงาน lv1 เบิก 3,000 · ขั้นเดียวตาม TOA · เคลียร์ใช้ไม่หมด · คืนเงิน · ปิดรายการ"""
+    """พนักงาน lv1 เบิก 3,000 · ขั้น lv2 → lv3 ตาม TOA · เคลียร์ใช้ไม่หมด · คืนเงิน · ปิดรายการ"""
     f = Form(STAFF, 3000)
     assert f.status == L.PENDING_APPROVAL
-    assert [s["required_level"] for s in f.plan["steps"]] == [3]
-    assert f.mail_to() == ["LEAD"], "อีเมลถึงเฉพาะระดับที่ TOA ต้องการ (lv3)"
+    assert [s["required_level"] for s in f.plan["steps"]] == [2, 3]
+    assert f.mail_to() == ["LEAD"], "แผนกไม่มี lv2 อีเมลขั้น 1 จึงถึงหัวหน้า lv3"
 
-    f.approve("LEAD")                                     # lv3 = TOA → จบในคลิกเดียว
+    f.approve("LEAD")                                     # lv3 ถึงขั้น 2 ด้วย → ข้ามขั้น จบในคลิกเดียว
     assert f.status_approve == "Approved"
     assert f.status == L.AWAITING_VOUCHER
 
@@ -128,14 +128,24 @@ def test_happy_path_small_amount_from_staff():
     assert f.status == L.CLOSED
 
 
-def test_leader_below_toa_cannot_approve_the_manager_signs_alone():
-    f = Form(STAFF, 15000)                                 # ข้อ 6.5 → ขั้นเดียว lv5
-    assert [s["required_level"] for s in f.plan["steps"]] == [5]
+def test_15000_goes_to_the_lead_then_the_manager():
+    """ไล่ขั้นตาม TOA สูงสุด 2 ขั้น (ผู้ใช้สั่ง 26/10/2026): ข้อ 6.5 → ขั้น lv2 แล้ว lv5"""
+    f = Form(STAFF, 15000)
+    assert [s["required_level"] for s in f.plan["steps"]] == [2, 5]
+    assert f.mail_to() == ["LEAD"]
+    f.approve("LEAD")                                      # หัวหน้า lv3 ผ่านขั้น 1 ยังไม่ถึงขั้น 2
+    assert f.status_approve == "In Progress" and f.level == 2
     assert f.mail_to() == ["MGR"]
     with pytest.raises(NotAllowed):
-        f.approve("LEAD")                                  # หัวหน้า lv3 ไม่ถึง TOA
+        f.approve("LEAD")                                  # คนเดิมกดสองขั้นไม่ได้
     f.approve("MGR")
     assert f.status_approve == "Approved"
+
+
+def test_the_manager_may_sign_step_1_alone():
+    f = Form(STAFF, 15000)
+    d = f.approve("MGR")                                   # lv5 ถึงขั้น 2 → ข้ามขั้นได้
+    assert d["skipped"] == [2] and f.status_approve == "Approved"
 
 
 def test_higher_level_may_approve_through_the_link():
@@ -177,7 +187,7 @@ def test_accounting_returns_the_form_and_the_requester_resubmits():
     f.logs += [{"id": 90, "level_no": 0, "action": rules.MARKER_RETURNED, "action_by": None, "action_at": None},
                {"id": 91, "level_no": 0, "action": rules.MARKER_RESUBMITTED, "action_by": None, "action_at": None}]
     f.level = 1
-    assert f.mail_to() == ["MGR"], "รอบใหม่ ผู้จัดการคนเดิมกลับมาอยู่ในคิว"
+    assert f.mail_to() == ["LEAD"], "รอบใหม่ เริ่มขั้น 1 ใหม่ หัวหน้ากลับมาอยู่ในคิว"
     f.approve("MGR")
     assert f.status_approve == "Approved"
 

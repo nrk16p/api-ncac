@@ -1,10 +1,10 @@
 """Pure rules: ADV approval by amount (menait-service spec 2026-09-29-finance-advance-v2-design.md §3),
-one step at the TOA level since 21/10/2026 (user: "ส่งอนุมัติสูงสุดตาม TOA").
+up to two steps along the TOA levels since 26/10/2026 (user: "ไล่ทีละขั้นตาม TOA · สูงสุดแค่ 2 ขั้น").
 
 No DB, no FastAPI. Inputs are plain dicts so everything is unit-testable.
 Person: {"employee_id", "id", "level", "department_id", "division_id", "active"}.
 Tier:   {"clause", "amount_max" (Decimal | None = no cap), "min_level", "approver_label", "sort_order"}.
-Step:   {"step", "required_level", "label"} — one step: ผู้มีอำนาจตาม TOA.
+Step:   {"step", "required_level", "label"} — step 1 = หัวหน้าชั้น TOA ถัดไป (when below the TOA), last = ผู้มีอำนาจตาม TOA.
 Log:    {"id", "level_no", "action", "action_by" (users.id), "action_at", "remark"} (form_approval_logs).
 """
 from __future__ import annotations
@@ -67,15 +67,29 @@ def toa_label(level: int, clause, approver_label) -> str:
     return f"ระดับ {level} ขึ้นไป (ข้อ {clause} · {approver_label})"
 
 
-def plan_steps(requester_level: Optional[int], tier: Mapping) -> list:
-    """ขั้นเดียวตาม TOA (ผู้ใช้สั่ง 21/10/2026 "ส่งอนุมัติสูงสุดตาม TOA" แทนกติกา 2 ขั้นของ 19/10/2026)
+def leader_label(level: int, approver_label) -> str:
+    return f"หัวหน้าระดับ {level} ขึ้นไป ({approver_label})"
 
-    ระดับที่ต้องการ = ระดับ TOA ของยอดนั้น แต่ต้องสูงกว่าผู้เบิกอย่างน้อยหนึ่งระดับ (เพดาน ORG_WIDE_LEVEL)
-    ใช้ทั้งตอนขอเบิกและตอนอนุมัติเคลียร์ ใครระดับถึงขึ้นไปเปิดลิงก์แล้วกดอนุมัติได้
+
+def plan_steps(requester_level: Optional[int], tier: Mapping, tiers: Iterable[Mapping]) -> list:
+    """ไล่ขั้นตามชั้น TOA สูงสุด 2 ขั้น (ผู้ใช้สั่ง 26/10/2026 แทนขั้นเดียวของ 21/10/2026)
+
+    ขั้นสุดท้าย = ระดับ TOA ของยอดนั้น แต่ต้องสูงกว่าผู้เบิกอย่างน้อยหนึ่งระดับ (เพดาน ORG_WIDE_LEVEL)
+    ขั้น 1 = ชั้น TOA ถัดจากระดับผู้เบิก (ชั้นต่ำสุดใน `tiers` ที่สูงกว่าผู้เบิก) ถ้ายังต่ำกว่าขั้นสุดท้าย
+    เช่น ผู้เบิกระดับ 2 ขอ 60,000 → ระดับ 3 แล้วระดับ 8 · ระดับ 3 ขอ 15,000 → ระดับ 5 ขั้นเดียว
+    ใช้ทั้งตอนขอเบิกและตอนอนุมัติเคลียร์ คนระดับสูงกว่ากดแทนได้และข้ามขั้นที่ระดับตัวเองถึง
     """
     final = required_level(tier["min_level"], requester_level)
-    return [{"step": STEP_LEADER, "required_level": final,
-             "label": toa_label(final, tier["clause"], tier["approver_label"])}]
+    above = sorted((t for t in tiers if t["min_level"] > requester_level),
+                   key=lambda t: (t["min_level"], t["sort_order"]))
+    steps = []
+    if above and above[0]["min_level"] < final:
+        first = above[0]
+        steps.append({"step": STEP_LEADER, "required_level": first["min_level"],
+                      "label": leader_label(first["min_level"], first["approver_label"])})
+    steps.append({"step": len(steps) + 1, "required_level": final,
+                  "label": toa_label(final, tier["clause"], tier["approver_label"])})
+    return steps
 
 
 def current_step_of(steps: list, current_level) -> int:
@@ -273,7 +287,7 @@ def evaluate(tiers, people: Mapping[str, Mapping], mappings, requester_employee_
     """The whole chain. `required_level` / `direct_level` are the final step's (the TOA, as in v2)."""
     tier = pick_tier(tiers, amount)
     requester = people.get(requester_employee_id)
-    steps = plan_steps(requester.get("level") if requester else None, tier)
+    steps = plan_steps(requester.get("level") if requester else None, tier, tiers)
     required = steps[-1]["required_level"]
     direct = direct_level(people.values(), requester, required, mappings)
     if direct is None:  # the final step's approvers also qualify for step 1, so this covers every step

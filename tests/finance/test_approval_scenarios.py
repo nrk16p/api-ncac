@@ -55,18 +55,18 @@ def approved_log(log_id, step, action_by):
 
 # ---------------------------- จำนวนขั้นตามยอดและระดับผู้เบิก ----------------------------
 
-@pytest.mark.parametrize("amount,clause,level", [
-    (1500, "6.7", 2),      # ขั้นเดียวตาม TOA (ผู้ใช้สั่ง 21/10/2026)
-    (3000, "6.6", 3),
-    (15000, "6.5", 5),
-    (60000, "6.4", 8),     # ตรงไประดับ 8 ไม่ต้องผ่านหัวหน้าก่อน
-    (150000, "6.3", 9),
-    (900000, "6.1", 9),
+@pytest.mark.parametrize("amount,clause,levels", [
+    (1500, "6.7", [2]),        # ชั้น TOA ถัดจากผู้เบิก = ชั้นที่ยอดต้องการ → ขั้นเดียว
+    (3000, "6.6", [2, 3]),     # ไล่ขั้นตาม TOA สูงสุด 2 ขั้น (ผู้ใช้สั่ง 26/10/2026)
+    (15000, "6.5", [2, 5]),
+    (60000, "6.4", [2, 8]),
+    (150000, "6.3", [2, 9]),
+    (900000, "6.1", [2, 9]),
 ])
-def test_staff_one_step_at_the_toa_level(amount, clause, level):
+def test_staff_steps_follow_the_toa_levels(amount, clause, levels):
     info = plan(STAFF, amount)
     assert info["clause"] == clause
-    assert [s["required_level"] for s in info["steps"]] == [level]
+    assert [s["required_level"] for s in info["steps"]] == levels
 
 
 def test_executive_borrowing_a_large_sum_needs_only_one_approval():
@@ -124,17 +124,20 @@ def test_inactive_person_drops_out():
 # ---------------------------- เดินเรื่อง ----------------------------
 
 def test_lead_approving_a_small_form_finishes_it_in_one_click():
-    """ยอด 3,000 (ข้อ 6.6 ต้อง lv3) หัวหน้า lv3 กดครั้งเดียวจบ"""
+    """ยอด 3,000 (ขั้น lv2 → lv3) แผนกไม่มี lv2 หัวหน้า lv3 กดขั้น 1 แล้วข้ามขั้น 2 ที่ระดับตัวเองถึง จบในครั้งเดียว"""
     info = plan(STAFF, 3000)
     d = rules.decide(info, ORG, NO_MAP, "STAFF", "LEAD", current_level=1, round_logs=[])
-    assert (d["allowed"], d["outcome"], d["skipped"]) == (True, rules.OUTCOME_APPROVED, [])
+    assert (d["allowed"], d["outcome"], d["skipped"]) == (True, rules.OUTCOME_APPROVED, [2])
 
 
-def test_leader_below_toa_cannot_approve():
-    """ยอด 15,000 (ข้อ 6.5 ต้อง lv5) หัวหน้า lv3 กดไม่ได้ ต้องเป็นผู้จัดการขึ้นไป"""
+def test_15000_lead_takes_step_1_then_the_manager_finishes():
+    """ยอด 15,000 (ขั้น lv2 → lv5): หัวหน้า lv3 กดขั้น 1 ได้ แต่ขั้น 2 ต้องเป็นผู้จัดการ lv5 ขึ้นไป"""
     info = plan(STAFF, 15000)
-    assert rules.decide(info, ORG, NO_MAP, "STAFF", "LEAD", current_level=1, round_logs=[])["allowed"] is False
-    d = rules.decide(info, ORG, NO_MAP, "STAFF", "MGR", current_level=1, round_logs=[])
+    d = rules.decide(info, ORG, NO_MAP, "STAFF", "LEAD", current_level=1, round_logs=[])
+    assert (d["allowed"], d["outcome"], d["next_step"]) == (True, rules.OUTCOME_STEP, 2)
+    logs = [approved_log(1, 1, LEAD["id"])]
+    assert rules.decide(info, ORG, NO_MAP, "STAFF", "LEAD2", current_level=2, round_logs=logs)["allowed"] is False
+    d = rules.decide(info, ORG, NO_MAP, "STAFF", "MGR", current_level=2, round_logs=logs)
     assert (d["allowed"], d["outcome"]) == (True, rules.OUTCOME_APPROVED)
 
 
@@ -182,8 +185,10 @@ def test_a_step_that_only_executives_can_do_still_emails_them():
     assert {p["employee_id"] for p in rules.notify_approvers(el, last)} == {"DCEO"}
 
 
-def test_15000_emails_the_manager_not_the_lead():
+def test_15000_emails_the_leads_first_then_the_manager():
     info = plan(STAFF, 15000)
-    required = info["steps"][0]["required_level"]
-    el = rules.eligible_approvers(ORG.values(), STAFF, required, NO_MAP, ())
-    assert {p["employee_id"] for p in rules.notify_approvers(el, required)} == {"MGR"}
+    first, second = (s["required_level"] for s in info["steps"])
+    el = rules.eligible_approvers(ORG.values(), STAFF, first, NO_MAP, ())
+    assert {p["employee_id"] for p in rules.notify_approvers(el, first)} == {"LEAD", "LEAD2"}
+    el = rules.eligible_approvers(ORG.values(), STAFF, second, NO_MAP, {LEAD["id"]})
+    assert {p["employee_id"] for p in rules.notify_approvers(el, second)} == {"MGR"}

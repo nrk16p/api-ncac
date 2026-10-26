@@ -1,5 +1,4 @@
-"""ขั้นเดียวตาม TOA (ผู้ใช้สั่ง 21/10/2026) + กลไกขั้น/รอบอนุมัติ — pure rules.
-กลไกหลายขั้นยังรองรับอยู่ เทสต์กลไกจึงสร้าง steps เองแทนการเรียก plan_steps"""
+"""ไล่ขั้นตามชั้น TOA สูงสุด 2 ขั้น (ผู้ใช้สั่ง 26/10/2026) + กลไกขั้น/รอบอนุมัติ — pure rules."""
 import pytest
 
 from services.finance import approval_logic as A
@@ -29,43 +28,70 @@ def mk(*levels_):
 
 
 class TestPlanSteps:
-    @pytest.mark.parametrize("amount,expected", [
-        ("1500", [4]),     # 6.7: TOA ขอ 2 แต่ต้องสูงกว่าผู้เบิก (3) → 4
-        ("4000", [4]),     # 6.6: TOA 3 → ยังต้อง 4
-        ("15000", [5]),    # 6.5: TOA 5
-        ("60000", [8]),    # 6.4: TOA 8 ตรงไปเลย ไม่ไล่หัวหน้าก่อน
-    ])
-    def test_one_step_at_toa_level_for_requester_level_3(self, amount, expected):
-        assert levels(A.plan_steps(3, A.pick_tier(TIERS, amount))) == expected
+    """ไล่ขั้นตามชั้น TOA สูงสุด 2 ขั้น (ผู้ใช้สั่ง 26/10/2026): ขั้น 1 = ชั้น TOA ถัดจากระดับผู้เบิก
+    ขั้น 2 = ชั้นที่ยอดนั้นต้องการ · ถ้าสองอย่างเป็นชั้นเดียวกันก็จบขั้นเดียว · ชั้น TOA ใน TIERS: 2, 3, 5, 8, 9"""
 
-    def test_labels_verbatim(self):
-        assert A.plan_steps(3, tier("6.5")) == [
+    @staticmethod
+    def plan(level, amount):
+        return levels(A.plan_steps(level, A.pick_tier(TIERS, amount), TIERS))
+
+    @pytest.mark.parametrize("amount,expected", [
+        ("1500", [3]),          # 610055: TOA 2 แต่ต้องสูงกว่าผู้เบิก → 3 ขั้นเดียว
+        ("5000", [3]),
+        ("15000", [3, 5]),      # พุทธชาติ (3) → เจษฎา (5)
+        ("60000", [3, 8]),      # ไม่แวะ 5 เพราะสูงสุด 2 ขั้น
+        ("300000", [3, 9]),
+        ("99999999", [3, 9]),
+    ])
+    def test_level_2_requester(self, amount, expected):
+        assert self.plan(2, amount) == expected
+
+    def test_level_1_requester_starts_at_the_first_toa_level(self):
+        assert self.plan(1, "1500") == [2]
+        assert self.plan(1, "15000") == [2, 5]
+        assert self.plan(1, "300000") == [2, 9]
+
+    @pytest.mark.parametrize("amount,expected", [
+        ("1500", [4]),          # ต้องสูงกว่าผู้เบิก (3) → 4 ไม่มีชั้น TOA คั่น
+        ("15000", [5]),         # ชั้นถัดไปคือ 5 = ชั้นที่ยอดต้องการพอดี
+        ("60000", [5, 8]),      # ชั้น TOA ถัดจาก 3 คือ 5 ไม่ใช่ 4
+    ])
+    def test_level_3_requester_follows_toa_levels_not_plus_one(self, amount, expected):
+        assert self.plan(3, amount) == expected
+
+    def test_level_5_requester(self):
+        assert self.plan(5, "15000") == [6]
+        assert self.plan(5, "60000") == [8]
+        assert self.plan(5, "300000") == [8, 9]
+
+    @pytest.mark.parametrize("amount", ["1500", "60000", "300000"])
+    def test_level_8_and_9_are_one_step_at_9(self, amount):
+        assert self.plan(8, amount) == [9]
+        assert self.plan(9, amount) == [9]
+
+    def test_two_step_labels_verbatim(self):
+        assert A.plan_steps(2, tier("6.5"), TIERS) == [
+            {"step": 1, "required_level": 3, "label": "หัวหน้าระดับ 3 ขึ้นไป (Sup / Asst.M (ระดับ 3–4))"},
+            {"step": 2, "required_level": 5, "label": "ระดับ 5 ขึ้นไป (ข้อ 6.5 · MGR / SM / DPCL (ระดับ 5–7))"},
+        ]
+
+    def test_one_step_keeps_the_toa_label(self):
+        assert A.plan_steps(3, tier("6.5"), TIERS) == [
             {"step": 1, "required_level": 5, "label": "ระดับ 5 ขึ้นไป (ข้อ 6.5 · MGR / SM / DPCL (ระดับ 5–7))"},
         ]
 
-    def test_toa_below_requester_goes_one_level_up(self):
-        assert levels(A.plan_steps(5, tier("6.5"))) == [6]
-
-    @pytest.mark.parametrize("clause", ["6.7", "6.5", "6.3", "6.1"])
-    def test_level_9_requester_is_one_step_at_9(self, clause):
-        assert levels(A.plan_steps(9, tier(clause))) == [9]
-
-    def test_level_8_requester_any_amount_one_step_at_9(self):
-        assert levels(A.plan_steps(8, tier("6.7"))) == [9]
-        assert levels(A.plan_steps(8, tier("6.4"))) == [9]
-
     def test_future_tier_above_org_wide_is_still_one_step(self):
-        assert levels(A.plan_steps(9, {**tier("6.1"), "min_level": 10})) == [10]
+        assert levels(A.plan_steps(9, {**tier("6.1"), "min_level": 10}, TIERS)) == [10]
 
     def test_no_level(self):
         with pytest.raises(AdvanceRuleError, match=A.MSG_NO_LEVEL):
-            A.plan_steps(None, tier("6.7"))
+            A.plan_steps(None, tier("6.7"), TIERS)
 
 
 class TestNextAfterApproval:
     TWO = mk(4, 5)
     BIG = mk(4, 8)
-    ONE = A.plan_steps(3, tier("6.4"))    # [8] — ระบบจริงขั้นเดียว
+    ONE = A.plan_steps(5, tier("6.4"), TIERS)    # [8] — ผู้เบิกระดับ 5 ยอด 6.4 ขั้นเดียว
 
     def test_step_1_moves_on(self):
         assert A.next_after_approval(self.TWO, 1, 4) == (A.OUTCOME_STEP, 2)
@@ -201,9 +227,17 @@ class TestDecide:
             d = A.decide(ev("15000"), PEOPLE, MAP, "R", who, 1, [])
             assert (d["allowed"], d["outcome"]) == (True, "approved"), who
 
-    def test_big_amount_goes_straight_to_level_8(self):
-        assert A.decide(ev("60000"), PEOPLE, MAP, "R", "L5", 1, [])["allowed"] is False
-        assert A.decide(ev("60000"), PEOPLE, MAP, "R", "L8", 1, [])["outcome"] == "approved"
+    def test_60000_goes_to_level_5_first_then_level_8(self):
+        """ไล่ขั้นตาม TOA (ผู้ใช้สั่ง 26/10/2026): ผู้เบิกระดับ 3 ขอ 60,000 → ระดับ 5 แล้วระดับ 8"""
+        d = A.decide(ev("60000"), PEOPLE, MAP, "R", "L5", 1, [])
+        assert (d["allowed"], d["outcome"], d["next_step"]) == (True, "step", 2)
+        logs = [log(1, 1, "APPROVED", PEOPLE["L5"]["id"])]
+        assert A.decide(ev("60000"), PEOPLE, MAP, "R", "L5", 2, logs)["allowed"] is False
+        assert A.decide(ev("60000"), PEOPLE, MAP, "R", "L8", 2, logs)["outcome"] == "approved"
+
+    def test_level_8_may_take_step_1_and_skip_step_2(self):
+        d = A.decide(ev("60000"), PEOPLE, MAP, "R", "L8", 1, [])
+        assert (d["allowed"], d["outcome"], d["skipped"]) == (True, "approved", [2])
 
     def test_requester_and_strangers_denied(self):
         assert A.decide(ev("15000"), PEOPLE, MAP, "R", "R", 1, [])["allowed"] is False

@@ -367,25 +367,30 @@ def test_happy_path_refund(api):
     req = a.detail(fid)["request"]
     assert (req["bank"], req["account_no"], req["account_name"]) == ("KBANK", "1234567890", "สมชาย ใจดี")
     got = a.mails("1 submit 12,000", fid)
-    # one step at the TOA level (6.5 → lv5, ผู้ใช้สั่ง 21/10/2026): email only lv5, never lv3/4 or lv8/lv9/superadmin
-    assert_mails(got, {legacy(fid, "รอท่านอนุมัติ"): ([email_of(MGR)], [email_of(REQ)])})
+    # ไล่ขั้นตาม TOA สูงสุด 2 ขั้น (ผู้ใช้สั่ง 26/10/2026): 6.5 ผู้เบิก lv2 → ขั้น 1 lv3 แล้วขั้น 2 lv5
+    # อีเมลขั้น 1 ถึงหัวหน้า lv3 คนเดียว ไม่ถึง lv4/5/8/9/superadmin
+    assert_mails(got, {legacy(fid, "รอท่านอนุมัติ"): ([email_of(LEAD)], [email_of(REQ)])})
     html = got[legacy(fid, "รอท่านอนุมัติ")]["html"][0]
-    assert f"{FE}/finance/approvals?doc={fid}" in html and "ขั้นที่ 1 จาก 1" in html
+    assert f"{FE}/finance/approvals?doc={fid}" in html and "ขั้นที่ 1 จาก 2" in html
 
-    # pending queue: the lv3 lead is below the TOA level now
-    pend = a.c.get("/finance/approvals/pending", params={"employee_id": MGR}).json()
+    pend = a.c.get("/finance/approvals/pending", params={"employee_id": LEAD}).json()
     assert [p["form_id"] for p in pend] == [fid]
-    assert a.c.get("/finance/approvals/pending", params={"employee_id": LEAD}).json() == []
     assert a.c.get("/finance/approvals/pending", params={"employee_id": REQ}).json() == []
 
-    # requester cannot approve own; a lead below the TOA level cannot
-    a.approve(fid, REQ, expect=403)
-    a.approve(fid, LEAD, expect=403)
+    a.approve(fid, REQ, expect=403)  # requester cannot approve own
 
+    a.approve(fid, LEAD)
+    assert a.status(fid) == "PENDING_APPROVAL"
+    got = a.mails("2 approve step 1 (LEAD lv3)", fid)
+    assert_mails(got, {legacy(fid, "รอท่านอนุมัติ"): ([email_of(MGR)], [email_of(REQ)])})
+    assert "ขั้นที่ 2 จาก 2" in got[legacy(fid, "รอท่านอนุมัติ")]["html"][0]
+
+    a.approve(fid, LEAD, expect=403)  # the step-1 approver cannot take step 2
+    a.approve(fid, ASM, expect=403)   # lv4 is below step 2 (lv5)
     res = a.approve(fid, MGR)
     assert res["status"] == "Approved"
     assert a.status(fid) == "AWAITING_VOUCHER"
-    got = a.mails("2 approve (MGR lv5, one click)", fid)
+    got = a.mails("3 approve step 2 (MGR lv5)", fid)
     assert_mails(got, {summary(fid, "อนุมัติครบทุกขั้นแล้ว"): ([email_of(REQ)], [ACCOUNT_BOX])})
 
     # voucher: permission enforced, no email
@@ -411,26 +416,30 @@ def test_happy_path_refund(api):
     d = a.clear(fid, [5000, 4500])
     assert d["status"] == "CLEARING_APPROVAL"
     assert (d["fin"]["amount_actual"], d["fin"]["settle_amount"]) == (9500.0, 2500.0)
-    assert a.detail(fid)["clear_approval"] == {"step": 1, "total_steps": 1, "clause": "6.5", "required_level": 5}
+    assert a.detail(fid)["clear_approval"] == {"step": 1, "total_steps": 2, "clause": "6.5", "required_level": 3}
     got = a.mails("6 clear 9,500 (refund 2,500)", fid)
     assert_mails(got, {
         summary(fid, "ส่งเคลียร์เงินแล้ว"): ([email_of(REQ)], [ACCOUNT_BOX]),
-        summary(fid, "รอท่านอนุมัติการเคลียร์"): ([email_of(MGR)], [email_of(REQ)]),
+        summary(fid, "รอท่านอนุมัติการเคลียร์"): ([email_of(LEAD)], [email_of(REQ)]),
     })
     pending_html = got[summary(fid, "รอท่านอนุมัติการเคลียร์")]["html"][0]
     assert f"{FE}/finance/approvals?tab=clear&amp;doc={fid}" in pending_html
     assert "คืนบริษัท" in pending_html and "2,500.00 บาท" in pending_html
 
-    q = a.c.get("/finance/clear-approvals/pending", params={"employee_id": MGR}).json()
-    assert [(x["form_id"], x["step"], x["total_steps"]) for x in q] == [(fid, 1, 1)]
-    assert a.c.get("/finance/clear-approvals/pending", params={"employee_id": LEAD}).json() == []
+    q = a.c.get("/finance/clear-approvals/pending", params={"employee_id": LEAD}).json()
+    assert [(x["form_id"], x["step"], x["total_steps"]) for x in q] == [(fid, 1, 2)]
     assert a.c.get("/finance/clear-approvals/pending", params={"employee_id": REQ}).json() == []
 
     a.put(fid, "clear-approve", {"action_by": FV}, expect=403)    # accounting is not a clearing approver
-    a.put(fid, "clear-approve", {"action_by": LEAD}, expect=403)  # below the TOA level
+    d = a.put(fid, "clear-approve", {"action_by": LEAD})
+    assert d["status"] == "CLEARING_APPROVAL"
+    assert a.detail(fid)["clear_approval"]["step"] == 2
+    got = a.mails("7a clear-approve step 1 (LEAD)", fid)
+    assert_mails(got, {summary(fid, "รอท่านอนุมัติการเคลียร์"): ([email_of(MGR)], [email_of(REQ)])})
+    a.put(fid, "clear-approve", {"action_by": LEAD}, expect=403)  # the step-1 approver cannot take step 2
     d = a.put(fid, "clear-approve", {"action_by": MGR})
     assert d["status"] == "AWAITING_REVIEW"
-    got = a.mails("7 clear-approve (MGR, one click)", fid)
+    got = a.mails("7b clear-approve step 2 (MGR)", fid)
     letter_subject = "การเคลียร์เงิน Advance ผ่านการอนุมัติครบทุกขั้นแล้ว สมชาย ใจดี"
     assert_mails(got, {letter_subject: ([email_of(REQ)], [ACCOUNT_BOX])})
     letter = got[letter_subject]["html"][0]
@@ -536,16 +545,19 @@ def test_return_resubmit_reapprove_with_superadmin(api):
     assert a.status(fid) == "AWAITING_PAYMENT"
 
 
-def test_superadmin_can_take_the_step_and_clearing(api):
+def test_superadmin_can_take_each_step_and_clearing(api):
     a = api
-    fid = a.submit(12000)
-    a.approve(fid, LEAD, expect=403)  # lv3 below the TOA level (lv5)
-    res = a.approve(fid, SUPER)       # superadmin approves though his own level is 4
+    fid = a.submit(12000)             # 6.5 → ขั้น lv3 แล้ว lv5
+    res = a.approve(fid, SUPER)       # superadmin กดแทนขั้น 1 ได้ แต่ไม่ข้ามขั้น 2 ด้วยระดับตัวเอง (lv4)
+    assert res["status"] == "In Progress"
+    res = a.approve(fid, SUPER)       # แล้วกดขั้น 2 ต่อได้
     assert res["status"] == "Approved"
     a.voucher(fid)
     a.pay(fid, 12000)
     a.clear(fid, [12000])
     a.mails()
+    a.put(fid, "clear-approve", {"action_by": SUPER})
+    assert a.status(fid) == "CLEARING_APPROVAL"
     a.put(fid, "clear-approve", {"action_by": SUPER})
     assert a.status(fid) == "AWAITING_REVIEW"
 
@@ -613,20 +625,19 @@ def test_send_back_then_reclear_same_and_crossing_tier(api):
     assert set(a.mails()) == {summary(fid, "ส่งเคลียร์เงินแล้ว"), summary(fid, "รอท่านอนุมัติการเคลียร์")}
 
 
-def test_clearing_one_step_at_the_toa_level(api):
-    """เคลียร์ 10,000 (6.5) → ขั้นเดียว lv5: อีเมลถึงผู้จัดการ หัวหน้า lv3 กดไม่ได้ ผู้จัดการกดครั้งเดียวจบ"""
+def test_clearing_follows_the_toa_ladder_and_a_manager_may_skip(api):
+    """เคลียร์ 10,000 (6.5) → ขั้น lv3 แล้ว lv5: อีเมลขั้น 1 ถึงหัวหน้า · ผู้จัดการกดขั้น 1 แล้วข้ามขั้น 2 จบในครั้งเดียว"""
     a = api
     fid = a.paid_advance(12000, approver=MGR)
     a.clear(fid, [10000])
     got = a.mails()
-    assert got[summary(fid, "รอท่านอนุมัติการเคลียร์")]["to"] == [email_of(MGR)]
-    a.put(fid, "clear-approve", {"action_by": LEAD}, expect=403)
+    assert got[summary(fid, "รอท่านอนุมัติการเคลียร์")]["to"] == [email_of(LEAD)]
     d = a.put(fid, "clear-approve", {"action_by": MGR})
     assert d["status"] == "AWAITING_REVIEW"
     got = a.mails()
     assert len(got) == 1 and next(iter(got)).startswith("การเคลียร์เงิน Advance ผ่านการอนุมัติครบทุกขั้นแล้ว")
     approved = [r for r in a.detail(fid)["clear_logs"] if r["action"] == "APPROVED"]
-    assert [r["step"] for r in approved] == [1] and {r["action_by"] for r in approved} == {MGR}
+    assert [r["step"] for r in approved] == [1, 2] and {r["action_by"] for r in approved} == {MGR}
 
 
 def test_clear_with_zero_spent_is_handled(api):
@@ -651,9 +662,9 @@ def test_email_test_to_redirects_with_banner(api, monkeypatch):
     assert (m["to"], m["cc"], m["envelope"]) == ("uat@test.local", [], ["uat@test.local"])
     assert m["subject"] == legacy(fid, "รอท่านอนุมัติ")
     assert "อีเมลทดสอบ · ระบบจริงจะส่งถึง:" in m["html"]
-    for real in (email_of(MGR), email_of(REQ)):
+    for real in (email_of(LEAD), email_of(REQ)):          # ขั้น 1 ของ 12,000 = หัวหน้า lv3
         assert real in m["html"], real
-    for not_mailed in (email_of(LEAD), email_of(ASM)):
+    for not_mailed in (email_of(MGR), email_of(ASM)):
         assert not_mailed not in m["html"], not_mailed
 
 

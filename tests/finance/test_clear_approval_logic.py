@@ -33,10 +33,10 @@ def plan(amount, who=AE):
 
 
 def test_ตัดชั้นด้วยยอดที่ใช้จริงไม่ใช่ยอดที่เบิก():
-    """เบิก 25,000 ใช้จริง 18,000 → ต้องเข้าข้อ 6.5 ไม่ใช่ 6.4 · ขั้นเดียวระดับ 5"""
+    """เบิก 25,000 ใช้จริง 18,000 → ต้องเข้าข้อ 6.5 ไม่ใช่ 6.4 · ไล่ขั้นตาม TOA: ระดับ 3 แล้วระดับ 5"""
     p = plan(Decimal("18000"))
     assert p["clause"] == "6.5"
-    assert [s["required_level"] for s in p["steps"]] == [5]
+    assert [s["required_level"] for s in p["steps"]] == [3, 5]
 
 
 def test_ใช้จริงน้อยลงชั้นอนุมัติลดตาม():
@@ -47,7 +47,7 @@ def test_ใช้จริงน้อยลงชั้นอนุมัต�
 def test_ใช้เกินที่เบิกชั้นอนุมัติสูงขึ้น():
     p = plan(Decimal("30000"))
     assert p["clause"] == "6.4"
-    assert [s["required_level"] for s in p["steps"]] == [8]
+    assert [s["required_level"] for s in p["steps"]] == [3, 8]
 
 
 def test_ระดับถึง_TOA_อนุมัติได้_ผู้เบิกอนุมัติเองไม่ได้():
@@ -56,19 +56,23 @@ def test_ระดับถึง_TOA_อนุมัติได้_ผู้�
     assert not cl.can_approve(p, PEOPLE, MAPS, AE, AE, step=1)
 
 
-def test_หัวหน้าที่ระดับไม่ถึง_TOA_อนุมัติไม่ได้():
-    assert not cl.can_approve(plan(Decimal("18000")), PEOPLE, MAPS, AE, PU, step=1)
-    p = plan(Decimal("30000"))          # ต้องระดับ 8
-    assert not cl.can_approve(p, PEOPLE, MAPS, AE, BANK, step=1)
-    assert cl.can_approve(p, PEOPLE, MAPS, AE, PONG, step=1)
+def test_หัวหน้ากดขั้น_1_ได้_ขั้น_2_ต้องระดับ_TOA():
+    p = plan(Decimal("18000"))          # ขั้น 1 ระดับ 3 · ขั้น 2 ระดับ 5
+    assert cl.can_approve(p, PEOPLE, MAPS, AE, PU, step=1)
+    assert not cl.can_approve(p, PEOPLE, MAPS, AE, PU, step=2)
+    assert cl.can_approve(p, PEOPLE, MAPS, AE, BANK, step=2)
+    p = plan(Decimal("30000"))          # ขั้น 2 ต้องระดับ 8
+    assert not cl.can_approve(p, PEOPLE, MAPS, AE, BANK, step=2)
+    assert cl.can_approve(p, PEOPLE, MAPS, AE, PONG, step=2)
 
 
 def test_ระดับสูงกว่าอนุมัติแทนได้():
     assert cl.can_approve(plan(Decimal("1800")), PEOPLE, MAPS, AE, BANK, step=1)
 
 
-def test_กดครั้งเดียวจบ():
-    assert cl.next_step(plan(Decimal("18000")), 1) is None
+def test_ยอดที่ต้องสูงกว่าหัวหน้ามีขั้น_2_ยอดเล็กจบขั้นเดียว():
+    assert cl.next_step(plan(Decimal("18000")), 1) == 2
+    assert cl.next_step(plan(Decimal("18000")), 2) is None
     assert cl.next_step(plan(Decimal("1800")), 1) is None
 
 
