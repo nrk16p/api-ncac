@@ -87,6 +87,8 @@ PEOPLE = {
     "F003": (10, "ตรวจเคลียร์", "บัญชี", 3, ACC_DEPT, "review@test.local"),
     "F004": (11, "ปิดรายการ", "บัญชี", 3, ACC_DEPT, "close@test.local"),
     "F005": (12, "ไม่มีสิทธิ์", "บัญชี", 3, ACC_DEPT, "noperm@test.local"),
+    "F010": (13, "ผู้ช่วย", "หัวหน้าบัญชี", 2, ACC_DEPT, "acc2@test.local"),     # ผู้เบิกแผนกบัญชี
+    "690041": (14, "สุขพัฒน์", "ขั้นพิเศษ", 4, ACC_DEPT, "suk@test.local"),      # ขั้นพิเศษแผนกบัญชี (26/10/2026)
 }
 REQ, LEAD, ASM, MGR, EXEC, DCEO, SUPER = "E100", "E200", "E210", "E300", "E400", "E500", "670108"
 FV, FP, FR, FC, FX = "F001", "F002", "F003", "F004", "F005"
@@ -223,6 +225,8 @@ def _seed(db):
         db.add(FormQuestion(id=qid, form_master_id=1, question_name=name, question_label=name, question_type=qtype,
                             is_required=True, sort_order=order))
     db.add(FinPayeeAccount(employee_id=REQ, bank="KBANK", account_no="1234567890", account_name="สมชาย ใจดี",
+                           status="ACTIVE", created_by="TEST"))
+    db.add(FinPayeeAccount(employee_id="F010", bank="KBANK", account_no="1234567891", account_name="ผู้ช่วย หัวหน้าบัญชี",
                            status="ACTIVE", created_by="TEST"))
     db.commit()
     db.close()
@@ -720,3 +724,24 @@ def test_three_toa_steps_through_the_routes(api):
     assert a.status(fid) == "AWAITING_VOUCHER"
     steps = [s["step"] for s in a.detail(fid)["approval"]["step_approvals"]]
     assert steps == [1, 2, 3]
+
+
+def test_accounting_6_6_needs_690041_as_its_own_step(api):
+    """ขั้นพิเศษแผนกบัญชี (ผู้ใช้สั่ง 26/10/2026): ยอด 1,500 หัวหน้าบัญชีกดจบ · ยอด 4,000 หัวหน้าก่อน แล้วต้อง 690041"""
+    a = api
+    small = a.submit(1500, who="F010")
+    got = a.mails("acc 1,500", small)
+    assert set(got[legacy(small, "รอท่านอนุมัติ")]["to"]) == {email_of(x) for x in ("F001", "F003", "F004", "F005")}
+    assert a.approve(small, "F003")["status"] == "Approved"
+    a.mails()
+
+    fid = a.submit(4000, who="F010")
+    got = a.mails("acc 4,000", fid)
+    assert "ขั้นที่ 1 จาก 2" in got[legacy(fid, "รอท่านอนุมัติ")]["html"][0]
+    a.approve(fid, "F003")
+    got = a.mails("acc 4,000 step 1", fid)
+    assert_mails(got, {legacy(fid, "รอท่านอนุมัติ"): ([email_of("690041")], [email_of("F010")])})
+    a.approve(fid, "F001", expect=403)        # หัวหน้าบัญชีคนอื่นกดขั้นพิเศษไม่ได้
+    res = a.approve(fid, "690041")
+    assert res["status"] == "Approved"
+    assert [s["step"] for s in a.detail(fid)["approval"]["step_approvals"]] == [1, 2]

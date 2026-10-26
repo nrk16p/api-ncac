@@ -156,7 +156,7 @@ def record_approval(db, submission, approver_user_id, decision, remark=None):
         db.add(FormApprovalLog(
             submission_id=submission.id, level_no=skipped, action=rules.ACTION_APPROVED,
             action_by=approver_user_id,
-            remark=rules.skip_remark(skipped, step, decision["approver_level"], by_step[skipped]["required_level"])))
+            remark=rules.skip_note(by_step[skipped], step, decision["approver_level"])))
     if decision["outcome"] == rules.OUTCOME_APPROVED:
         submission.status_approve = "Approved"
     else:
@@ -203,7 +203,7 @@ def suggested_approvers(db, submission) -> dict:
     state = rules.evaluate_step(info, ctx.people, ctx.mappings, requester_id, submission.current_approval_level,
                                 current_round_logs(db, submission.id))
     direct = rules.direct_approvers(ctx.people.values(), requester, state["required_level"], ctx.mappings,
-                                    state["excluded"])
+                                    state["excluded"], state.get("approver"))
     details = advance_repo.people_by_employee_id(db, [p["employee_id"] for p in direct])
     approvers = []
     for p in direct:
@@ -254,7 +254,8 @@ def pending_for(db, employee_id):
         state = rules.evaluate_step(result, ctx.people, ctx.mappings, sub.created_by, sub.current_approval_level,
                                     rounds.get(sub.id, []))
         normal = approver["level"] is not None and rules.may_approve(
-            ctx.people.values(), approver, requester, state["required_level"], ctx.mappings, state["excluded"])
+            ctx.people.values(), approver, requester, state["required_level"], ctx.mappings, state["excluded"],
+            state.get("approver"))
         if not normal and not rules.superadmin_may_approve(employee_id, sub.created_by, requester):
             continue
         items.append({

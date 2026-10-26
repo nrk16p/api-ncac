@@ -585,8 +585,9 @@ def _clear_approver_emails(db: Session, sub, info, ctx, step) -> list:
     if requester is None:
         return []
     eligible = approval_rules.eligible_approvers(ctx.people.values(), requester, spec["required_level"],
-                                                 ctx.mappings, _clear_round_approvers(db, sub.form_id))
-    eligible = approval_rules.notify_approvers(eligible, spec["required_level"], requester)
+                                                 ctx.mappings, _clear_round_approvers(db, sub.form_id),
+                                                 spec.get("approver"))
+    eligible = approval_rules.notify_approvers(eligible, spec["required_level"], requester, spec.get("approver"))
     eligible.sort(key=lambda p: (p["level"], p["employee_id"]))
     ids = [p["id"] for p in eligible if p.get("id") is not None]
     by_id = {u.id: u.email for u in db.query(User).filter(User.id.in_(ids)).all()} if ids else {}
@@ -686,14 +687,15 @@ def clear_approve(form_id: str, body: ClearApproveIn, background_tasks: Backgrou
 
     # ข้ามขั้นแบบเดียวกับตอนขอเบิก: ระดับของคนกดถึงขั้นถัดไปแล้ว ผ่านขั้นนั้นไปด้วยเลย
     # superadmin กดแทนได้ทุกขั้นแต่ไม่ข้ามขั้น (เหมือน approval_logic.decide) — คิดก่อนบันทึกการกดครั้งนี้
-    level = _clear_approver_level(info, ctx, sub.created_by, body.action_by, step, _clear_round_approvers(db, form_id))
+    level, who = _clear_approver_level(info, ctx, sub.created_by, body.action_by, step,
+                                       _clear_round_approvers(db, form_id))
     _clear_log(db, form_id, step, "APPROVED", info["clause"], adv.amount_actual,
                body.remark, body.action_by)
-    for skipped in approval_rules.skipped_steps(info["steps"], step, level):
+    for skipped in approval_rules.skipped_steps(info["steps"], step, level, who):
         spec = clr.step_spec(info, skipped)
         _clear_log(db, form_id, skipped, "APPROVED", info["clause"], adv.amount_actual,
-                   approval_rules.skip_remark(skipped, step, level, spec["required_level"]), body.action_by)
-    _outcome, nxt = approval_rules.next_after_approval(info["steps"], step, level)
+                   approval_rules.skip_note(spec, step, level), body.action_by)
+    _outcome, nxt = approval_rules.next_after_approval(info["steps"], step, level, who)
     if nxt is None:
         adv.fin_status = logic.FIN_CLEARING_SUBMITTED
         adv.clear_approval_level = None
@@ -713,14 +715,16 @@ def clear_approve(form_id: str, body: ClearApproveIn, background_tasks: Backgrou
 
 
 def _clear_approver_level(info, ctx, requester_id, approver_id, step, already):
-    """ระดับที่ใช้ตัดสินการข้ามขั้น — superadmin ที่กดได้เพราะสิทธิ์พิเศษนับเป็นระดับของขั้นนี้พอดี (ไม่ข้าม)"""
+    """(ระดับ, ตัวตน) ที่ใช้ตัดสินการข้ามขั้น — superadmin ที่กดได้เพราะสิทธิ์พิเศษนับเป็นระดับของขั้นนี้พอดี
+    และไม่นับตัวตน (ไม่ข้ามขั้นพิเศษ)"""
     approver = ctx.people.get(approver_id)
     requester = ctx.people.get(requester_id) or {}
     spec = clr.step_spec(info, step)
     if approver is not None and approval_rules.may_approve(ctx.people.values(), approver, requester,
-                                                           spec["required_level"], ctx.mappings, already):
-        return approver.get("level")
-    return spec["required_level"]
+                                                           spec["required_level"], ctx.mappings, already,
+                                                           spec.get("approver")):
+        return approver.get("level"), approver_id
+    return spec["required_level"], None
 
 
 @router.put("/advances/{form_id}/clear-reject")

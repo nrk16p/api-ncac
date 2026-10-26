@@ -461,9 +461,10 @@ def step_approver_emails(db, submission) -> list:
     if requester is None:
         return []
     eligible = rules.eligible_approvers(ctx.people.values(), requester, state["required_level"], ctx.mappings,
-                                        state["excluded"])
+                                        state["excluded"], state.get("approver"))
     # อีเมลถึงเฉพาะคนระดับที่ TOA กำหนด คนระดับสูงกว่ายังกดอนุมัติผ่านลิงก์ได้ (ผู้ใช้สั่ง 21/10/2026)
-    eligible = rules.notify_approvers(eligible, state["required_level"], requester)
+    # ขั้นพิเศษ (26/10/2026) ส่งถึงคนที่กำหนดคนเดียว
+    eligible = rules.notify_approvers(eligible, state["required_level"], requester, state.get("approver"))
     eligible.sort(key=lambda p: (p["level"], p["employee_id"]))
     ids = [p["id"] for p in eligible if p.get("id") is not None]
     by_id = {u.id: u.email for u in db.query(User).filter(User.id.in_(ids)).all()} if ids else {}
