@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
-"""ขั้นพิเศษแผนกบัญชี (ผู้ใช้สั่ง 26/10/2026): ใบของแผนกบัญชียอด 2,000.01–5,000 (ข้อ 6.6) ต้องผ่าน 690041 เป็นอีกขั้น
-ต่อจากขั้นตาม TOA เช่น 610055 ขอ 1,500 นุ่น (พุทธชาติ) กดจบ · ขอ 5,000 นุ่นก่อน แล้วค่อย 690041"""
+"""ขั้นพิเศษแผนกบัญชี (ผู้ใช้สั่ง 26/10/2026): ใบของแผนกบัญชียอดเกิน 2,000 ทุกยอดต้องผ่าน 690041 เป็นอีกขั้น
+แทรกตามระดับของเขา (ระดับ 4: หลังขั้นระดับ 3 ก่อนขั้นระดับ 5) เช่น 610055 ขอ 1,500 นุ่น (พุทธชาติ) กดจบ
+ขอ 5,000 นุ่น → 690041 · ขอ 15,000 นุ่น → 690041 → เจษฎา"""
 import os
 from decimal import Decimal
 from types import SimpleNamespace as NS
@@ -63,10 +64,18 @@ def test_5000_adds_690041_as_its_own_step_after_the_toa_steps():
     assert info["required_level"] == 3          # ระดับ TOA ของยอดยังเป็นของขั้นตาม TOA
 
 
-def test_only_the_6_6_band():
+def test_every_amount_above_2000_puts_690041_at_step_2_for_610055():
     assert named(plan("R", "2000")) == [None]
-    assert named(plan("R", "2000.01"))[-1] == SUK
-    assert named(plan("R", "5000.01"))[-1] is None   # 6.5 ไม่มีขั้นพิเศษ
+    assert named(plan("R", "2000.01")) == [None, SUK]
+    assert named(plan("R", 15000)) == [None, SUK, None]
+    assert named(plan("R", 60000)) == [None, SUK, None, None]
+    assert named(plan("R", 300000)) == [None, SUK, None, None, None]
+    assert [s["step"] for s in plan("R", 300000)["steps"]] == [1, 2, 3, 4, 5]
+
+
+def test_special_step_sits_at_690041s_level():
+    assert [s["required_level"] for s in plan("R", 15000)["steps"]] == [3, 4, 5]
+    assert named(plan("NOON", 15000)) == [SUK, None]       # ผู้เบิกระดับ 3: ขั้น TOA ระดับ 5 อยู่หลังเขา
 
 
 def test_other_departments_are_untouched():
@@ -83,10 +92,10 @@ def test_inactive_690041_drops_the_step():
 
 
 def test_the_manager_needs_690041_too():
-    info = plan("BANK", 5000)                       # TOA ต้องระดับ 6 แล้วยังต้องผ่าน 690041 (ระดับ 4)
-    assert named(info)[-1] == SUK
-    logs = round_logs((1, "N9"))
-    assert A.decide(info, PEOPLE, NO_MAP, "BANK", SUK, 2, logs)["allowed"] is True
+    info = plan("BANK", 5000)                       # TOA ต้องระดับ 6 แต่ต้องผ่าน 690041 (ระดับ 4) ก่อน
+    assert named(info) == [SUK, None]
+    d = A.decide(info, PEOPLE, NO_MAP, "BANK", SUK, 1, [])
+    assert (d["allowed"], d["outcome"], d["next_step"]) == (True, A.OUTCOME_STEP, 2)
 
 
 # ---------------------------- ใครกดขั้นพิเศษได้ ----------------------------
@@ -106,6 +115,29 @@ def test_a_higher_level_at_step_1_does_not_skip_the_special_step():
     assert (d["allowed"], d["outcome"], d["next_step"], d["skipped"]) == (True, A.OUTCOME_STEP, 2, [])
 
 
+def test_15000_goes_noon_then_690041_then_bank():
+    info = plan("R", 15000)
+    d = A.decide(info, PEOPLE, NO_MAP, "R", "NOON", 1, [])
+    assert (d["outcome"], d["next_step"]) == (A.OUTCOME_STEP, 2)
+    d = A.decide(info, PEOPLE, NO_MAP, "R", SUK, 2, round_logs((1, "NOON")))
+    assert (d["allowed"], d["outcome"], d["next_step"]) == (True, A.OUTCOME_STEP, 3)
+    d = A.decide(info, PEOPLE, NO_MAP, "R", "BANK", 3, round_logs((1, "NOON"), (2, SUK)))
+    assert (d["allowed"], d["outcome"]) == (True, A.OUTCOME_APPROVED)
+
+
+def test_bank_approving_step_1_early_still_covers_his_level_after_the_special_step():
+    info = plan("R", 15000)                         # 3 → 690041 → 5
+    d = A.decide(info, PEOPLE, NO_MAP, "R", "BANK", 1, [])
+    assert (d["outcome"], d["next_step"], d["skipped"]) == (A.OUTCOME_STEP, 2, [3])
+    d = A.decide(info, PEOPLE, NO_MAP, "R", SUK, 2, round_logs((1, "BANK"), (3, "BANK")))
+    assert (d["allowed"], d["outcome"], d["skipped"]) == (True, A.OUTCOME_APPROVED, [])
+
+
+def test_superadmin_on_the_special_step_does_not_skip_the_levels_above():
+    d = A.decide(plan("R", 15000), PEOPLE, NO_MAP, "R", "670108", 2, round_logs((1, "NOON")))
+    assert (d["allowed"], d["outcome"], d["next_step"]) == (True, A.OUTCOME_STEP, 3)
+
+
 def test_690041_at_step_1_also_covers_the_special_step():
     d = A.decide(plan("R", 5000), PEOPLE, NO_MAP, "R", SUK, 1, [])
     assert (d["allowed"], d["outcome"], d["skipped"]) == (True, A.OUTCOME_APPROVED, [2])
@@ -121,13 +153,13 @@ def test_skip_note_for_the_special_step():
 # ---------------------------- อีเมล ----------------------------
 
 def test_special_step_state_and_email_go_to_690041_only():
-    info = plan("BANK", 5000)
-    logs = round_logs((1, "N9"))
-    state = A.evaluate_step(info, PEOPLE, NO_MAP, "BANK", 2, logs)
+    info = plan("R", 15000)
+    logs = round_logs((1, "NOON"))
+    state = A.evaluate_step(info, PEOPLE, NO_MAP, "R", 2, logs)
     assert state["approver"] == SUK
-    el = A.eligible_approvers(PEOPLE.values(), PEOPLE["BANK"], state["required_level"], NO_MAP, state["excluded"],
+    el = A.eligible_approvers(PEOPLE.values(), PEOPLE["R"], state["required_level"], NO_MAP, state["excluded"],
                               named=state["approver"])
-    got = A.notify_approvers(el, state["required_level"], PEOPLE["BANK"], named=state["approver"])
+    got = A.notify_approvers(el, state["required_level"], PEOPLE["R"], named=state["approver"])
     assert [p["employee_id"] for p in got] == [SUK]
 
 
@@ -168,3 +200,4 @@ def test_clearing_in_the_6_6_band_needs_690041_too():
     assert clr.can_approve(p, PEOPLE, NO_MAP, "R", SUK, step=2)
     assert not clr.can_approve(p, PEOPLE, NO_MAP, "R", "JIRA", step=2)
     assert named(clr.plan(TIERS, PEOPLE, NO_MAP, "R", Decimal("1500"))) == [None]
+    assert named(clr.plan(TIERS, PEOPLE, NO_MAP, "R", Decimal("18000"))) == [None, SUK, None]

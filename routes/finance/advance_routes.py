@@ -633,6 +633,18 @@ def _clear_round_approvers(db: Session, form_id: str) -> tuple:
     return tuple(ids)
 
 
+def _clear_round_steps(db: Session, form_id: str) -> set:
+    """ขั้นที่อนุมัติไปแล้วในรอบนี้ (นับจาก SUBMITTED ล่าสุด) — ขั้นที่ข้ามไว้ก่อนแล้วไม่ต้องรอซ้ำ"""
+    rows = (db.query(FinClearApprovalLog)
+            .filter(FinClearApprovalLog.form_id == form_id)
+            .order_by(FinClearApprovalLog.id).all())
+    start = 0
+    for i, r in enumerate(rows):
+        if r.action == "SUBMITTED":
+            start = i + 1
+    return {r.step for r in rows[start:] if r.action == "APPROVED" and r.step is not None}
+
+
 def _clear_log(db, form_id, step, action, clause=None, amount=None, remark=None, action_by=None):
     db.add(FinClearApprovalLog(form_id=form_id, step=step, action=action, clause=clause,
                                amount_actual=amount, remark=remark, action_by=action_by))
@@ -691,11 +703,12 @@ def clear_approve(form_id: str, body: ClearApproveIn, background_tasks: Backgrou
                                        _clear_round_approvers(db, form_id))
     _clear_log(db, form_id, step, "APPROVED", info["clause"], adv.amount_actual,
                body.remark, body.action_by)
-    for skipped in approval_rules.skipped_steps(info["steps"], step, level, who):
+    done = _clear_round_steps(db, form_id)
+    for skipped in approval_rules.skipped_steps(info["steps"], step, level, who, done):
         spec = clr.step_spec(info, skipped)
         _clear_log(db, form_id, skipped, "APPROVED", info["clause"], adv.amount_actual,
                    approval_rules.skip_note(spec, step, level), body.action_by)
-    _outcome, nxt = approval_rules.next_after_approval(info["steps"], step, level, who)
+    _outcome, nxt = approval_rules.next_after_approval(info["steps"], step, level, who, done)
     if nxt is None:
         adv.fin_status = logic.FIN_CLEARING_SUBMITTED
         adv.clear_approval_level = None

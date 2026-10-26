@@ -17,9 +17,10 @@ from services.finance.permission_logic import is_superadmin
 
 ORG_WIDE_LEVEL = 9
 
-# ขั้นพิเศษ (ผู้ใช้สั่ง 26/10/2026): ใบของแผนกบัญชี (6) ยอดข้อ 6.6 (2,000.01–5,000) ต้องผ่าน 690041 อีกขั้น
-# ต่อจากขั้นตาม TOA เช่น 610055 ขอ 1,500 หัวหน้า (ระดับ 3) กดจบ · ขอ 5,000 หัวหน้าก่อน แล้วค่อย 690041
-SPECIAL_STEPS = ({"department_id": 6, "clause": "6.6", "employee_id": "690041"},)
+# ขั้นพิเศษ (ผู้ใช้สั่ง 26/10/2026): ใบของแผนกบัญชี (6) ยอดเกิน 2,000 (ทุกข้อยกเว้น 6.7) ต้องผ่าน 690041 อีกขั้น
+# แทรกตามระดับของเขา เช่น 610055 ขอ 1,500 หัวหน้า (ระดับ 3) กดจบ · ขอ 5,000 หัวหน้า → 690041
+# ขอ 15,000 หัวหน้า → 690041 → ผู้จัดการ (ระดับ 5)
+SPECIAL_STEPS = ({"department_id": 6, "except_clauses": ("6.7",), "employee_id": "690041"},)
 TAB_MINE = "mine"
 TAB_DELEGABLE = "delegable"
 
@@ -111,22 +112,24 @@ def _covers(spec: Mapping, approver_level: Optional[int], approver_id=None) -> b
     return approver_level is not None and approver_level >= spec["required_level"]
 
 
-def skipped_steps(steps: list, current_step: int, approver_level: Optional[int], approver_id=None) -> list:
-    """Later steps this approval already satisfies (dynamic skip), up to the first one it doesn't."""
-    skipped = []
-    for spec in sorted(steps, key=lambda s: s["step"]):
-        if spec["step"] <= current_step:
-            continue
-        if not _covers(spec, approver_level, approver_id):
-            break
-        skipped.append(spec["step"])
-    return skipped
+def skipped_steps(steps: list, current_step: int, approver_level: Optional[int], approver_id=None,
+                  done: Iterable[int] = ()) -> list:
+    """Later steps this approval also satisfies (dynamic skip) and that are not approved yet in this round (`done`).
+    Steps climb by level, so a level skip only jumps over a ขั้นพิเศษ it does not cover: e.g. 3 → 690041 → 5
+    approved at step 1 by a level-5 manager logs step 3 now, and step 2 still waits for 690041."""
+    done = set(done)
+    return [spec["step"] for spec in sorted(steps, key=lambda s: s["step"])
+            if spec["step"] > current_step and spec["step"] not in done
+            and _covers(spec, approver_level, approver_id)]
 
 
-def next_after_approval(steps: list, current_step: int, approver_level: Optional[int], approver_id=None) -> tuple:
-    """('approved', None) when nothing is left after the skip, else ('step', the next step number)."""
+def next_after_approval(steps: list, current_step: int, approver_level: Optional[int], approver_id=None,
+                        done: Iterable[int] = ()) -> tuple:
+    """('approved', None) when nothing is left after this approval, else ('step', the next step number).
+    A step already approved in this round (`done`, e.g. by an earlier skip) is not waited for again."""
+    done = set(done)
     for spec in sorted(steps, key=lambda s: s["step"]):
-        if spec["step"] <= current_step:
+        if spec["step"] <= current_step or spec["step"] in done:
             continue
         if not _covers(spec, approver_level, approver_id):
             return OUTCOME_STEP, spec["step"]
@@ -319,7 +322,7 @@ def special_step_approver(requester: Optional[Mapping], tier: Mapping, people: M
     if requester is None:
         return None
     for rule in SPECIAL_STEPS:
-        if requester.get("department_id") == rule["department_id"] and tier["clause"] == rule["clause"]:
+        if requester.get("department_id") == rule["department_id"] and tier["clause"] not in rule["except_clauses"]:
             who = people.get(rule["employee_id"])
             if who is not None and who.get("active") and rule["employee_id"] != requester.get("employee_id"):
                 return rule["employee_id"]
@@ -340,9 +343,11 @@ def evaluate(tiers, people: Mapping[str, Mapping], mappings, requester_employee_
     if direct is None:  # the final step's approvers also qualify for step 1, so this covers every step
         raise AdvanceRuleError(MSG_NO_APPROVER)
     special = special_step_approver(requester, tier, people)
-    if special is not None:
-        steps = steps + [{"step": len(steps) + 1, "required_level": required, "label": special_label(special),
-                          "approver": special}]
+    if special is not None:  # แทรกตามระดับของคนที่กำหนด: หลังขั้นที่ระดับไม่เกินเขา ก่อนขั้นที่สูงกว่า
+        level = people[special].get("level") or 0
+        at = next((i for i, s in enumerate(steps) if s["required_level"] > level), len(steps))
+        named_step = {"required_level": level, "label": special_label(special), "approver": special}
+        steps = [{**s, "step": i} for i, s in enumerate(steps[:at] + [named_step] + steps[at:], start=STEP_LEADER)]
     return {"clause": tier["clause"], "approver_label": tier["approver_label"], "min_level": tier["min_level"],
             "required_level": required, "direct_level": direct, "steps": steps}
 
@@ -383,7 +388,8 @@ def decide(evaluated: Mapping, people: Mapping[str, Mapping], mappings, requeste
         # superadmin กดแทนได้ทุกขั้น แต่ผ่านแค่ขั้นนี้ ไม่ข้ามขั้นถัดไปด้วยระดับหรือตัวตนของตัวเอง
         allowed, level, who = True, state["required_level"], None
     steps = evaluated["steps"]
-    outcome, next_step = next_after_approval(steps, state["step"], level, who)
+    done = {a["step"] for a in step_approvals(round_logs)}
+    outcome, next_step = next_after_approval(steps, state["step"], level, who, done)
     return {"allowed": allowed, "step": state["step"], "total_steps": state["total_steps"], "steps": steps,
             "approver_level": level, "outcome": outcome, "next_step": next_step,
-            "skipped": skipped_steps(steps, state["step"], level, who)}
+            "skipped": skipped_steps(steps, state["step"], level, who, done)}
