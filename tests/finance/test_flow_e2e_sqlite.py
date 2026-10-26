@@ -517,6 +517,26 @@ def test_reject_at_step_one(api):
     a.approve(fid, MGR, expect=400)
 
 
+def test_finance_sends_a_wrong_voucher_back_to_accounting(api):
+    """ผู้ใช้แจ้ง 26/10/2026: บัญชีตั้งเบิกแล้วใส่เลขผิด การเงินกดย้อนกลับ บัญชีแก้เลขแล้วการเงินจ่ายต่อได้
+    (ไม่ต้องกลับไปอนุมัติใหม่ ต่างจากตีกลับให้ผู้เบิกแก้ไข)."""
+    a = api
+    fid = a.submit(3000)
+    assert a.approve(fid, ASM)["status"] == "Approved"
+    a.voucher(fid)
+    a.outbox.take()
+    a.put(fid, "reject-voucher", {"action_by": FP, "remark": "  "}, expect=422)  # schema: reason required
+    a.put(fid, "reject-voucher", {"action_by": REQ, "remark": "เลขผิด"}, expect=403)
+    d = a.put(fid, "reject-voucher", {"action_by": FP, "remark": "เลขตั้งเบิกผิด"})
+    assert d["status"] == "AWAITING_VOUCHER" and d["fin"]["fin_status"] == "VOUCHER_REJECTED"
+    assert d["approval_logs"][-1]["action"] == "APPROVED"  # approval stands
+    d = a.put(fid, "voucher", {"action_by": FV, "voucher_no": "PV-2", "voucher_date": today().isoformat()})
+    assert d["status"] == "AWAITING_PAYMENT" and d["fin"]["voucher_no"] == "PV-2"
+    assert [log["action"] for log in d["fin_logs"]] == ["VOUCHER", "VOUCHER_REJECT", "VOUCHER"]
+    assert a.pay(fid, 3000)["status"] == "AWAITING_CLEARING"
+    a.put(fid, "reject-voucher", {"action_by": FP, "remark": "ช้าไป"}, expect=409)  # paid already
+
+
 def test_return_resubmit_reapprove_with_superadmin(api):
     a = api
     fid = a.submit(4000)
