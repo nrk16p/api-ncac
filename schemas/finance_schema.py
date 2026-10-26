@@ -104,6 +104,15 @@ class ConfirmIn(_Body):
     expected_clear_submitted_at: Optional[datetime] = None
 
 
+class DocNumbersIn(_Body):
+    """การเงินแก้เลขเอกสารที่กรอกผิด (26/10/2026): ส่งเฉพาะช่องที่จะแก้ · เหตุผลบังคับ (เช็กใน check_doc_numbers)"""
+    action_by: str
+    voucher_no: Optional[str] = Field(default=None, max_length=50)
+    payment_doc_no: Optional[str] = Field(default=None, max_length=50)
+    clear_doc_no: Optional[str] = Field(default=None, max_length=100)
+    remark: Optional[str] = Field(default=None, max_length=1000)
+
+
 class ClearApproveIn(_Body):
     action_by: str
     remark: Optional[str] = Field(default=None, max_length=500)

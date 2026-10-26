@@ -18,7 +18,7 @@ from models.finance_model import FinClearApprovalLog, FinAccount, FinAdvance, Fi
 from models.master_model import FormApprovalLog
 from models.user_model import User
 from schemas.finance_schema import (
-    ClearApproveIn, ClearRejectIn,
+    ClearApproveIn, ClearRejectIn, DocNumbersIn,
     AccountCreate, AccountUpdate, ClearIn, ConfirmIn, OverdueRemindIn, PayIn, RejectVoucherIn, ResubmitIn, ReturnIn, SendBackIn,
     VoucherIn,
 )
@@ -473,6 +473,25 @@ def reject_voucher(form_id: str, body: RejectVoucherIn, db: Session = Depends(ge
     adv.fin_status = logic.FIN_VOUCHER_REJECTED
     db.add(FinAdvanceLog(advance_id=adv.id, action="VOUCHER_REJECT", remark=body.remark.strip(),
                          action_by=body.action_by))
+    return _commit_and_return(db, form_id)
+
+
+@router.put("/advances/{form_id}/doc-numbers")
+def edit_doc_numbers(form_id: str, body: DocNumbersIn, db: Session = Depends(get_db)):
+    """การเงินแก้เลขที่ตั้งเบิก / เลขที่ทำจ่าย / เลขที่เคลียร์ที่กรอกผิด (ผู้ใช้สั่ง 26/10/2026) ทุกสถานะหลังตั้งเบิก รวมปิดแล้ว
+    ไม่เปลี่ยนสถานะ ไม่ส่งอีเมล · บันทึก DOC_NO_EDIT (เลขเดิม → เลขใหม่ + เหตุผล)"""
+    require_permission(db, body.action_by, perms.PERM_PAY)
+    _, adv, status = _load_for_update(db, form_id)
+    current = _snapshot(adv, logic.DOC_NO_FIELDS)
+    try:
+        changes = logic.check_doc_numbers(status, current, {f: getattr(body, f) for f in logic.DOC_NO_FIELDS},
+                                          remark=body.remark)
+    except logic.AdvanceRuleError as exc:
+        raise _rule_error(exc)
+    for field, value in changes.items():
+        setattr(adv, field, value)
+    db.add(FinAdvanceLog(advance_id=adv.id, action="DOC_NO_EDIT", changes=logic.diff_fields(current, changes),
+                         remark=body.remark.strip(), action_by=body.action_by))
     return _commit_and_return(db, form_id)
 
 

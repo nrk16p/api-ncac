@@ -342,6 +342,31 @@ def check_clear_doc_no(value) -> str:
     return text
 
 
+DOC_NO_LABELS = {"voucher_no": "เลขที่ตั้งเบิก", "payment_doc_no": "เลขที่ทำจ่าย", "clear_doc_no": "เลขที่เอกสารเคลียร์เงิน"}
+DOC_NO_EDIT_STATUSES = (AWAITING_PAYMENT, AWAITING_CLEARING, SENT_BACK, CLEARING_APPROVAL, AWAITING_REVIEW, CLOSED)
+
+
+def check_doc_numbers(status, current: Mapping, new: Mapping, *, remark) -> dict:
+    """การเงินแก้เลขเอกสารที่กรอกผิด (ผู้ใช้สั่ง 26/10/2026): เลขที่ตั้งเบิก / เลขที่ทำจ่าย / เลขที่เคลียร์ ทุกสถานะหลังตั้งเบิก
+    รวมปิดรายการแล้ว · แก้ได้เฉพาะเลขที่มีอยู่แล้ว · ต้องมีเหตุผล · เลขที่เคลียร์ใช้กฎเดียวกับตอนปิดรายการ
+    `new` = {field: value} ที่ส่งมา (None = ไม่แก้ช่องนั้น) · คืน {field: ค่าใหม่} เฉพาะช่องที่เปลี่ยนจริง"""
+    _require_status(status, DOC_NO_EDIT_STATUSES, "แก้ไขเลขที่เอกสาร")
+    _require(bool(remark and remark.strip()), "กรุณาระบุเหตุผลที่แก้ไข")
+    changes = {}
+    for field in DOC_NO_FIELDS:
+        value = new.get(field)
+        if value is None:
+            continue
+        if current.get(field) is None:
+            raise InvalidTransition(f"ยังไม่มี{DOC_NO_LABELS[field]}ให้แก้ไข กรุณารีเฟรชหน้าจอ")
+        text = check_clear_doc_no(value) if field == "clear_doc_no" else str(value).strip()
+        _require(bool(text), f"กรุณากรอก{DOC_NO_LABELS[field]}")
+        if text != current.get(field):
+            changes[field] = text
+    _require(bool(changes), "ไม่มีเลขที่เปลี่ยน")
+    return changes
+
+
 def check_original_received(received_date, today) -> date:
     """ปิดรายการได้เมื่อรับเอกสารตัวจริงแล้ว พร้อมวันที่รับ (ผู้ใช้สั่ง 21/10/2026)"""
     _require(received_date is not None, "กรุณาติ๊กรับเอกสารตัวจริงแล้ว และใส่วันที่รับเอกสารตัวจริง")
