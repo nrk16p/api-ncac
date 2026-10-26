@@ -459,3 +459,33 @@ def test_step_approver_emails_selection(monkeypatch):
     out = fm.step_approver_emails(_Db(users), sub1)
     assert out == ["a@x.com", "map@x.com"]
     assert "ex@x.com" not in out and "r@x.com" not in out and "out@x.com" not in out and "big@x.com" not in out
+
+
+# ---- อีเมลรออนุมัติถึงคนสาขาเดียวกับผู้เบิกก่อน (ผู้ใช้สั่ง 26/10/2026) ทั้งตอนขอเบิกและตอนเคลียร์
+
+def _branch_people():
+    def at(eid, uid, level, site):
+        return {**_person(eid, uid, level, 10), "site_id": site}
+    return {p["employee_id"]: p for p in (at("R", 1, 2, 2), at("LKB", 2, 3, 2), at("SRB", 3, 3, 3))}
+
+
+_BRANCH_USERS = [NS(id=2, email="lkb@x.com"), NS(id=3, email="srb@x.com")]
+
+
+def test_step_approver_emails_prefer_the_requester_branch(monkeypatch):
+    ctx = approval_repo.ApprovalContext(tiers=[], people=_branch_people(), mappings={})
+    monkeypatch.setattr(approval_repo, "load_context", lambda db, fresh=False: ctx)
+    monkeypatch.setattr(approval_repo, "describe", lambda db, eid, amount, ctx=None: {
+        "steps": [{"step": 1, "required_level": 3, "label": "x"}]})
+    monkeypatch.setattr(approval_repo, "_amount_of", lambda db, sid: 1500)
+    monkeypatch.setattr(approval_repo, "current_round_logs", lambda db, sid: [])
+    sub = NS(id=1, created_by="R", current_approval_level=1)
+    assert fm.step_approver_emails(_Db(_BRANCH_USERS), sub) == ["lkb@x.com"]
+
+
+def test_clear_approver_emails_prefer_the_requester_branch(monkeypatch):
+    ctx = approval_repo.ApprovalContext(tiers=[], people=_branch_people(), mappings={})
+    monkeypatch.setattr(ar, "_clear_round_approvers", lambda db, form_id: ())
+    info = {"steps": [{"step": 1, "required_level": 3, "label": "x"}]}
+    sub = NS(id=1, created_by="R", form_id="ADV-2610-001")
+    assert ar._clear_approver_emails(_Db(_BRANCH_USERS), sub, info, ctx, 1) == ["lkb@x.com"]

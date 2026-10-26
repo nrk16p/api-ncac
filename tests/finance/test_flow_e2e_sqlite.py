@@ -671,3 +671,13 @@ def test_account_mailbox_override(api, monkeypatch):
 def test_model_check_constraint_matches_prod_sql():
     ck = next(c for c in FinAdvance.__table__.constraints if getattr(c, "name", None) == "ck_fin_advances_fin_status")
     assert "CLEAR_PENDING" in str(ck.sqltext)
+
+
+def test_load_people_carries_the_branch(api):
+    """อีเมลสาขาก่อน (26/10/2026) ต้องรู้สาขาของทุกคน — load_people อ่าน users.site_id"""
+    from services.finance import approval_repo
+    db = api.Session()
+    try:
+        assert approval_repo.load_people(db)[REQ]["site_id"] == 1
+    finally:
+        db.close()

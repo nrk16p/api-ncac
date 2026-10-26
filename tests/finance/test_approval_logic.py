@@ -198,10 +198,14 @@ class TestDivisionFallback:
         assert [p["employee_id"] for p in A.eligible_approvers(people, self.REQ, 5, {})] == ["O"]
         assert not A.may_approve(people, self.HEAD, self.REQ, 5, {})
 
-    def test_no_fallback_when_a_division_mapping_covers_it(self):
-        mapped = staff("M", 6, 40, 40)
+    def test_division_mapping_does_not_block_the_fallback(self):
+        # ผู้ดูแลฝ่ายที่ผูกไว้ (form_approver_divisions) ไม่นับว่าอยู่ในแผนก — ข้อมูลจริง 26/10/2026 ผู้ดูแลฝ่ายระดับ 7–8
+        # ครอบทุกฝ่าย ถ้านับ fallback จะไม่เกิดเลย และใบยอดเล็กข้ามหัวหน้าในฝ่ายไปหาผู้บริหาร
+        mapped = staff("M", 8, 40, 40)
         people = [self.REQ, self.HEAD, mapped]
-        assert [p["employee_id"] for p in A.eligible_approvers(people, self.REQ, 5, {"M": {18}})] == ["M"]
+        assert A.needs_division_fallback(people, self.REQ, 5, {"M": {18}})
+        assert sorted(p["employee_id"] for p in A.eligible_approvers(people, self.REQ, 5, {"M": {18}})) == ["H", "M"]
+        assert [p["employee_id"] for p in A.direct_approvers(people, self.REQ, 5, {"M": {18}})] == ["H"]
 
     def test_fallback_stays_inside_the_division(self):
         other = staff("X", 5, 50, 50)

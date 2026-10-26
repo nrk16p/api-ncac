@@ -41,7 +41,7 @@ def load_people(db):
     return {
         user.employee_id: {"employee_id": user.employee_id, "id": user.id, "level": level,
                            "department_id": user.department_id, "division_id": division_id,
-                           "active": user.employee_status == "Active"}
+                           "site_id": user.site_id, "active": user.employee_status == "Active"}
         for user, level, division_id in rows if user.employee_id
     }
 

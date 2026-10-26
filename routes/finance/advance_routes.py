@@ -586,7 +586,7 @@ def _clear_approver_emails(db: Session, sub, info, ctx, step) -> list:
         return []
     eligible = approval_rules.eligible_approvers(ctx.people.values(), requester, spec["required_level"],
                                                  ctx.mappings, _clear_round_approvers(db, sub.form_id))
-    eligible = approval_rules.notify_approvers(eligible, spec["required_level"])
+    eligible = approval_rules.notify_approvers(eligible, spec["required_level"], requester)
     eligible.sort(key=lambda p: (p["level"], p["employee_id"]))
     ids = [p["id"] for p in eligible if p.get("id") is not None]
     by_id = {u.id: u.email for u in db.query(User).filter(User.id.in_(ids)).all()} if ids else {}

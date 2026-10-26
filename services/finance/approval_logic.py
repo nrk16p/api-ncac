@@ -188,20 +188,22 @@ def can_approve(approver: Mapping, requester: Mapping, required: int, mapped_div
     return division in set(mapped_divisions) or (widen_to_division and approver.get("division_id") == division)
 
 
-def _in_department_scope(approver: Mapping, requester: Mapping, mapped_divisions: Iterable[int]) -> bool:
-    if requester.get("department_id") is not None and approver.get("department_id") == requester["department_id"]:
-        return True
-    return requester.get("division_id") is not None and requester["division_id"] in set(mapped_divisions)
+def _in_own_department(approver: Mapping, requester: Mapping) -> bool:
+    return requester.get("department_id") is not None and approver.get("department_id") == requester["department_id"]
 
 
 def needs_division_fallback(people: Iterable[Mapping], requester: Mapping, required: int,
                             mappings: Mapping[str, Iterable[int]], excluded: Iterable[int] = ()) -> bool:
-    """กติกาเดียวกับฟอร์ม IT (25/10/2026): หาผู้อนุมัติในแผนกก่อน (รวมผู้ดูแลฝ่ายใน form_approver_divisions)
-    ถ้าไม่มีใครเลย ค่อยขยายไปคนในฝ่ายเดียวกัน — ผู้บริหารระดับ ORG_WIDE_LEVEL ไม่นับว่าอยู่ในแผนก"""
+    """หาผู้อนุมัติในแผนกของผู้เบิกก่อน ถ้าในแผนกไม่มีใครอนุมัติได้เลย ค่อยขยายไปคนในฝ่ายเดียวกัน (25/10/2026)
+
+    นับเฉพาะคนในแผนกของผู้เบิกจริง ๆ — ผู้ดูแลฝ่าย (form_approver_divisions) กับผู้บริหารระดับ ORG_WIDE_LEVEL
+    ต่างแผนกไม่นับ (26/10/2026: ผู้ดูแลฝ่ายระดับ 7–8 ครอบเกือบทุกฝ่าย ถ้านับ fallback ไม่เกิดเลย
+    ใบยอดเล็กจึงข้ามหัวหน้าในฝ่ายไปหาผู้บริหาร 168 กรณีจากการลองกับข้อมูลจริง เทียบ 45 กรณีก่อนย้ายแผนก)
+    """
     if requester is None or requester.get("division_id") is None:
         return False
     excluded = frozenset(excluded)
-    return not any(_in_department_scope(p, requester, mappings.get(p["employee_id"], ()))
+    return not any(_in_own_department(p, requester)
                    and can_approve(p, requester, required, mappings.get(p["employee_id"], ()), excluded)
                    for p in people)
 
@@ -224,14 +226,20 @@ def _eligible(people: Iterable[Mapping], requester: Mapping, required: int,
                            widen_to_division=widen)]
 
 
-def notify_approvers(eligible: Iterable[Mapping], required: int) -> list:
+def notify_approvers(eligible: Iterable[Mapping], required: int, requester: Optional[Mapping] = None) -> list:
     """ใครควร "ได้รับอีเมล" (ผู้ใช้สั่ง 21/10/2026): เฉพาะคนระดับที่ TOA กำหนด
     = ชั้นต่ำสุดในกลุ่มที่อนุมัติได้ (ถ้าไม่มีใครระดับตรงพอดี ใช้ชั้นถัดขึ้นไปที่มีคน)
     คนระดับสูงกว่ายังกดอนุมัติได้เหมือนเดิมผ่านลิงก์ใบ แค่ไม่ได้อีเมล
+
+    สาขาก่อน (ผู้ใช้สั่ง 26/10/2026): ถ้าสาขาของผู้เบิก (site_id) มีคนอนุมัติได้ ส่งเฉพาะคนสาขานั้น
+    (ชั้นต่ำสุดในสาขา) ถ้าสาขานั้นไม่มีใครเลย ค่อยส่งตามชั้นต่ำสุดจากทุกสาขา · สิทธิ์กดอนุมัติไม่เปลี่ยน
     """
     people = [p for p in eligible if p.get("level") is not None and p["level"] >= required]
     if not people:
         return []
+    site = requester.get("site_id") if requester else None
+    same_site = [p for p in people if site is not None and p.get("site_id") == site]
+    people = same_site or people
     lowest = min(p["level"] for p in people)
     return [p for p in people if p["level"] == lowest]
 
