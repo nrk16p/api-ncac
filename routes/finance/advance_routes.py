@@ -717,8 +717,8 @@ def _clear_approver_level(info, ctx, requester_id, approver_id, step, already):
     approver = ctx.people.get(approver_id)
     requester = ctx.people.get(requester_id) or {}
     spec = clr.step_spec(info, step)
-    if approver is not None and approval_rules.can_approve(approver, requester, spec["required_level"],
-                                                           ctx.mappings.get(approver_id, ()), already):
+    if approver is not None and approval_rules.may_approve(ctx.people.values(), approver, requester,
+                                                           spec["required_level"], ctx.mappings, already):
         return approver.get("level")
     return spec["required_level"]
 

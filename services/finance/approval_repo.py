@@ -253,8 +253,8 @@ def pending_for(db, employee_id):
             continue
         state = rules.evaluate_step(result, ctx.people, ctx.mappings, sub.created_by, sub.current_approval_level,
                                     rounds.get(sub.id, []))
-        normal = approver["level"] is not None and rules.can_approve(
-            approver, requester, state["required_level"], ctx.mappings.get(employee_id, ()), state["excluded"])
+        normal = approver["level"] is not None and rules.may_approve(
+            ctx.people.values(), approver, requester, state["required_level"], ctx.mappings, state["excluded"])
         if not normal and not rules.superadmin_may_approve(employee_id, sub.created_by, requester):
             continue
         items.append({

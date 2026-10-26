@@ -162,9 +162,10 @@ def leader_approved(round_logs: Iterable[Mapping], current_level=None) -> bool:
 # ---------------------------- eligibility ----------------------------
 
 def can_approve(approver: Mapping, requester: Mapping, required: int, mapped_divisions: Iterable[int],
-                excluded: Iterable[int] = ()) -> bool:
+                excluded: Iterable[int] = (), widen_to_division: bool = False) -> bool:
     """`required` is the level of the step being approved; `excluded` holds users.id values (the earlier steps'
-    approvers of the current round)."""
+    approvers of the current round). `widen_to_division` also lets anyone in the requester's division (ฝ่าย)
+    approve — see needs_division_fallback."""
     if not approver.get("active"):
         return False
     level = approver.get("level")
@@ -182,14 +183,45 @@ def can_approve(approver: Mapping, requester: Mapping, required: int, mapped_div
     if approver.get("department_id") == dept:
         return True
     division = requester.get("division_id")
-    return division is not None and division in set(mapped_divisions)
+    if division is None:
+        return False
+    return division in set(mapped_divisions) or (widen_to_division and approver.get("division_id") == division)
+
+
+def _in_department_scope(approver: Mapping, requester: Mapping, mapped_divisions: Iterable[int]) -> bool:
+    if requester.get("department_id") is not None and approver.get("department_id") == requester["department_id"]:
+        return True
+    return requester.get("division_id") is not None and requester["division_id"] in set(mapped_divisions)
+
+
+def needs_division_fallback(people: Iterable[Mapping], requester: Mapping, required: int,
+                            mappings: Mapping[str, Iterable[int]], excluded: Iterable[int] = ()) -> bool:
+    """กติกาเดียวกับฟอร์ม IT (25/10/2026): หาผู้อนุมัติในแผนกก่อน (รวมผู้ดูแลฝ่ายใน form_approver_divisions)
+    ถ้าไม่มีใครเลย ค่อยขยายไปคนในฝ่ายเดียวกัน — ผู้บริหารระดับ ORG_WIDE_LEVEL ไม่นับว่าอยู่ในแผนก"""
+    if requester is None or requester.get("division_id") is None:
+        return False
+    excluded = frozenset(excluded)
+    return not any(_in_department_scope(p, requester, mappings.get(p["employee_id"], ()))
+                   and can_approve(p, requester, required, mappings.get(p["employee_id"], ()), excluded)
+                   for p in people)
+
+
+def may_approve(people: Iterable[Mapping], approver: Mapping, requester: Mapping, required: int,
+                mappings: Mapping[str, Iterable[int]], excluded: Iterable[int] = ()) -> bool:
+    """can_approve with the department → division fallback decided from everyone in `people`."""
+    widen = needs_division_fallback(people, requester, required, mappings, excluded)
+    return can_approve(approver, requester, required, mappings.get(approver.get("employee_id"), ()), excluded,
+                       widen_to_division=widen)
 
 
 def _eligible(people: Iterable[Mapping], requester: Mapping, required: int,
               mappings: Mapping[str, Iterable[int]], excluded: Iterable[int]) -> list:
+    people = list(people)
     excluded = frozenset(excluded)
+    widen = needs_division_fallback(people, requester, required, mappings, excluded)
     return [p for p in people
-            if can_approve(p, requester, required, mappings.get(p["employee_id"], ()), excluded)]
+            if can_approve(p, requester, required, mappings.get(p["employee_id"], ()), excluded,
+                           widen_to_division=widen)]
 
 
 def notify_approvers(eligible: Iterable[Mapping], required: int) -> list:
@@ -269,8 +301,8 @@ def decide(evaluated: Mapping, people: Mapping[str, Mapping], mappings, requeste
     approver = people.get(approver_employee_id)
     requester = people.get(requester_employee_id)
     allowed = (approver is not None and requester is not None
-               and can_approve(approver, requester, state["required_level"],
-                               mappings.get(approver_employee_id, ()), state["excluded"]))
+               and may_approve(people.values(), approver, requester, state["required_level"],
+                               mappings, state["excluded"]))
     level = approver.get("level") if approver is not None else None
     if not allowed and superadmin_may_approve(approver_employee_id, requester_employee_id, requester):
         # superadmin กดแทนได้ทุกขั้น แต่ผ่านแค่ขั้นนี้ ไม่ข้ามขั้นถัดไปด้วยระดับของตัวเอง

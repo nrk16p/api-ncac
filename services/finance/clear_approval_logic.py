@@ -77,8 +77,7 @@ def can_approve(plan_info: Mapping, people: Mapping[str, Mapping], mappings,
     approver = people.get(approver_employee_id)
     if approver is None:
         return False
-    return rules.can_approve(approver, requester, spec["required_level"],
-                             mappings.get(approver_employee_id, ()), already)
+    return rules.may_approve(people.values(), approver, requester, spec["required_level"], mappings, already)
 
 
 def check_approve(status_pending: bool, eligible: bool) -> None:

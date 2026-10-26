@@ -171,3 +171,52 @@ class TestDirectApprovers:
     def test_empty_when_nobody_eligible(self):
         req = person("R", 1, 10)
         assert A.direct_approvers([req, person("A", 1, 10), person("B", 5, 20, active=False)], req, 3, {}) == []
+
+
+def staff(eid, level, dept, division, active=True):
+    return {"employee_id": eid, "id": hash(eid) % 10000, "level": level, "department_id": dept,
+            "division_id": division, "active": active}
+
+
+class TestDivisionFallback:
+    """แผนกก่อน ไม่มีใครค่อยขยายไปทั้งฝ่าย (ตามฟอร์ม IT) — คนย้ายแผนกใหม่ 25/10/2026 ที่หัวหน้ายังอยู่แผนกเดิม"""
+    REQ = staff("R", 2, 27, 18)
+    HEAD = staff("H", 5, 3, 18)        # หัวหน้าอยู่แผนกเดิม ฝ่ายเดียวกัน
+    CEO = staff("C", 9, 1, 1)
+
+    def test_head_in_old_department_approves_when_new_department_has_nobody(self):
+        people = [self.REQ, self.HEAD, self.CEO]
+        assert [p["employee_id"] for p in A.direct_approvers(people, self.REQ, 5, {})] == ["H"]
+        assert A.may_approve(people, self.HEAD, self.REQ, 5, {})
+
+    def test_org_wide_level_does_not_block_the_fallback(self):
+        assert A.needs_division_fallback([self.REQ, self.CEO], self.REQ, 5, {})
+
+    def test_no_fallback_when_own_department_has_an_approver(self):
+        own = staff("O", 5, 27, 18)
+        people = [self.REQ, self.HEAD, own]
+        assert [p["employee_id"] for p in A.eligible_approvers(people, self.REQ, 5, {})] == ["O"]
+        assert not A.may_approve(people, self.HEAD, self.REQ, 5, {})
+
+    def test_no_fallback_when_a_division_mapping_covers_it(self):
+        mapped = staff("M", 6, 40, 40)
+        people = [self.REQ, self.HEAD, mapped]
+        assert [p["employee_id"] for p in A.eligible_approvers(people, self.REQ, 5, {"M": {18}})] == ["M"]
+
+    def test_fallback_stays_inside_the_division(self):
+        other = staff("X", 5, 50, 50)
+        assert A.eligible_approvers([self.REQ, other], self.REQ, 5, {}) == []
+
+    def test_fallback_still_checks_level_self_and_active(self):
+        low, gone = staff("L", 4, 3, 18), staff("G", 5, 3, 18, active=False)
+        assert A.eligible_approvers([self.REQ, low, gone], self.REQ, 5, {}) == []
+
+    def test_requester_without_division_gets_no_fallback(self):
+        req = staff("R", 2, 9, None)
+        assert not A.needs_division_fallback([req, staff("H", 5, 3, None)], req, 5, {})
+
+    def test_decide_allows_the_division_head(self):
+        people = {p["employee_id"]: p for p in (self.REQ, self.HEAD, self.CEO)}
+        evaluated = A.evaluate(TIERS, people, {}, "R", "10000")
+        assert evaluated["direct_level"] == 5
+        assert A.decide(evaluated, people, {}, "R", "H", None)["allowed"]
