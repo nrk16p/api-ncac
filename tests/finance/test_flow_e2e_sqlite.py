@@ -599,6 +599,41 @@ def test_clear_reject_should_email_requester(api):
     assert "ใบเสร็จไม่ชัด" in got[legacy(fid, "หัวหน้าไม่อนุมัติการเคลียร์")]["html"][0]
 
 
+def test_clear_queue_splits_mine_and_delegable_like_the_request_queue(api):
+    """แท็บรออนุมัติเคลียร์แยก รอฉันอนุมัติ / อนุมัติแทนได้ แบบเดียวกับคิวขอเบิก (ผู้ใช้สั่ง 26/10/2026)
+    ระดับต่ำสุดที่กดขั้นนี้ได้ = mine · ระดับสูงกว่า = delegable · superadmin = mine"""
+    a = api
+    fid = a.paid_advance(12000, approver=MGR)        # 6.5 → เคลียร์ขั้น lv3 แล้ว lv5
+    a.clear(fid, [9500])
+
+    def queue(who):
+        rows = a.c.get("/finance/clear-approvals/pending", params={"employee_id": who}).json()
+        return [(r["form_id"], r["tab"], r["step_required_level"]) for r in rows]
+
+    assert queue(LEAD) == [(fid, "mine", 3)]
+    assert queue(ASM) == [(fid, "delegable", 3)]
+    assert queue(MGR) == [(fid, "delegable", 3)]
+    assert queue(SUPER) == [(fid, "mine", 3)]
+
+    a.put(fid, "clear-approve", {"action_by": LEAD})
+    assert queue(MGR) == [(fid, "mine", 5)]
+    assert queue(EXEC) == [(fid, "delegable", 5)]
+    assert queue(LEAD) == []                         # คนกดขั้น 1 กดขั้น 2 ไม่ได้
+
+
+def test_clear_queue_special_step_is_mine_for_690041(api):
+    a = api
+    fid = a.submit(5000, who="F010")
+    a.approve(fid, "F003")
+    a.approve(fid, "690041")
+    a.voucher(fid)
+    a.pay(fid, 5000)
+    a.clear(fid, [4000], who="F010")
+    a.put(fid, "clear-approve", {"action_by": "F003"})
+    rows = a.c.get("/finance/clear-approvals/pending", params={"employee_id": "690041"}).json()
+    assert [(r["form_id"], r["tab"]) for r in rows] == [(fid, "mine")]
+
+
 def test_clear_waiting_past_the_last_step_counts_as_the_last_step(api):
     """ใบที่ค้างรออนุมัติเคลียร์ตอนเปลี่ยนกติกา (26/10/2026) อาจรออยู่ขั้นที่สายใหม่ไม่มี
     คิวรออนุมัติต้องไม่พังทั้งหน้า และกดอนุมัติขั้นสุดท้ายของสายใหม่ได้"""

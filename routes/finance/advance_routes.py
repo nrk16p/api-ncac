@@ -673,12 +673,14 @@ def clear_approvals_pending(employee_id: str, db: Session = Depends(get_db)):
             continue
         step = _clear_step(adv, info)
         ctx = approval_repo.load_context(db)
-        if clr.can_approve(info, ctx.people, ctx.mappings, sub.created_by, employee_id, step,
-                           _clear_round_approvers(db, adv.form_id)):
+        already = _clear_round_approvers(db, adv.form_id)
+        if clr.can_approve(info, ctx.people, ctx.mappings, sub.created_by, employee_id, step, already):
             out.append({"form_id": adv.form_id, "amount_actual": logic.jsonable(adv.amount_actual),
                         "amount_paid": logic.jsonable(adv.amount_paid),
                         "settle_amount": logic.jsonable(adv.settle_amount),
                         "step": step, "total_steps": len(info["steps"]),
+                        "step_required_level": clr.step_spec(info, step)["required_level"],
+                        "tab": _clear_tab(info, ctx, sub.created_by, employee_id, step, already),
                         "clause": info["clause"], "requester_employee_id": sub.created_by,
                         "clear_submitted_at": repo._iso(adv.clear_submitted_at)})
     # ชื่อ/แผนกผู้เบิก ให้การ์ดในแท็บรออนุมัติเคลียร์อ่านง่าย
@@ -733,6 +735,22 @@ def clear_approve(form_id: str, body: ClearApproveIn, background_tasks: Backgrou
         mail.queue_event(background_tasks, db, mail.CLEAR_APPROVED, sub,
                          approver_name=approver.get("name"), clear_due_date=adv.clear_due_date, **amounts)
     return detail
+
+
+def _clear_tab(info, ctx, requester_id, approver_id, step, already) -> str:
+    """แท็บย่อยแบบเดียวกับคิวขอเบิก (approval_repo.pending_for): ระดับต่ำสุดที่กดขั้นนี้ได้ = รอฉันอนุมัติ
+    สูงกว่านั้น = อนุมัติแทนได้ · superadmin ที่กดได้เพราะสิทธิ์พิเศษอยู่รอฉันอนุมัติ"""
+    spec = clr.step_spec(info, step)
+    requester = ctx.people.get(requester_id) or {}
+    approver = ctx.people.get(approver_id)
+    normal = (approver is not None and approver.get("level") is not None
+              and approval_rules.may_approve(ctx.people.values(), approver, requester, spec["required_level"],
+                                             ctx.mappings, already, spec.get("approver")))
+    if not normal:
+        return approval_rules.TAB_MINE
+    direct = approval_rules.direct_level(ctx.people.values(), requester, spec["required_level"], ctx.mappings,
+                                         already, spec.get("approver"))
+    return approval_rules.approval_tab(approver["level"], direct)
 
 
 def _clear_approver_level(info, ctx, requester_id, approver_id, step, already):
