@@ -1,4 +1,4 @@
-"""ปิดรายการ (ผู้ใช้สั่ง 21/10/2026): ต้องติ๊กรับเอกสารตัวจริง + วันที่รับ · เลขที่เอกสารเคลียร์ 10 หลัก · เช็กเลขซ้ำ"""
+"""ปิดรายการ (ผู้ใช้สั่ง 21/10/2026): ต้องติ๊กรับเอกสารตัวจริง + วันที่รับ · เลขที่เอกสารเคลียร์บังคับกรอก · เช็กเลขซ้ำ"""
 import os
 from datetime import date
 from types import SimpleNamespace as NS
@@ -12,16 +12,31 @@ from services.finance import advance_logic as logic  # noqa: E402
 TODAY = date(2026, 10, 21)
 
 
-@pytest.mark.parametrize("raw,want", [("CL69100001", "CL69100001"), (" 6910000123 ", "6910000123")])
-def test_clear_doc_no_10_characters_ok(raw, want):
+@pytest.mark.parametrize("raw,want", [("CL69100001", "CL69100001"), (" 6910000123 ", "6910000123"),
+                                      ("CL1", "CL1"), ("CL691000012345", "CL691000012345"), ("A" * 100, "A" * 100)])
+def test_clear_doc_no_any_length_ok(raw, want):
+    """ไม่ล็อก 10 หลักแล้ว (ผู้ใช้สั่ง 26/10/2026) ยังเป็นตัวเลขหรืออักษรอังกฤษ ยาวได้ถึง 100 ตัวตามคอลัมน์"""
     assert logic.check_clear_doc_no(raw) == want
 
 
-@pytest.mark.parametrize("raw", [None, "", "   ", "CL6910001", "CL691000012", "CL-6910001", "เลข1234567"])
-def test_clear_doc_no_rejected(raw):
+@pytest.mark.parametrize("raw", [None, "", "   "])
+def test_clear_doc_no_required(raw):
     with pytest.raises(logic.AdvanceRuleError) as exc:
         logic.check_clear_doc_no(raw)
-    assert "10 หลัก" in str(exc.value)
+    assert "กรุณากรอกเลขที่เอกสารเคลียร์เงิน" in str(exc.value)
+
+
+@pytest.mark.parametrize("raw", ["CL-6910001", "เลข1234567", "CL 69"])
+def test_clear_doc_no_letters_and_digits_only(raw):
+    with pytest.raises(logic.AdvanceRuleError) as exc:
+        logic.check_clear_doc_no(raw)
+    assert "ตัวเลขกับอักษรอังกฤษ" in str(exc.value) and "10 หลัก" not in str(exc.value)
+
+
+def test_clear_doc_no_too_long():
+    with pytest.raises(logic.AdvanceRuleError) as exc:
+        logic.check_clear_doc_no("A" * 101)
+    assert "100" in str(exc.value)
 
 
 def test_original_received_required():

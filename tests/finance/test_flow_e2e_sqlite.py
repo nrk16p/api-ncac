@@ -455,7 +455,7 @@ def test_happy_path_refund(api):
     a.put(fid, "confirm", {"action_by": FP}, expect=403)  # closing is accounting's job
     got_today = today().isoformat()
     a.put(fid, "confirm", {"action_by": FC, "clear_doc_no": "CL69100001"}, expect=400)  # ยังไม่ติ๊กรับเอกสารตัวจริง
-    a.put(fid, "confirm", {"action_by": FC, "clear_doc_no": "CL-1", "original_received_date": got_today}, expect=400)  # ไม่ครบ 10 หลัก
+    a.put(fid, "confirm", {"action_by": FC, "clear_doc_no": "CL-1", "original_received_date": got_today}, expect=400)  # มีขีด ไม่ใช่ตัวเลข/อักษรอังกฤษล้วน
     d = a.put(fid, "confirm", {"action_by": FC, "clear_doc_no": "CL69100001", "original_received_date": got_today})
     assert d["status"] == "CLOSED" and d["fin"]["clear_doc_no"] == "CL69100001"
     assert d["fin"]["original_received_date"] == got_today
