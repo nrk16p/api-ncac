@@ -100,7 +100,8 @@ def test_the_manager_needs_690041_too():
 
 # ---------------------------- ใครกดขั้นพิเศษได้ ----------------------------
 
-def test_only_690041_or_superadmin_may_take_the_special_step():
+def test_only_690041_or_superadmin_may_take_a_special_step_that_is_last():
+    """ยอด 5,000: ขั้นพิเศษอยู่ท้ายสาย ไม่มีใครอยู่ขั้นหลังให้อนุมัติแทน"""
     info = plan("R", 5000)
     logs = round_logs((1, "NOON"))
     assert A.decide(info, PEOPLE, NO_MAP, "R", SUK, 2, logs)["allowed"] is True
@@ -125,12 +126,63 @@ def test_15000_goes_noon_then_690041_then_bank():
     assert (d["allowed"], d["outcome"]) == (True, A.OUTCOME_APPROVED)
 
 
-def test_bank_approving_step_1_early_still_covers_his_level_after_the_special_step():
-    info = plan("R", 15000)                         # 3 → 690041 → 5
+def test_bank_approving_step_1_early_covers_the_special_step_and_his_own():
+    """ผู้ใช้สั่ง 26/10/2026: คนที่อยู่ขั้นหลังในสายเดียวกัน อนุมัติแทน + ข้ามขั้นพิเศษได้
+    3 → 690041 → 5: เจษฎา (ระดับ 5 = ขั้น 3) กดขั้น 1 จบทั้งใบ"""
+    info = plan("R", 15000)
     d = A.decide(info, PEOPLE, NO_MAP, "R", "BANK", 1, [])
-    assert (d["outcome"], d["next_step"], d["skipped"]) == (A.OUTCOME_STEP, 2, [3])
-    d = A.decide(info, PEOPLE, NO_MAP, "R", SUK, 2, round_logs((1, "BANK"), (3, "BANK")))
-    assert (d["allowed"], d["outcome"], d["skipped"]) == (True, A.OUTCOME_APPROVED, [])
+    assert (d["allowed"], d["outcome"], d["next_step"], d["skipped"]) == (True, A.OUTCOME_APPROVED, None, [2, 3])
+
+
+# ---------------------------- คนขั้นหลังอนุมัติแทนขั้นพิเศษ (ผู้ใช้สั่ง 26/10/2026) ----------------------------
+
+def test_special_step_remembers_the_next_level_in_the_chain():
+    assert [s.get("stand_in_level") for s in plan("R", 15000)["steps"]] == [None, 5, None]
+    assert [s.get("stand_in_level") for s in plan("R", 5000)["steps"]] == [None, None]   # ขั้นพิเศษอยู่ท้าย
+
+
+def test_adv_2610_022_the_step_2_manager_may_take_the_special_step_and_finish():
+    """ADV-2610-022: ศิวพร (หัวหน้าบัญชี ระดับ 3) ขอ 15,000 → ขั้น 1 = 690041 · ขั้น 2 = ระดับ 5
+    690604 อยู่ขั้น 2 จึงกดแทนขั้น 1 ได้ และผ่านขั้น 2 ไปด้วยเลย"""
+    info = plan("NOON", 15000)
+    d = A.decide(info, PEOPLE, NO_MAP, "NOON", "BANK", 1, [])
+    assert (d["allowed"], d["outcome"], d["skipped"]) == (True, A.OUTCOME_APPROVED, [2])
+    assert A.decide(info, PEOPLE, NO_MAP, "NOON", "N9", 1, [])["allowed"] is True     # ระดับ 9 ก็อยู่ขั้น 2 ได้
+
+
+def test_someone_not_on_a_later_step_still_cannot_take_the_special_step():
+    info = plan("NOON", 15000)
+    assert A.decide(info, PEOPLE, NO_MAP, "NOON", "JIRA", 1, [])["allowed"] is False   # ระดับ 4 ไม่ถึงขั้น 2
+    assert A.decide(info, PEOPLE, NO_MAP, "NOON", "OPSLEAD", 1, [])["allowed"] is False
+
+
+def test_at_the_special_step_the_later_manager_may_approve_and_finish():
+    info = plan("R", 15000)
+    logs = round_logs((1, "NOON"))
+    d = A.decide(info, PEOPLE, NO_MAP, "R", "BANK", 2, logs)
+    assert (d["allowed"], d["outcome"], d["skipped"]) == (True, A.OUTCOME_APPROVED, [3])
+    assert A.decide(info, PEOPLE, NO_MAP, "R", "JIRA", 2, logs)["allowed"] is False
+
+
+def test_superadmin_still_does_not_skip_past_the_special_step():
+    d = A.decide(plan("NOON", 15000), PEOPLE, NO_MAP, "NOON", "670108", 1, [])
+    assert (d["allowed"], d["outcome"], d["next_step"]) == (True, A.OUTCOME_STEP, 2)
+
+
+def test_stand_in_skip_note_says_who_stood_in():
+    spec = plan("R", 15000)["steps"][1]
+    assert "อนุมัติแทน" in A.skip_note(spec, 1, 5, "BANK")
+    assert "เป็นผู้อนุมัติที่ขั้นพิเศษกำหนด" in A.skip_note(spec, 1, 4, SUK)
+
+
+def test_stand_in_shows_under_delegable_and_email_still_goes_to_690041():
+    info = plan("NOON", 15000)
+    state = A.evaluate_step(info, PEOPLE, NO_MAP, "NOON", 1, [])
+    assert state["stand_in_level"] == 5
+    assert A.approval_tab(PEOPLE["BANK"]["level"], state["direct_level"]) == A.TAB_DELEGABLE
+    el = A.eligible_approvers(PEOPLE.values(), PEOPLE["NOON"], state["required_level"], NO_MAP, state["excluded"],
+                              named=state["approver"])
+    assert [p["employee_id"] for p in A.notify_approvers(el, 4, PEOPLE["NOON"], named=SUK)] == [SUK]
 
 
 def test_superadmin_on_the_special_step_does_not_skip_the_levels_above():
@@ -201,3 +253,9 @@ def test_clearing_in_the_6_6_band_needs_690041_too():
     assert not clr.can_approve(p, PEOPLE, NO_MAP, "R", "JIRA", step=2)
     assert named(clr.plan(TIERS, PEOPLE, NO_MAP, "R", Decimal("1500"))) == [None]
     assert named(clr.plan(TIERS, PEOPLE, NO_MAP, "R", Decimal("18000"))) == [None, SUK, None]
+
+
+def test_clearing_special_step_takes_a_later_step_stand_in_too():
+    p = clr.plan(TIERS, PEOPLE, NO_MAP, "R", Decimal("18000"))     # 3 → 690041 → 5
+    assert clr.can_approve(p, PEOPLE, NO_MAP, "R", "BANK", step=2)
+    assert not clr.can_approve(p, PEOPLE, NO_MAP, "R", "JIRA", step=2)

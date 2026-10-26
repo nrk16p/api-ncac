@@ -844,3 +844,27 @@ def test_accounting_6_6_needs_690041_as_its_own_step(api):
     res = a.approve(fid, "690041")
     assert res["status"] == "Approved"
     assert [s["step"] for s in a.detail(fid)["approval"]["step_approvals"]] == [1, 2]
+
+
+def test_a_later_step_approver_may_stand_in_for_690041(api):
+    """ADV-2610-022 (ผู้ใช้สั่ง 26/10/2026): คนที่อยู่ขั้นหลังในสายเดียวกัน อนุมัติแทนขั้นพิเศษ + ข้ามได้
+    F010 ขอ 15,000 → ขั้น 1 หัวหน้าบัญชี · ขั้น 2 690041 · ขั้น 3 ระดับ 5 (ในชุดทดสอบมีแค่ DCEO ระดับ 9)"""
+    a = api
+    fid = a.submit(15000, who="F010")
+    a.approve(fid, "F003")
+    a.mails()
+    rows = a.c.get("/finance/approvals/pending", params={"employee_id": DCEO}).json()
+    assert [(r["form_id"], r["step"], r["tab"]) for r in rows] == [(fid, 2, "delegable")]
+    a.approve(fid, "F001", expect=403)                 # ระดับ 3 ไม่อยู่ขั้นหลัง
+    res = a.approve(fid, DCEO)
+    assert res["status"] == "Approved"
+    logs = [l for l in a.detail(fid)["approval_logs"] if l.get("action") == "APPROVED"]
+    assert [l["level_no"] for l in logs] == [1, 2, 3]
+    assert (logs[2]["remark"] or "").startswith("ผ่านขั้น 3 พร้อมการอนุมัติขั้น 2")
+
+    # กดตั้งแต่ขั้น 1: ผ่านขั้นพิเศษแบบอนุมัติแทน และขั้น 3 ด้วยระดับ ในคลิกเดียว
+    fid2 = a.submit(15000, who="F010")
+    assert a.approve(fid2, DCEO)["status"] == "Approved"
+    logs = [l for l in a.detail(fid2)["approval_logs"] if l.get("action") == "APPROVED"]
+    assert [l["level_no"] for l in logs] == [1, 2, 3]
+    assert "อนุมัติแทน" in (logs[1]["remark"] or "")

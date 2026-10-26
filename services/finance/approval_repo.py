@@ -156,7 +156,8 @@ def record_approval(db, submission, approver_user_id, decision, remark=None):
         db.add(FormApprovalLog(
             submission_id=submission.id, level_no=skipped, action=rules.ACTION_APPROVED,
             action_by=approver_user_id,
-            remark=rules.skip_note(by_step[skipped], step, decision["approver_level"])))
+            remark=rules.skip_note(by_step[skipped], step, decision["approver_level"],
+                                   decision.get("approver_employee_id"))))
     if decision["outcome"] == rules.OUTCOME_APPROVED:
         submission.status_approve = "Approved"
     else:
@@ -255,7 +256,7 @@ def pending_for(db, employee_id):
                                     rounds.get(sub.id, []))
         normal = approver["level"] is not None and rules.may_approve(
             ctx.people.values(), approver, requester, state["required_level"], ctx.mappings, state["excluded"],
-            state.get("approver"))
+            state.get("approver"), state.get("stand_in_level"))
         if not normal and not rules.superadmin_may_approve(employee_id, sub.created_by, requester):
             continue
         items.append({

@@ -717,7 +717,7 @@ def clear_approve(form_id: str, body: ClearApproveIn, background_tasks: Backgrou
     for skipped in approval_rules.skipped_steps(info["steps"], step, level, who, done):
         spec = clr.step_spec(info, skipped)
         _clear_log(db, form_id, skipped, "APPROVED", info["clause"], adv.amount_actual,
-                   approval_rules.skip_note(spec, step, level), body.action_by)
+                   approval_rules.skip_note(spec, step, level, who), body.action_by)
     _outcome, nxt = approval_rules.next_after_approval(info["steps"], step, level, who, done)
     if nxt is None:
         adv.fin_status = logic.FIN_CLEARING_SUBMITTED
@@ -745,7 +745,8 @@ def _clear_tab(info, ctx, requester_id, approver_id, step, already) -> str:
     approver = ctx.people.get(approver_id)
     normal = (approver is not None and approver.get("level") is not None
               and approval_rules.may_approve(ctx.people.values(), approver, requester, spec["required_level"],
-                                             ctx.mappings, already, spec.get("approver")))
+                                             ctx.mappings, already, spec.get("approver"),
+                                             spec.get("stand_in_level")))
     if not normal:
         return approval_rules.TAB_MINE
     direct = approval_rules.direct_level(ctx.people.values(), requester, spec["required_level"], ctx.mappings,
@@ -761,7 +762,7 @@ def _clear_approver_level(info, ctx, requester_id, approver_id, step, already):
     spec = clr.step_spec(info, step)
     if approver is not None and approval_rules.may_approve(ctx.people.values(), approver, requester,
                                                            spec["required_level"], ctx.mappings, already,
-                                                           spec.get("approver")):
+                                                           spec.get("approver"), spec.get("stand_in_level")):
         return approver.get("level"), approver_id
     return spec["required_level"], None
 

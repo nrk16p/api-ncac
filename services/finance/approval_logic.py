@@ -20,6 +20,8 @@ ORG_WIDE_LEVEL = 9
 # ขั้นพิเศษ (ผู้ใช้สั่ง 26/10/2026): ใบของแผนกบัญชี (6) ยอดเกิน 2,000 (ทุกข้อยกเว้น 6.7) ต้องผ่าน 690041 อีกขั้น
 # แทรกตามระดับของเขา เช่น 610055 ขอ 1,500 หัวหน้า (ระดับ 3) กดจบ · ขอ 5,000 หัวหน้า → 690041
 # ขอ 15,000 หัวหน้า → 690041 → ผู้จัดการ (ระดับ 5)
+# คนที่อยู่ขั้นหลังในสายเดียวกันอนุมัติแทน + ข้ามขั้นพิเศษได้ (ผู้ใช้สั่ง 26/10/2026 จาก ADV-2610-022) — ขั้นพิเศษจำ
+# ระดับของขั้นถัดไปไว้ใน stand_in_level · ขั้นพิเศษที่อยู่ท้ายสายไม่มีคนขั้นหลัง ต้องเป็นคนที่กำหนดเท่านั้น
 SPECIAL_STEPS = ({"department_id": 6, "except_clauses": ("6.7",), "employee_id": "690041"},)
 TAB_MINE = "mine"
 TAB_DELEGABLE = "delegable"
@@ -106,9 +108,16 @@ def current_step_of(steps: list, current_level) -> int:
 
 
 def _covers(spec: Mapping, approver_level: Optional[int], approver_id=None) -> bool:
-    """Does this approval also satisfy `spec`? A named step (ขั้นพิเศษ) only when it is that person; else by level."""
+    """Does this approval also satisfy `spec`? A named step (ขั้นพิเศษ) when it is that person, or someone whose
+    level reaches the step after it in the chain (stand_in_level; superadmin passes approver_id=None, never covers);
+    else by level."""
     if spec.get("approver"):
-        return approver_id is not None and str(approver_id) == str(spec["approver"])
+        if approver_id is None:
+            return False
+        if str(approver_id) == str(spec["approver"]):
+            return True
+        stand_in = spec.get("stand_in_level")
+        return stand_in is not None and approver_level is not None and approver_level >= stand_in
     return approver_level is not None and approver_level >= spec["required_level"]
 
 
@@ -141,9 +150,13 @@ def skip_remark(step: int, from_step: int, approver_level: int, required: int) -
             f"ผู้อนุมัติระดับ {approver_level} ถึงระดับ {required} ที่ขั้น {step} ต้องการ")
 
 
-def skip_note(spec: Mapping, from_step: int, approver_level) -> str:
-    """The log remark for a step passed by the approval of `from_step` (level skip, or the named person's own)."""
+def skip_note(spec: Mapping, from_step: int, approver_level, approver_id=None) -> str:
+    """The log remark for a step passed by the approval of `from_step` (level skip, the named person's own,
+    or a later-step approver standing in for the named person)."""
     if spec.get("approver"):
+        if approver_id is not None and str(approver_id) != str(spec["approver"]):
+            return (f"ผ่านขั้นพิเศษ (ขั้น {spec['step']}) พร้อมการอนุมัติขั้น {from_step}: "
+                    f"ผู้อนุมัติระดับ {approver_level} อยู่ขั้นหลังในสายเดียวกัน อนุมัติแทนได้")
         return f"ผ่านขั้นพิเศษ (ขั้น {spec['step']}) พร้อมการอนุมัติขั้น {from_step}: เป็นผู้อนุมัติที่ขั้นพิเศษกำหนด"
     return skip_remark(spec["step"], from_step, approver_level, spec["required_level"])
 
@@ -249,8 +262,11 @@ def needs_division_fallback(people: Iterable[Mapping], requester: Mapping, requi
 
 def may_approve(people: Iterable[Mapping], approver: Mapping, requester: Mapping, required: int,
                 mappings: Mapping[str, Iterable[int]], excluded: Iterable[int] = (),
-                named: Optional[str] = None) -> bool:
-    """can_approve with the department → division fallback decided from everyone in `people`."""
+                named: Optional[str] = None, stand_in_level: Optional[int] = None) -> bool:
+    """can_approve with the department → division fallback decided from everyone in `people`.
+    At a named step, someone else may stand in when they may approve the step after it (`stand_in_level`)."""
+    if named is not None and stand_in_level is not None and str(approver.get("employee_id")) != str(named):
+        return may_approve(people, approver, requester, stand_in_level, mappings, excluded)
     widen = needs_division_fallback(people, requester, required, mappings, excluded, named)
     return can_approve(approver, requester, required, mappings.get(approver.get("employee_id"), ()), excluded,
                        widen_to_division=widen, named=named)
@@ -346,7 +362,9 @@ def evaluate(tiers, people: Mapping[str, Mapping], mappings, requester_employee_
     if special is not None:  # แทรกตามระดับของคนที่กำหนด: หลังขั้นที่ระดับไม่เกินเขา ก่อนขั้นที่สูงกว่า
         level = people[special].get("level") or 0
         at = next((i for i, s in enumerate(steps) if s["required_level"] > level), len(steps))
-        named_step = {"required_level": level, "label": special_label(special), "approver": special}
+        stand_in = steps[at]["required_level"] if at < len(steps) else None  # ขั้นถัดไปในสาย (ไม่มีถ้าอยู่ท้าย)
+        named_step = {"required_level": level, "label": special_label(special), "approver": special,
+                      "stand_in_level": stand_in}
         steps = [{**s, "step": i} for i, s in enumerate(steps[:at] + [named_step] + steps[at:], start=STEP_LEADER)]
     return {"clause": tier["clause"], "approver_label": tier["approver_label"], "min_level": tier["min_level"],
             "required_level": required, "direct_level": direct, "steps": steps}
@@ -364,7 +382,8 @@ def evaluate_step(evaluated: Mapping, people: Mapping[str, Mapping], mappings, r
     direct = (direct_level(people.values(), requester, spec["required_level"], mappings, excluded, named)
               if requester is not None else None)
     return {"step": step, "total_steps": len(steps), "required_level": spec["required_level"],
-            "label": spec["label"], "direct_level": direct, "excluded": excluded, "approver": named}
+            "label": spec["label"], "direct_level": direct, "excluded": excluded, "approver": named,
+            "stand_in_level": spec.get("stand_in_level")}
 
 
 def superadmin_may_approve(approver_employee_id, requester_employee_id, requester) -> bool:
@@ -381,7 +400,7 @@ def decide(evaluated: Mapping, people: Mapping[str, Mapping], mappings, requeste
     requester = people.get(requester_employee_id)
     allowed = (approver is not None and requester is not None
                and may_approve(people.values(), approver, requester, state["required_level"],
-                               mappings, state["excluded"], state["approver"]))
+                               mappings, state["excluded"], state["approver"], state["stand_in_level"]))
     level = approver.get("level") if approver is not None else None
     who = approver_employee_id
     if not allowed and superadmin_may_approve(approver_employee_id, requester_employee_id, requester):
@@ -391,5 +410,5 @@ def decide(evaluated: Mapping, people: Mapping[str, Mapping], mappings, requeste
     done = {a["step"] for a in step_approvals(round_logs)}
     outcome, next_step = next_after_approval(steps, state["step"], level, who, done)
     return {"allowed": allowed, "step": state["step"], "total_steps": state["total_steps"], "steps": steps,
-            "approver_level": level, "outcome": outcome, "next_step": next_step,
+            "approver_level": level, "approver_employee_id": who, "outcome": outcome, "next_step": next_step,
             "skipped": skipped_steps(steps, state["step"], level, who, done)}
