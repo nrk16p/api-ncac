@@ -556,10 +556,13 @@ class TestCheckDocNumbers:
             L.check_doc_numbers(L.AWAITING_CLEARING, self.CUR, {"voucher_no": "PV-1"}, remark="x")
 
     def test_clear_doc_no_keeps_its_format_rule(self):
-        cur = {**self.CUR, "clear_doc_no": "CL1"}
+        cur = {**self.CUR, "clear_doc_no": "CL691000000001"}
         with pytest.raises(L.AdvanceRuleError, match="ตัวเลขกับอักษรอังกฤษ"):
             L.check_doc_numbers(L.CLOSED, cur, {"clear_doc_no": "CL-2"}, remark="x")
-        assert L.check_doc_numbers(L.CLOSED, cur, {"clear_doc_no": "CL2"}, remark="x") == {"clear_doc_no": "CL2"}
+        with pytest.raises(L.AdvanceRuleError, match="14 หลัก"):
+            L.check_doc_numbers(L.CLOSED, cur, {"clear_doc_no": "CL2"}, remark="x")
+        got = L.check_doc_numbers(L.CLOSED, cur, {"clear_doc_no": "CL691000000002"}, remark="x")
+        assert got == {"clear_doc_no": "CL691000000002"}
 
     @pytest.mark.parametrize("status", [L.PENDING_APPROVAL, L.AWAITING_VOUCHER, L.RETURNED, L.REJECTED])
     def test_only_after_the_voucher(self, status):

@@ -326,19 +326,19 @@ def check_fresh(expected, actual):
 
 
 CLEAR_DOC_NO_RE = re.compile(r"^[A-Za-z0-9]+$")
-CLEAR_DOC_NO_MAX = 100  # fin_advances.clear_doc_no String(100)
+CLEAR_DOC_NO_LEN = 14  # ผู้ใช้สั่ง 26/10/2026 (เดิม 10 หลัก แล้วปลดล็อก) — คอลัมน์ยังเป็น String(100)
 # เลขเอกสารที่บัญชี/การเงินกรอก — หน้าเว็บเช็กซ้ำก่อนบันทึก (ผู้ใช้สั่ง 21/10/2026 แจ้งเมื่อเลขซ้ำ)
 DOC_NO_FIELDS = ("voucher_no", "payment_doc_no", "clear_doc_no")
 
 
 def check_clear_doc_no(value) -> str:
     """เลขที่เอกสารเคลียร์เงิน: บังคับกรอก ตัวเลขหรืออักษรอังกฤษ (ผู้ใช้สั่ง 21/10/2026)
-    ไม่ล็อก 10 หลักแล้ว (ผู้ใช้สั่ง 26/10/2026) ยาวได้ถึง CLEAR_DOC_NO_MAX ตัว"""
+    ต้อง 14 หลักพอดี (ผู้ใช้สั่ง 26/10/2026 เปลี่ยนจาก 10 หลัก)"""
     text = (value or "").strip()
     _require(bool(text), "กรุณากรอกเลขที่เอกสารเคลียร์เงิน")
     _require(bool(CLEAR_DOC_NO_RE.match(text)),
              "เลขที่เอกสารเคลียร์เงินใช้ได้แค่ตัวเลขกับอักษรอังกฤษ ไม่มีขีดหรือเว้นวรรค")
-    _require(len(text) <= CLEAR_DOC_NO_MAX, f"เลขที่เอกสารเคลียร์เงินยาวได้ไม่เกิน {CLEAR_DOC_NO_MAX} ตัว")
+    _require(len(text) == CLEAR_DOC_NO_LEN, f"เลขที่เอกสารเคลียร์เงินต้องมี {CLEAR_DOC_NO_LEN} หลัก (ตอนนี้ {len(text)} หลัก)")
     return text
 
 

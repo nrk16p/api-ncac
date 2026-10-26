@@ -12,10 +12,10 @@ from services.finance import advance_logic as logic  # noqa: E402
 TODAY = date(2026, 10, 21)
 
 
-@pytest.mark.parametrize("raw,want", [("CL69100001", "CL69100001"), (" 6910000123 ", "6910000123"),
-                                      ("CL1", "CL1"), ("CL691000012345", "CL691000012345"), ("A" * 100, "A" * 100)])
-def test_clear_doc_no_any_length_ok(raw, want):
-    """ไม่ล็อก 10 หลักแล้ว (ผู้ใช้สั่ง 26/10/2026) ยังเป็นตัวเลขหรืออักษรอังกฤษ ยาวได้ถึง 100 ตัวตามคอลัมน์"""
+@pytest.mark.parametrize("raw,want", [("CL691000012345", "CL691000012345"), (" 69100001234567 ", "69100001234567"),
+                                      ("ABCDEFGHIJ1234", "ABCDEFGHIJ1234")])
+def test_clear_doc_no_14_characters_ok(raw, want):
+    """14 หลักพอดี (ผู้ใช้สั่ง 26/10/2026 เปลี่ยนจาก 10 หลัก) ตัวเลขหรืออักษรอังกฤษ"""
     assert logic.check_clear_doc_no(raw) == want
 
 
@@ -26,17 +26,18 @@ def test_clear_doc_no_required(raw):
     assert "กรุณากรอกเลขที่เอกสารเคลียร์เงิน" in str(exc.value)
 
 
-@pytest.mark.parametrize("raw", ["CL-6910001", "เลข1234567", "CL 69"])
+@pytest.mark.parametrize("raw", ["CL-69100012345", "เลข12345678901", "CL 6910001234"])
 def test_clear_doc_no_letters_and_digits_only(raw):
     with pytest.raises(logic.AdvanceRuleError) as exc:
         logic.check_clear_doc_no(raw)
-    assert "ตัวเลขกับอักษรอังกฤษ" in str(exc.value) and "10 หลัก" not in str(exc.value)
+    assert "ตัวเลขกับอักษรอังกฤษ" in str(exc.value)
 
 
-def test_clear_doc_no_too_long():
+@pytest.mark.parametrize("raw", ["CL69100001", "CL1", "A" * 13, "A" * 15, "A" * 100])
+def test_clear_doc_no_must_be_14(raw):
     with pytest.raises(logic.AdvanceRuleError) as exc:
-        logic.check_clear_doc_no("A" * 101)
-    assert "100" in str(exc.value)
+        logic.check_clear_doc_no(raw)
+    assert "14 หลัก" in str(exc.value)
 
 
 def test_original_received_required():
