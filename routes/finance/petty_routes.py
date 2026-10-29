@@ -195,7 +195,7 @@ def get_claim(form_id: str, db: Session = Depends(get_db)):
 
 from datetime import datetime, timezone  # noqa: E402
 
-from schemas.finance_petty_schema import ApproveIn, DdIn, ReturnIn, ReviewIn  # noqa: E402
+from schemas.finance_petty_schema import ApproveIn, DdIn, DebtDocIn, ReturnIn, ReviewIn  # noqa: E402
 from services.finance import petty_mail as mail  # noqa: E402
 from services.finance import petty_validate as validate  # noqa: E402
 
@@ -342,6 +342,25 @@ def set_claim_dd(form_id: str, payload: DdIn, db: Session = Depends(get_db)):
     _require_holder(db, claim, payload.employee_id)
     try:
         out = repo.set_dd(db, claim, payload.dd_no.strip(), payload.employee_id)
+    except L.PettyRuleError as exc:
+        raise _rule_error(exc)
+    return _out(db, out)
+
+
+@router.post("/claims/{form_id}/debt-doc")
+def set_claim_debt_doc(form_id: str, payload: DebtDocIn, db: Session = Depends(get_db)):
+    """เจ้าของเงินสดใส่เลขใบรับสภาพหนี้หลังโอนเงิน (ช่วงเดียวกับ /dd) — ใบที่มี พจร. เท่านั้น
+    ด่านตอนรวมรอบบังคับเลขนี้ ไม่ใช่ด่านอนุมัติ (ผู้ใช้สั่ง 29/10/2026)"""
+    try:
+        number = L.clean_debt_doc_no(payload.debt_doc_no)
+    except L.PettyRuleError as exc:
+        raise _rule_error(exc)
+    claim = _claim_or_404(db, form_id)
+    _require_holder(db, claim, payload.employee_id)
+    if not _needs_debt_doc(claim, repo.claim_items(db, claim.id)):
+        raise HTTPException(status_code=409, detail="ใบนี้ไม่มี พจร. ไม่ต้องใส่เลขใบรับสภาพหนี้")
+    try:
+        out = repo.set_debt_doc(db, claim, number, payload.employee_id)
     except L.PettyRuleError as exc:
         raise _rule_error(exc)
     return _out(db, out)

@@ -588,6 +588,22 @@ def set_dd(db: Session, claim: FinPettyClaim, dd_no: str, actor: str) -> FinPett
     return claim
 
 
+def set_debt_doc(db: Session, claim: FinPettyClaim, debt_doc_no: str, actor: str) -> FinPettyClaim:
+    """เจ้าของเงินสดใส่เลขใบรับสภาพหนี้หลังโอนเงิน ก่อนรวมเป็นรอบ (ด่านส่งเคลียร์บังคับเมื่อมี พจร.)
+    ช่วงเวลาเดียวกับ set_dd · ใบนั้นต้องมี พจร. หรือไม่ ผู้เรียกเช็กเอง"""
+    if claim.status != L.APPROVED:
+        raise L.PettyRuleError(
+            f"ใส่เลขใบรับสภาพหนี้ได้เฉพาะใบที่อนุมัติจ่ายแล้วและยังไม่ส่งเคลียร์ ใบนี้สถานะ "
+            f"{L.STATUS_LABELS.get(claim.status, claim.status)}", 409)
+    before = claim.debt_doc_no
+    claim.debt_doc_no = debt_doc_no
+    log(db, claim.id, "SET_DEBT_DOC", actor, changes={"debt_doc_no": [before, debt_doc_no]},
+        remark=L.debt_doc_change_text(before, debt_doc_no))
+    db.commit()
+    db.refresh(claim)
+    return claim
+
+
 # ---------------------------- ด่านซ้ำ: ดึงรายการที่อาจซ้ำ ----------------------------
 
 from datetime import timedelta  # noqa: E402

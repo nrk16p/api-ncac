@@ -14,7 +14,8 @@ from pydantic import ValidationError
 
 from models.finance_petty_model import FinPettyExpenseType
 from routes.finance import petty_routes as R
-from schemas.finance_petty_schema import ApproveIn, ClaimItemIn
+from models.finance_petty_model import FinPettyLog
+from schemas.finance_petty_schema import ApproveIn, ClaimItemIn, DebtDocIn, RoundIn
 from services.finance import petty_repo as repo
 from services.finance import petty_validate as V
 
@@ -129,6 +130,130 @@ class TestClaimSaysIfItNeedsTheDebtDoc:
         pjs = _open(db_session, claim_payload, _row(ref_no="B-2"))
         rows = {c["form_id"]: c for c in R.list_claims(limit=50, offset=0, db=db_session)["items"]}
         assert rows[pjr.form_id]["needs_debt_doc"] is True and rows[pjs.form_id]["needs_debt_doc"] is False
+
+
+@pytest.fixture
+def approved_pjr(db_session, tire, claim_payload, seq_stub, frozen_bkk):
+    """ใบยางที่มี พจร. อนุมัติจ่ายแล้ว ยังไม่มีเลขใบรับสภาพหนี้"""
+    def _make(**row):
+        claim = _open(db_session, claim_payload, _row(**{"driver_role": "พจร.", **row}))
+        R.approve_claim(claim.form_id, ApproveIn(employee_id="12345", attachments=PAID,
+                                                 dup_override_reason="คนละเส้น"), db_session)
+        return claim
+    return _make
+
+
+def _debt(claim, number, employee_id="12345"):
+    return DebtDocIn(employee_id=employee_id, debt_doc_no=number)
+
+
+class TestHolderAddsTheDebtDocAfterPaying:
+    """POST /claims/{form_id}/debt-doc — เหมือน /dd: เจ้าของเงินสด · ใบที่อนุมัติจ่ายแล้ว ยังไม่ส่งเคลียร์"""
+
+    def test_holder_adds_it_and_it_is_trimmed(self, db_session, approved_pjr):
+        claim = approved_pjr()
+        out = R.set_claim_debt_doc(claim.form_id, _debt(claim, " RD-2610-015 "), db_session)
+        assert out["debt_doc_no"] == "RD-2610-015" and out["needs_debt_doc"] is True
+        assert out["status"] == "APPROVED"
+
+    def test_change_is_logged_old_to_new(self, db_session, approved_pjr):
+        claim = approved_pjr()
+        R.set_claim_debt_doc(claim.form_id, _debt(claim, "RD-1"), db_session)
+        R.set_claim_debt_doc(claim.form_id, _debt(claim, "RD-2"), db_session)
+        logs = (db_session.query(FinPettyLog).filter(FinPettyLog.claim_id == claim.id,
+                                                     FinPettyLog.action == "SET_DEBT_DOC")
+                .order_by(FinPettyLog.id).all())
+        assert [row.changes["debt_doc_no"] for row in logs] == [[None, "RD-1"], ["RD-1", "RD-2"]]
+        assert logs[0].action_by == "12345"
+        assert logs[0].remark == "เลขใบรับสภาพหนี้: - → RD-1"
+        assert logs[1].remark == "เลขใบรับสภาพหนี้: RD-1 → RD-2"
+
+    def test_only_the_holder(self, db_session, approved_pjr):
+        claim = approved_pjr()
+        with pytest.raises(HTTPException) as exc:
+            R.set_claim_debt_doc(claim.form_id, _debt(claim, "RD-1", employee_id="99999"), db_session)
+        assert exc.value.status_code == 403
+
+    def test_not_before_approval(self, db_session, tire, claim_payload, seq_stub, frozen_bkk):
+        claim = _open(db_session, claim_payload, _row(driver_role="พจร."))
+        with pytest.raises(HTTPException) as exc:
+            R.set_claim_debt_doc(claim.form_id, _debt(claim, "RD-1"), db_session)
+        assert exc.value.status_code == 409
+
+    def test_not_after_the_round_is_sent(self, db_session, approved_pjr, line):
+        claim = approved_pjr()
+        R.set_claim_debt_doc(claim.form_id, _debt(claim, "RD-1"), db_session)
+        R.create_round(_round_in(claim), db_session)
+        with pytest.raises(HTTPException) as exc:
+            R.set_claim_debt_doc(claim.form_id, _debt(claim, "RD-2"), db_session)
+        assert exc.value.status_code == 409
+
+    def test_claim_without_pjr_is_refused(self, db_session, tire, claim_payload, seq_stub, frozen_bkk):
+        claim = _open(db_session, claim_payload, _row())
+        R.approve_claim(claim.form_id, ApproveIn(employee_id="12345", attachments=PAID), db_session)
+        with pytest.raises(HTTPException) as exc:
+            R.set_claim_debt_doc(claim.form_id, _debt(claim, "RD-1"), db_session)
+        assert exc.value.status_code == 409
+        assert exc.value.detail == "ใบนี้ไม่มี พจร. ไม่ต้องใส่เลขใบรับสภาพหนี้"
+
+    @pytest.mark.parametrize("blank", ["", "   "])
+    def test_blank_number_is_422_in_thai(self, db_session, approved_pjr, blank):
+        claim = approved_pjr()
+        with pytest.raises(HTTPException) as exc:
+            R.set_claim_debt_doc(claim.form_id, _debt(claim, blank), db_session)
+        assert exc.value.status_code == 422
+        assert exc.value.detail == "กรอกเลขใบรับสภาพหนี้ก่อน"
+
+    def test_longer_than_50_is_422_in_thai(self, db_session, approved_pjr):
+        claim = approved_pjr()
+        with pytest.raises(HTTPException) as exc:
+            R.set_claim_debt_doc(claim.form_id, _debt(claim, "R" * 51), db_session)
+        assert exc.value.status_code == 422
+        assert exc.value.detail == "เลขใบรับสภาพหนี้ยาวได้ไม่เกิน 50 ตัวอักษร"
+
+    def test_50_after_trimming_is_fine(self, db_session, approved_pjr):
+        claim = approved_pjr()
+        out = R.set_claim_debt_doc(claim.form_id, _debt(claim, "  " + "R" * 50 + "  "), db_session)
+        assert out["debt_doc_no"] == "R" * 50
+
+    def test_schema_lets_blank_through_to_the_thai_message(self):
+        # Pydantic min_length จะพูดภาษาอังกฤษใส่ผู้ใช้ — ปล่อยให้ route ตอบเป็นไทย (ดู test_thai_messages)
+        assert DebtDocIn(employee_id="12345", debt_doc_no="").debt_doc_no == ""
+
+    @pytest.mark.parametrize("body", [{"employee_id": "12345", "debt_doc_no": "  "}, {"employee_id": "12345"}])
+    def test_blank_over_http_comes_back_as_plain_thai(self, body):
+        """ยิงผ่าน TestClient จริง: ต้องได้ 422 ที่ detail เป็นข้อความไทย ไม่ใช่ลิสต์ error ของ Pydantic"""
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        import database
+
+        def _no_db():
+            yield None  # ช่องว่างถูกตีกลับก่อนแตะ DB
+
+        app = FastAPI()
+        app.include_router(R.router)
+        app.dependency_overrides[database.get_db] = _no_db
+        res = TestClient(app).post("/finance/petty/claims/LB-B02-2610-013/debt-doc", json=body)
+        assert res.status_code == 422 and res.json() == {"detail": "กรอกเลขใบรับสภาพหนี้ก่อน"}
+
+
+HOLDER_LEVEL = 4
+
+
+@pytest.fixture
+def line(monkeypatch):
+    """สายงานของเจ้าของเงินสด 12345 — ผู้จัดการ 600100 แผนกเดียวกัน"""
+    def _person(eid, uid, level):
+        return {"employee_id": eid, "id": uid, "level": level, "department_id": 30,
+                "division_id": 7, "site_id": 3, "active": True}
+    people = {"12345": _person("12345", 1, HOLDER_LEVEL), "600100": _person("600100", 2, 5)}
+    monkeypatch.setattr(repo, "line_context", lambda db, fresh=True: (people, {}))
+    return people
+
+
+def _round_in(*claims):
+    return RoundIn(employee_id="12345", fund_id=claims[0].fund_id, claim_ids=[c.id for c in claims])
 
 
 class TestRequiredOnEntry:

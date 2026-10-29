@@ -127,6 +127,13 @@ class DdIn(BaseModel):
     dd_no: str = Field(min_length=1, max_length=50)
 
 
+class DebtDocIn(BaseModel):
+    """เจ้าของเงินสดใส่เลขใบรับสภาพหนี้หลังโอนเงิน · ไม่ใส่ min/max ที่นี่
+    ให้ route ตอบเป็นภาษาไทย (Pydantic พูดอังกฤษใส่ผู้ใช้)"""
+    employee_id: str = Field(min_length=1, max_length=50)
+    debt_doc_no: str = ""
+
+
 class ReviewIn(BaseModel):
     employee_id: str = Field(min_length=1, max_length=50)
     action: Literal["PASS", "SEND_BACK"]

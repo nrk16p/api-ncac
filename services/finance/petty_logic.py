@@ -193,6 +193,25 @@ def doc_changes_text(diffs: Mapping) -> str:
     return " · ".join(f"{ROUND_DOC_LABELS[k]}: {_doc_text(diffs[k][0])} → {_doc_text(diffs[k][1])}"
                       for k in order)
 
+
+DEBT_DOC_MAX = 50
+
+
+def clean_debt_doc_no(value: Optional[str]) -> str:
+    """เลขใบรับสภาพหนี้ที่เจ้าของเงินสดพิมพ์: ตัดช่องว่างหัวท้าย · ว่างหรือยาวเกินคอลัมน์ = 422 เป็นภาษาไทย"""
+    text = (value or "").strip()
+    if not text:
+        raise PettyRuleError("กรอกเลขใบรับสภาพหนี้ก่อน", 422)
+    if len(text) > DEBT_DOC_MAX:
+        raise PettyRuleError(f"เลขใบรับสภาพหนี้ยาวได้ไม่เกิน {DEBT_DOC_MAX} ตัวอักษร", 422)
+    return text
+
+
+def debt_doc_change_text(before: Optional[str], after: Optional[str]) -> str:
+    """"เลขใบรับสภาพหนี้: RD-1 → RD-2" สำหรับประวัติของใบ"""
+    return f"เลขใบรับสภาพหนี้: {_doc_text(before)} → {_doc_text(after)}"
+
+
 MANAGER_LEVEL = 5
 TOP_LEVEL = 9
 
