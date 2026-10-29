@@ -180,10 +180,19 @@ def test_it_queue_is_decided_by_it_admin(client, world, org, db):
     assert d["route"] == "it_queue" and d["approvers"] == []
     assert client.get(f"/access-review/{d['id']}", headers=h("IT")).json()["can_decide"] is True
     assert [p["id"] for p in client.get("/access-review/pending", headers=h("IT")).json()] == [d["id"]]
+
+    def overview_row():
+        items = client.get("/access-review/admin/reviews", headers=h("IT")).json()["items"]
+        return next(i for i in items if i["employee_id"] == "LONE")
+
+    row = overview_row()
+    assert row["next_approver_names"] == ["ผู้ดูแลระบบ IT"] and row["decided_by_name"] is None
     assert client.post(f"/access-review/{d['id']}/decision", headers=h("HEAD"),
                        json={"action": "approve"}).status_code == 403
     r = client.post(f"/access-review/{d['id']}/decision", headers=h("IT"), json={"action": "approve"})
     assert r.json()["status"] == "approved"
+    row = overview_row()
+    assert row["next_approver_names"] == [] and row["decided_by_name"]
 
 
 def test_closed_cycle_blocks_saving_and_submit(client, world, db):

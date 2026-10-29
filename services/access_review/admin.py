@@ -15,7 +15,8 @@ from models.access_review_model import (
 )
 from services.access_review import repo
 from services.access_review.logic import (
-    APPROVED, REMOVE, ArConflict, ArError, ArNotFound, cycle_dict, full_name, iso, person, user_division_id,
+    APPROVED, REMOVE, ArConflict, ArError, ArNotFound, cycle_dict, full_name, iso, next_approver_names, person,
+    user_division_id,
 )
 
 MSG_SYSTEM_NOT_FOUND = "ไม่พบระบบ"
@@ -297,11 +298,20 @@ def _resolve_cycle(db: Session, cycle_id: Optional[int]) -> Optional[ArCycle]:
     return _get(db, ArCycle, cycle_id, MSG_CYCLE_NOT_FOUND)
 
 
+def _decider_name(review: Optional[ArReview], users: Dict) -> Optional[str]:
+    if review is None or not review.decided_by:
+        return None
+    return full_name(users.get(review.decided_by)) or review.decided_by
+
+
 def reviews_report(db: Session, cycle_id: Optional[int], status: Optional[str], division_id: Optional[int]) -> dict:
     cycle = _resolve_cycle(db, cycle_id)
     reviews = {r.employee_id: r for r in repo.reviews_for_cycle(db, cycle.id)} if cycle else {}
     people = list(dict.fromkeys(repo.employees_with_active_assignments(db) + list(reviews)))
-    users = repo.users_by_employee_ids(db, people)
+    approvers = repo.approvers_for_reviews(db, [r.id for r in reviews.values()])
+    users = repo.users_by_employee_ids(
+        db, people + [r.decided_by for r in reviews.values() if r.decided_by]
+        + [e for eids in approvers.values() for e in eids])
     counts = repo.line_counts(db, [r.id for r in reviews.values()])
     unchecked = repo.unchecked_counts(db, [r.id for r in reviews.values()])
 
@@ -326,6 +336,8 @@ def reviews_report(db: Session, cycle_id: Optional[int], status: Optional[str], 
             "review_id": r.id if r else None,
             # additive
             "unchecked_count": unchecked.get(r.id, 0) if r else 0,
+            "next_approver_names": next_approver_names(r, approvers.get(r.id, []), users) if r else [],
+            "decided_by_name": _decider_name(r, users),
         })
     items.sort(key=lambda x: (x["division"] or "", x["department"] or "", x["name"] or ""))
     return {"cycle": cycle_dict(cycle), "summary": summary, "items": items}
