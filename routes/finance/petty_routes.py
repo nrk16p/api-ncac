@@ -81,7 +81,8 @@ def _item_dict(i) -> dict:
     return {"id": i.id, "line_no": i.line_no, "event_date": str(i.event_date),
             "truck_code": i.truck_code, "truck_plate": i.truck_plate, "truck_type": i.truck_type,
             "ref_no": i.ref_no, "qty": float(i.qty), "rate": float(i.rate),
-            "amount": float(i.amount), "remark": i.remark, "driver_name": i.driver_name}
+            "amount": float(i.amount), "remark": i.remark, "driver_name": i.driver_name,
+            "driver_role": i.driver_role, "tire_position": i.tire_position}
 
 
 def _claim_dict(c, items, names: dict | None = None) -> dict:
@@ -102,7 +103,7 @@ def _claim_dict(c, items, names: dict | None = None) -> dict:
         "reviewed_by": c.reviewed_by,
         "reviewed_at": c.reviewed_at.isoformat() if c.reviewed_at else None,
         "submitted_to_acc_at": c.submitted_to_acc_at.isoformat() if c.submitted_to_acc_at else None,
-        "dup_override_reason": c.dup_override_reason, "batch_id": c.batch_id,
+        "dup_override_reason": c.dup_override_reason, "batch_id": c.batch_id, "debt_doc_no": c.debt_doc_no,
         "items": [_item_dict(i) for i in items],
     }
 
@@ -198,7 +199,8 @@ def _gate(db: Session, claim, items, stage: str, attachments: dict) -> dict:
     item_dicts = [{"event_date": i.event_date, "truck_code": i.truck_code,
                    "truck_plate": i.truck_plate, "truck_type": i.truck_type,
                    "ref_no": i.ref_no, "rate": i.rate, "qty": i.qty,
-                   "remark": i.remark, "driver_name": i.driver_name or claim.driver_name} for i in items]
+                   "remark": i.remark, "driver_name": i.driver_name or claim.driver_name,
+                   "driver_role": i.driver_role, "tire_position": i.tire_position} for i in items]
     result = validate.validate_claim(
         {"amount": claim.amount, "dd_no": claim.dd_no, "receipt_no": claim.receipt_no,
          "expense_type": claim.expense_type, "detail": claim.detail or {},
@@ -287,11 +289,16 @@ def approve_claim(form_id: str, payload: ApproveIn, db: Session = Depends(get_db
         else:
             send(claim.form_id, rows, clerk_email, approver_email)
 
+    debt_doc_no = (payload.debt_doc_no or "").strip() or claim.debt_doc_no
+    if validate.needs_debt_doc([{"driver_role": i.driver_role} for i in items], claim.detail) and not debt_doc_no:
+        gate["missing"].append({"kind": "field", "key": "debt_doc_no", "label": "เลขที่ใบรับสภาพหนี้ (มี พจร. ในใบ)"})
+
     _raise_if_blocked(gate, check_duplicates=True, override_reason=payload.dup_override_reason,
                       notify=_notify)
 
     # flow v2: อนุมัติ = จ่ายเงินในจังหวะเดียวกัน (สลิปโอนอยู่ในด่าน APPROVE อยู่แล้ว)
-    fields = {"approved_by": payload.employee_id, "transfer_date": payload.transfer_date or L.bkk_today()}
+    fields = {"approved_by": payload.employee_id, "transfer_date": payload.transfer_date or L.bkk_today(),
+              "debt_doc_no": debt_doc_no}
     if payload.dup_override_reason:
         fields["dup_override_reason"] = payload.dup_override_reason
     try:

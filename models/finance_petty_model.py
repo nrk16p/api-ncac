@@ -117,6 +117,7 @@ class FinPettyClaim(Base):
     reviewed_by = Column(String(50))
     reviewed_at = Column(DateTime(timezone=True))
     batch_id = Column(Integer, ForeignKey("fin_petty_batches.id"))
+    debt_doc_no = Column(String(50))  # เลขที่ใบรับสภาพหนี้ — บังคับตอนอนุมัติเมื่อมี พจร. (อ้างอิงเลขเอกสารอย่างเดียว)
     status = Column(String(30), nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
@@ -146,6 +147,8 @@ class FinPettyClaimItem(Base):
     amount = Column(Numeric(12, 2), nullable=False)
     remark = Column(String(255))
     driver_name = Column(String(150))  # พจส. ต่อแถว — ใบสรุปรายการ (ผู้ใช้สั่ง 2026-10-13)
+    driver_role = Column(String(10))  # "พจส." / "พจร." — มี พจร. ต้องมีเลขที่ใบรับสภาพหนี้ (29/10/2026)
+    tire_position = Column(String(120))  # ใบยาง: รหัสตำแหน่งแบบ WMS คั่นด้วย , เช่น "RA1,RA2"
 
     __table_args__ = (
         Index("ix_fin_petty_items_claim", "claim_id"),

@@ -50,6 +50,12 @@ class ExpenseTypeUpdate(BaseModel):
         return _check_spec(v)
 
 
+DRIVER_ROLES = ("พจส.", "พจร.")
+# รหัสตำแหน่งยางชุดเดียวกับผังล้อของ WMS (components/tire/fleet-page.tsx): หน้า F1–F4 · หลัง RA1–RA8 · หาง RB1–RB12 · อะไหล่ RB13
+TIRE_POSITIONS = frozenset([f"F{i}" for i in range(1, 5)] + [f"RA{i}" for i in range(1, 9)]
+                           + [f"RB{i}" for i in range(1, 14)])
+
+
 class ClaimItemIn(BaseModel):
     event_date: date
     truck_code: Optional[str] = Field(default=None, max_length=20)
@@ -60,6 +66,27 @@ class ClaimItemIn(BaseModel):
     rate: Decimal = Field(ge=0)
     remark: Optional[str] = Field(default=None, max_length=255)
     driver_name: Optional[str] = Field(default=None, max_length=150)
+    driver_role: Optional[str] = None
+    tire_position: Optional[str] = Field(default=None, max_length=120)
+
+    @field_validator("driver_role")
+    @classmethod
+    def _role(cls, v):
+        v = (v or "").strip()
+        if not v:
+            return None
+        if v not in DRIVER_ROLES:
+            raise ValueError("เลือกได้แค่ พจส. หรือ พจร.")
+        return v
+
+    @field_validator("tire_position")
+    @classmethod
+    def _positions(cls, v):
+        codes = [c.strip().upper() for c in (v or "").split(",") if c.strip()]
+        bad = [c for c in codes if c not in TIRE_POSITIONS]
+        if bad:
+            raise ValueError(f"ตำแหน่งยางไม่ถูกต้อง: {', '.join(bad)}")
+        return ",".join(codes) or None
 
 
 class ClaimIn(BaseModel):
@@ -82,6 +109,8 @@ class ApproveIn(BaseModel):
     dup_override_reason: Optional[str] = None
     # flow v2: อนุมัติ = จ่ายเงินในจังหวะเดียวกัน · ไม่ส่งมา = วันนี้ตามเวลาไทย
     transfer_date: Optional[date] = None
+    # มี พจร. ในใบ → ต้องมีเลขที่ใบรับสภาพหนี้ (อ้างอิงเลขเอกสารอย่างเดียว)
+    debt_doc_no: Optional[str] = Field(default=None, max_length=50)
     # จำนวนไฟล์ที่แนบจริงต่อหมวด เช่น {"weigh_slip": 16, "transfer": 1}
     # BE ไม่มี client S3 ของตัวเอง (ของเดิมก็เป็นแบบนี้) FE นับจาก lib/s3 แล้วส่งมาให้ด่านตรวจ
     attachments: dict[str, int] = Field(default_factory=dict)
