@@ -3,6 +3,7 @@
 auth ยังเป็นแบบเดียวกับ advance_routes (ไม่มี auth ที่ชั้นนี้ FE เป็นคนการ์ด) — ดู launch gate ใน spec
 """
 import logging
+import os
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
@@ -11,6 +12,8 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from schemas.finance_petty_schema import ExpenseTypeUpdate, FundCreate, FundUpdate
+from services.finance import advance_logic as adv_logic
+from services.finance import permission_logic as perms
 from services.finance import petty_logic as L
 from services.finance import petty_repo as repo
 
@@ -467,11 +470,26 @@ def _round_logs(db: Session, b) -> list[dict]:
              "remark": e["remark"]} for e in events]
 
 
-def _round_out(db: Session, b, employee_id: Optional[str] = None) -> dict:
-    """รายละเอียดรอบ — ส่งเลขบัญชีของเจ้าของเงินสดได้ที่นี่ที่เดียว (BE ไม่มี auth ห้ามใส่ในรายการ)"""
+def _may_see_bank_account(db: Session, holder_id: Optional[str], employee_id: Optional[str]) -> bool:
+    """เลขบัญชีของเจ้าของเงินสด: เจ้าของเอง ฝ่ายการเงิน/บัญชี (ชุดเดียวกับ Advance: FINANCE_DEPARTMENT_IDS
+    ค่าเริ่มต้น 4,6 + FINANCE_EMPLOYEE_IDS) และ superadmin เท่านั้น"""
+    eid = str(employee_id or "").strip()
+    if not eid:
+        return False
+    if (holder_id and eid == str(holder_id)) or perms.is_superadmin(eid):
+        return True
+    depts = [int(x) for x in adv_logic.parse_id_list(os.getenv("FINANCE_DEPARTMENT_IDS", "4,6")) if x.isdigit()]
+    emps = adv_logic.parse_id_list(os.getenv("FINANCE_EMPLOYEE_IDS"))
+    return adv_logic.is_finance_user(repo.employee_department(db, eid), eid, depts, emps)
+
+
+def _round_out(db: Session, b, employee_id: Optional[str] = None, with_payee: bool = False) -> dict:
+    """รายละเอียดรอบ · with_payee = GET รายละเอียดเท่านั้น: ใส่เลขบัญชีของเจ้าของเงินสดเมื่อคนดูมีสิทธิ์
+    (BE ไม่มี auth — ไม่ใส่ในรายการ และไม่ใส่ในคำตอบของปุ่ม หน้าเว็บดึงรายละเอียดใหม่หลังกดอยู่แล้ว)"""
     claims = repo.round_claims(db, b.id)
     body = _round_dict(db, b, claims=claims)
-    body["holder_payee"] = repo.payee_account(db, body["holder_employee_id"])
+    if with_payee and _may_see_bank_account(db, body["holder_employee_id"], employee_id):
+        body["holder_payee"] = repo.payee_account(db, body["holder_employee_id"])
     body["logs"] = _round_logs(db, b)
     claim_names = repo.employee_names(db, [x for c in claims for x in (c.created_by, c.approved_by)])
     body["claims"] = [_claim_dict(c, repo.claim_items(db, c.id), claim_names) for c in claims]
@@ -598,8 +616,9 @@ def round_duplicate_doc_no(field: str, value: str, exclude_id: Optional[int] = N
 
 @router.get("/batches/{batch_id}")
 def get_round(batch_id: int, employee_id: Optional[str] = None, db: Session = Depends(get_db)):
-    """รอบ + ใบทั้งหมดในรอบ · ส่ง employee_id มาเพื่อรู้ว่าคนนั้นกดอนุมัติเคลียร์ได้ไหม (can_clear)"""
-    return _round_out(db, _round_or_404(db, batch_id), employee_id)
+    """รอบ + ใบทั้งหมดในรอบ · ส่ง employee_id มาเพื่อรู้ว่าคนนั้นกดอนุมัติเคลียร์ได้ไหม (can_clear)
+    และได้ holder_payee (บัญชีรับเงินของเจ้าของเงินสด) เมื่อเป็นฝ่ายการเงิน/บัญชี เจ้าของเงินสด หรือ superadmin"""
+    return _round_out(db, _round_or_404(db, batch_id), employee_id, with_payee=True)
 
 
 @router.post("/batches/{batch_id}/clear-approve")

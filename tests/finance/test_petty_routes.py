@@ -275,7 +275,12 @@ class TestHeadClearing:
 
 
 class TestHolderBankAccountForThePayBox:
-    """กล่องจ่ายเงินของรอบต้องเห็นบัญชีของเจ้าของเงินสด · BE ไม่มี auth จึงส่งเฉพาะรายละเอียดรอบ ไม่ใส่ในรายการ"""
+    """กล่องจ่ายเงินของรอบต้องเห็นบัญชีของเจ้าของเงินสด · BE ไม่มี auth จึงส่งเฉพาะ GET รายละเอียดรอบ
+    และเฉพาะคนดูที่เป็นฝ่ายการเงิน/บัญชี (FINANCE_DEPARTMENT_IDS ค่าเริ่มต้น 4,6) เจ้าของเงินสดเอง หรือ superadmin
+    คนอื่น ไม่ส่ง employee_id รายการ และคำตอบของปุ่ม (POST) ไม่มีคีย์ holder_payee เลย"""
+
+    ACCOUNT = {"payee_account_type": "bank", "bank": "KBANK", "account_no": "0123456789",
+               "account_name": "ณรงค์กรณ์ อัจฉริยญาติ"}
 
     def _account(self, db_session, status="ACTIVE"):
         from models.finance_model import FinPayeeAccount
@@ -283,22 +288,83 @@ class TestHolderBankAccountForThePayBox:
                                        account_name="ณรงค์กรณ์ อัจฉริยญาติ", status=status))
         db_session.commit()
 
-    def test_detail_carries_the_active_account(self, db_session, sent_round):
-        self._account(db_session)
-        body = R.get_round(sent_round["id"], employee_id=None, db=db_session)
-        assert body["holder_payee"] == {"payee_account_type": "bank", "bank": "KBANK",
-                                        "account_no": "0123456789", "account_name": "ณรงค์กรณ์ อัจฉริยญาติ"}
+    @pytest.fixture
+    def staff(self, db_session, monkeypatch):
+        """40001 การเงิน (แผนก 4) · 60001 บัญชี (แผนก 6) · 30001 แผนกอื่น"""
+        from models.user_model import User
+        monkeypatch.delenv("FINANCE_DEPARTMENT_IDS", raising=False)
+        monkeypatch.delenv("FINANCE_EMPLOYEE_IDS", raising=False)
+        for eid, dept in (("40001", 4), ("60001", 6), ("30001", 30)):
+            db_session.add(User(username=f"u{eid}", password_hash="x", email=f"{eid}@test.local",
+                                employee_id=eid, firstname="ก", lastname="ข", department_id=dept))
+        db_session.commit()
 
-    def test_inactive_account_is_not_offered(self, db_session, sent_round):
+    def _detail(self, db_session, round_id, employee_id):
+        return R.get_round(round_id, employee_id=employee_id, db=db_session)
+
+    def test_finance_sees_the_active_account(self, db_session, sent_round, staff):
+        self._account(db_session)
+        assert self._detail(db_session, sent_round["id"], "40001")["holder_payee"] == self.ACCOUNT
+
+    def test_accounting_sees_it_too(self, db_session, sent_round, staff):
+        self._account(db_session)
+        assert self._detail(db_session, sent_round["id"], "60001")["holder_payee"] == self.ACCOUNT
+
+    def test_the_holder_sees_their_own_account(self, db_session, sent_round, staff):
+        self._account(db_session)
+        assert self._detail(db_session, sent_round["id"], "12345")["holder_payee"] == self.ACCOUNT
+
+    def test_superadmin_sees_it(self, db_session, sent_round, staff):
+        self._account(db_session)
+        assert self._detail(db_session, sent_round["id"], "670108")["holder_payee"] == self.ACCOUNT
+
+    def test_someone_else_gets_no_key_at_all(self, db_session, sent_round, staff):
+        self._account(db_session)
+        for viewer in ("30001", "600100", "99999", None):
+            body = self._detail(db_session, sent_round["id"], viewer)
+            assert "holder_payee" not in body and "0123456789" not in str(body)
+
+    def test_finance_departments_come_from_the_env(self, db_session, sent_round, staff, monkeypatch):
+        self._account(db_session)
+        monkeypatch.setenv("FINANCE_DEPARTMENT_IDS", "30")
+        assert self._detail(db_session, sent_round["id"], "30001")["holder_payee"] == self.ACCOUNT
+        assert "holder_payee" not in self._detail(db_session, sent_round["id"], "40001")
+
+    def test_named_finance_employees_come_from_the_env(self, db_session, sent_round, staff, monkeypatch):
+        self._account(db_session)
+        monkeypatch.setenv("FINANCE_EMPLOYEE_IDS", "30001")
+        assert self._detail(db_session, sent_round["id"], "30001")["holder_payee"] == self.ACCOUNT
+
+    def test_inactive_account_is_not_offered(self, db_session, sent_round, staff):
         self._account(db_session, status="INACTIVE")
-        assert R.get_round(sent_round["id"], employee_id=None, db=db_session)["holder_payee"] is None
+        assert self._detail(db_session, sent_round["id"], "40001")["holder_payee"] is None
 
-    def test_no_account_gives_none(self, db_session, sent_round):
-        assert R.get_round(sent_round["id"], employee_id=None, db=db_session)["holder_payee"] is None
+    def test_no_account_gives_none(self, db_session, sent_round, staff):
+        assert self._detail(db_session, sent_round["id"], "40001")["holder_payee"] is None
 
-    def test_list_never_carries_account_numbers(self, db_session, sent_round):
+    def test_button_responses_never_carry_it(self, db_session, claim, sent_round, staff):
         self._account(db_session)
-        rows = R.list_rounds(fund_id=None, status=None, holder=None, clear_approver=None,
+        assert "holder_payee" not in sent_round  # ส่งเคลียร์ (เจ้าของเงินสดกดเอง ก็ไม่ส่ง)
+        steps = [
+            R.clear_approve_round(sent_round["id"], RoundActionIn(employee_id="600100"), db_session),
+            R.review_claim(claim.form_id, ReviewIn(employee_id="60001", action="PASS"), db_session),
+            R.voucher_round(sent_round["id"], VoucherIn(employee_id="60001", voucher_no="PV-1",
+                                                        voucher_date="2026-10-29"), db_session),
+            R.edit_round_doc_numbers(sent_round["id"], DocNumbersIn(employee_id="60001", voucher_no="PV-2"),
+                                     db_session),
+            R.pay_round(sent_round["id"], PayIn(employee_id="40001", pay_date="2026-10-30"), db_session),
+        ]
+        for body in steps:
+            assert "holder_payee" not in body and "0123456789" not in str(body)
+
+    def test_reject_response_does_not_carry_it(self, db_session, sent_round, staff):
+        self._account(db_session)
+        out = R.clear_reject_round(sent_round["id"], RoundRejectIn(employee_id="600100", reason="x"), db_session)
+        assert "holder_payee" not in out
+
+    def test_list_never_carries_account_numbers(self, db_session, sent_round, staff):
+        self._account(db_session)
+        rows = R.list_rounds(fund_id=None, status=None, holder="12345", clear_approver=None,
                              limit=50, offset=0, db=db_session)
         assert rows and "holder_payee" not in rows[0] and "0123456789" not in str(rows)
 

@@ -663,6 +663,15 @@ def employee_names(db: Session, employee_ids) -> dict[str, str]:
     return out
 
 
+def employee_department(db: Session, employee_id: Optional[str]) -> Optional[int]:
+    """แผนกของพนักงานจาก users · ไม่พบ = None"""
+    if not employee_id:
+        return None
+    from models.user_model import User
+    row = db.query(User.department_id).filter(User.employee_id == str(employee_id)).first()
+    return row[0] if row else None
+
+
 def payee_account(db: Session, employee_id: Optional[str]) -> Optional[dict]:
     """บัญชีรับเงินที่ใช้อยู่ (ACTIVE) ของพนักงานจาก master ของ Advance · ไม่มี/ปิดอยู่ = None
     master มีแต่บัญชีธนาคาร (KBANK) จึงเป็นชนิด bank เสมอ"""
