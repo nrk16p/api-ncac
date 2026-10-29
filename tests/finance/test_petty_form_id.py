@@ -15,7 +15,7 @@ def test_generate_form_id_formats_petty(seq_stub, frozen_bkk):
 
 def test_other_funds_have_their_own_series(seq_stub, frozen_bkk):
     assert generate_form_id(None, "PC-03-B02") == "LB-B02-2610-001"
-    assert generate_form_id(None, "PC-01-A01") == "01-A01-2610-001"
+    assert generate_form_id(None, "PC-01-A01") == "BK-A01-2610-001"
 
 
 def test_petty_series_resets_per_month(seq_stub, monkeypatch):
@@ -54,6 +54,13 @@ def test_unknown_branch_keeps_its_number(seq_stub, frozen_bkk):
 
 def test_saraburi_runs_as_sb(seq_stub, frozen_bkk):
     assert generate_form_id(None, "PC-02-B01") == "SB-B01-2610-001"
+
+
+def test_bangkok_runs_as_bk(seq_stub, frozen_bkk):
+    # 01 สกท = BK ตาม ATMS (คลัง HR กรุงเทพ / คลังทรัพย์สินกรุงเทพ / คลัง บัญชีการเงิน สกท. ออกเลข BKDD…)
+    assert L.branch_letters("01") == "BK"
+    assert generate_form_id(None, "PC-01-A04") == "BK-A04-2610-001"
+    assert L.batch_no("01", "A04", 2610, 1) == "BK-A04-2610-B1"
 
 
 def test_sequence_key_stays_numeric_so_old_counters_keep_counting(seq_stub, frozen_bkk):

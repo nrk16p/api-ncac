@@ -99,11 +99,12 @@ def petty_form_code(branch: str, division: str) -> str:
     return f"PC-{branch}-{division}"
 
 
-BRANCH_LETTERS = {"02": "SB", "03": "LB"}
+# 01 สกท = BK ตามคลังกรุงเทพใน ATMS (BKDD…) · 04 ศรย / 05 สขก ยังไม่ยืนยัน
+BRANCH_LETTERS = {"01": "BK", "02": "SB", "03": "LB"}
 
 
 def branch_letters(branch: str) -> str:
-    """ตัวอักษรสาขาแบบที่ ATMS ใช้ (LBDD / SBDD) · สาขาที่ยังไม่ยืนยัน ใช้เลขเดิมไปก่อน"""
+    """ตัวอักษรสาขาแบบที่ ATMS ใช้ (BKDD / SBDD / LBDD) · สาขาที่ยังไม่ยืนยัน ใช้เลขเดิมไปก่อน"""
     code = (branch or "").strip()
     return BRANCH_LETTERS.get(code, code)
 
