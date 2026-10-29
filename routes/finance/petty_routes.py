@@ -447,7 +447,7 @@ def _round_out(db: Session, b, employee_id: Optional[str] = None) -> dict:
     claim_names = repo.employee_names(db, [x for c in claims for x in (c.created_by, c.approved_by)])
     body["claims"] = [_claim_dict(c, repo.claim_items(db, c.id), claim_names) for c in claims]
     if employee_id:
-        body["can_clear"] = _may_clear(db, b, employee_id, fresh=False)
+        body["can_clear"], body["is_primary"] = _clear_roles(db, b, employee_id, fresh=False)
     return body
 
 
@@ -462,16 +462,27 @@ def _required_level(people: dict, holder_id: Optional[str]) -> int:
     return L.clear_required_level((people.get(holder_id) or {}).get("level"))
 
 
-def _may_clear(db: Session, batch, employee_id: str, fresh: bool = True) -> bool:
-    """หัวหน้าตามสายงานของเจ้าของเงินสด (engine เดียวกับ Advance) · รอบต้องรออนุมัติเคลียร์อยู่"""
+def _clear_roles(db: Session, batch, employee_id: str, fresh: bool = True) -> tuple[bool, bool]:
+    """(กดอนุมัติเคลียร์ได้ไหม, เป็นคนที่ระบบส่งอีเมลหาไหม) — หัวหน้าตามสายงานของเจ้าของเงินสด
+    (engine เดียวกับ Advance) · รอบต้องรออนุมัติเคลียร์อยู่
+
+    ข้อสองใช้แยกแถบ "รอฉันอนุมัติ" (ได้อีเมลตาม clear_notify) กับ "อนุมัติแทนได้" (กดได้แต่ไม่ได้อีเมล)
+    """
     if batch.status != L.BATCH_CLEAR_PENDING:
-        return False
+        return False, False
     fund = repo.get_fund(db, batch.fund_id)
     if fund is None:
-        return False
+        return False, False
     people, mappings = repo.line_context(db, fresh=fresh)
     required = batch.clear_required_level or _required_level(people, fund.holder_employee_id)
-    return clear.can_clear(people, mappings, fund.holder_employee_id, required, employee_id)
+    if not clear.can_clear(people, mappings, fund.holder_employee_id, required, employee_id):
+        return False, False
+    heads = clear.clear_notify(people, mappings, fund.holder_employee_id, required)
+    return True, any(str(p.get("employee_id")) == str(employee_id) for p in heads)
+
+
+def _may_clear(db: Session, batch, employee_id: str, fresh: bool = True) -> bool:
+    return _clear_roles(db, batch, employee_id, fresh=fresh)[0]
 
 
 @router.post("/batches", status_code=201)
@@ -530,11 +541,16 @@ def list_rounds(fund_id: Optional[int] = None, status: Optional[str] = None, hol
     if clear_approver:
         status = L.BATCH_CLEAR_PENDING
     rows = repo.list_rounds(db, fund_ids=fund_ids, status=status, limit=limit, offset=offset)
-    if clear_approver:
-        rows = [b for b in rows if _may_clear(db, b, clear_approver, fresh=False)]
     out = []
     for b in rows:
-        out.append(_round_dict(db, b, claims=repo.round_claims(db, b.id)))
+        if clear_approver:
+            may, primary = _clear_roles(db, b, clear_approver, fresh=False)
+            if not may:
+                continue
+        body = _round_dict(db, b, claims=repo.round_claims(db, b.id))
+        if clear_approver:
+            body["is_primary"] = primary  # แถบรอฉันอนุมัติ / อนุมัติแทนได้
+        out.append(body)
     return out
 
 

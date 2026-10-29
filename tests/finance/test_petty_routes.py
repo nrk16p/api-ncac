@@ -241,6 +241,33 @@ class TestHeadClearing:
                                limit=50, offset=0, db=db_session)
         assert [r["id"] for r in mine] == [sent_round["id"]] and theirs == []
 
+    def test_head_queue_marks_who_the_round_was_sent_to(self, db_session, sent_round, line):
+        # รอฉันอนุมัติ = คนที่ได้อีเมล (ชั้นต่ำสุดที่กดได้) · อนุมัติแทนได้ = กดได้แต่ไม่ได้อีเมล
+        line["590100"] = _person("590100", 4, 7)
+
+        def queue(emp):
+            return R.list_rounds(fund_id=None, status=None, holder=None, clear_approver=emp,
+                                 limit=50, offset=0, db=db_session)
+
+        assert [(r["id"], r["is_primary"]) for r in queue("600100")] == [(sent_round["id"], True)]
+        assert [(r["id"], r["is_primary"]) for r in queue("590100")] == [(sent_round["id"], False)]
+
+    def test_plain_round_list_has_no_primary_flag(self, db_session, sent_round):
+        rows = R.list_rounds(fund_id=None, status=None, holder=None, clear_approver=None,
+                             limit=50, offset=0, db=db_session)
+        assert rows and "is_primary" not in rows[0]
+
+    def test_round_detail_marks_primary_for_the_viewer(self, db_session, sent_round, line):
+        line["590100"] = _person("590100", 4, 7)
+        assert R.get_round(sent_round["id"], employee_id="600100", db=db_session)["is_primary"] is True
+        assert R.get_round(sent_round["id"], employee_id="590100", db=db_session)["is_primary"] is False
+        assert R.get_round(sent_round["id"], employee_id="600200", db=db_session)["is_primary"] is False
+        assert "is_primary" not in R.get_round(sent_round["id"], employee_id=None, db=db_session)
+
+    def test_nobody_is_primary_once_the_round_has_moved_on(self, db_session, sent_round):
+        R.clear_approve_round(sent_round["id"], RoundActionIn(employee_id="600100"), db_session)
+        assert R.get_round(sent_round["id"], employee_id="600100", db=db_session)["is_primary"] is False
+
     def test_unknown_round_is_404(self, db_session, line):
         with pytest.raises(HTTPException) as exc:
             R.clear_approve_round(9999, RoundActionIn(employee_id="600100"), db_session)
