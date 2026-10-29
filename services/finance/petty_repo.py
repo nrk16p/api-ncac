@@ -166,6 +166,7 @@ def list_claims(db: Session, *, fund_ids: Optional[list[int]], created_by: Optio
 
 # ---------------------------- transitions ----------------------------
 
+from contextlib import contextmanager  # noqa: E402
 from datetime import datetime, timezone  # noqa: E402
 
 # flow v2: อนุมัติ = จ่ายพร้อมกัน จึงประทับทั้งเวลาอนุมัติและเวลาแนบสลิปในจังหวะเดียว
@@ -177,10 +178,11 @@ _NOW_FIELDS = {
 
 def set_status(db: Session, claim: FinPettyClaim, target: str, actor: str, action: str,
                fields: Optional[dict] = None, remark: Optional[str] = None,
-               log_extra: Optional[dict] = None) -> FinPettyClaim:
+               log_extra: Optional[dict] = None, commit: bool = True) -> FinPettyClaim:
     """จังหวะเดียวที่สถานะเปลี่ยนได้ — ทุก endpoint ต้องผ่านทางนี้ จึงมี log และกฎครบเสมอ
 
-    log_extra = ค่าที่ไม่ใช่ช่องของใบแต่ควรอยู่ใน log ด้วย เช่น เลขที่ทำจ่ายของรอบ"""
+    log_extra = ค่าที่ไม่ใช่ช่องของใบแต่ควรอยู่ใน log ด้วย เช่น เลขที่ทำจ่ายของรอบ
+    commit=False = งานทั้งรอบที่วนหลายใบ ผู้เรียก commit ครั้งเดียวตอนจบ (ดู _all_or_nothing)"""
     L.assert_transition(claim.status, target)
     before = claim.status
     for key, value in (fields or {}).items():
@@ -195,9 +197,22 @@ def set_status(db: Session, claim: FinPettyClaim, target: str, actor: str, actio
     changes.update({k: str(v) for k, v in (fields or {}).items()})
     changes.update(log_extra or {})
     log(db, claim.id, action, actor, changes=changes, remark=remark)
-    db.commit()
-    db.refresh(claim)
+    if commit:
+        db.commit()
+        db.refresh(claim)
     return claim
+
+
+@contextmanager
+def _all_or_nothing(db: Session):
+    """งานทั้งรอบสำเร็จพร้อมกันใน commit เดียว หรือไม่เปลี่ยนอะไรเลย
+    ใบที่ 2 ล้มต้องไม่เหลือรอบที่เปลี่ยนสถานะไปแล้วกับใบแรกที่เปลี่ยนไปครึ่งทาง"""
+    try:
+        yield
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
 
 
 _EDITABLE = ("PENDING_APPROVAL", "RETURNED", "SENT_BACK")
@@ -352,71 +367,74 @@ def _last_round_number(db: Session, branch: str, division: str, yymm: int) -> in
 def create_round(db: Session, fund_id: int, claim_ids: list[int], actor: str, remark: Optional[str],
                  required_level: int) -> FinPettyBatch:
     """เจ้าของเงินสดรวมใบที่อนุมัติจ่ายแล้วของกองทุนตัวเองเป็นรอบ ส่งให้หัวหน้าอนุมัติเคลียร์"""
-    fund = get_fund(db, fund_id)
-    if fund is None:
-        raise LookupError("ไม่พบกองทุน")
-    claims = db.query(FinPettyClaim).filter(FinPettyClaim.id.in_(claim_ids)).all()
-    if len(claims) != len(set(claim_ids)):
-        raise L.PettyRuleError("มีใบที่หาไม่พบในรายการที่เลือก", 404)
-    for claim in claims:
-        if claim.fund_id != fund_id:
-            raise L.PettyRuleError(f"ใบ {claim.form_id} ไม่ได้อยู่ในกองทุนนี้", 409)
-        if claim.status != L.APPROVED:
-            raise L.PettyRuleError(
-                f"ใบ {claim.form_id} สถานะ {L.STATUS_LABELS.get(claim.status, claim.status)} "
-                f"ยังส่งเคลียร์ไม่ได้", 409)
+    with _all_or_nothing(db):
+        fund = get_fund(db, fund_id)
+        if fund is None:
+            raise LookupError("ไม่พบกองทุน")
+        claims = db.query(FinPettyClaim).filter(FinPettyClaim.id.in_(claim_ids)).all()
+        if len(claims) != len(set(claim_ids)):
+            raise L.PettyRuleError("มีใบที่หาไม่พบในรายการที่เลือก", 404)
+        for claim in claims:
+            if claim.fund_id != fund_id:
+                raise L.PettyRuleError(f"ใบ {claim.form_id} ไม่ได้อยู่ในกองทุนนี้", 409)
+            if claim.status != L.APPROVED:
+                raise L.PettyRuleError(
+                    f"ใบ {claim.form_id} สถานะ {L.STATUS_LABELS.get(claim.status, claim.status)} "
+                    f"ยังส่งเคลียร์ไม่ได้", 409)
 
-    yymm = _yymm_bkk()
-    batch = FinPettyBatch(
-        fund_id=fund_id, remark=remark, status=L.BATCH_CLEAR_PENDING,
-        batch_no=L.batch_no(fund.branch_code, fund.division_code, yymm,
-                            _last_round_number(db, fund.branch_code, fund.division_code, yymm) + 1),
-        total_amount=sum((c.amount for c in claims), _ZERO),
-        submitted_by=actor, submitted_at=datetime.now(timezone.utc), clear_required_level=required_level,
-    )
-    db.add(batch)
-    db.flush()
-    for claim in claims:
-        set_status(db, claim, L.CLEAR_PENDING, actor, "SUBMIT_ROUND",
-                   fields={"batch_id": batch.id}, remark=batch.batch_no)
-    db.commit()
+        yymm = _yymm_bkk()
+        batch = FinPettyBatch(
+            fund_id=fund_id, remark=remark, status=L.BATCH_CLEAR_PENDING,
+            batch_no=L.batch_no(fund.branch_code, fund.division_code, yymm,
+                                _last_round_number(db, fund.branch_code, fund.division_code, yymm) + 1),
+            total_amount=sum((c.amount for c in claims), _ZERO),
+            submitted_by=actor, submitted_at=datetime.now(timezone.utc), clear_required_level=required_level,
+        )
+        db.add(batch)
+        db.flush()
+        for claim in claims:
+            set_status(db, claim, L.CLEAR_PENDING, actor, "SUBMIT_ROUND",
+                       fields={"batch_id": batch.id}, remark=batch.batch_no, commit=False)
     db.refresh(batch)
     return batch
 
 
 def clear_approve_round(db: Session, batch: FinPettyBatch, actor: str) -> FinPettyBatch:
     """หัวหน้าอนุมัติเคลียร์ทั้งรอบ → ทุกใบเข้าคิวบัญชีตรวจ (สิทธิ์ตรวจที่ route ก่อนเรียก)"""
-    _set_round_status(db, batch, L.BATCH_AWAITING_REVIEW)
-    batch.clear_approved_by, batch.clear_approved_at = actor, datetime.now(timezone.utc)
-    for claim in round_claims(db, batch.id):
-        set_status(db, claim, L.AWAITING_REVIEW, actor, "CLEAR_APPROVE", remark=batch.batch_no)
-    db.commit()
+    with _all_or_nothing(db):
+        _set_round_status(db, batch, L.BATCH_AWAITING_REVIEW)
+        batch.clear_approved_by, batch.clear_approved_at = actor, datetime.now(timezone.utc)
+        for claim in round_claims(db, batch.id):
+            set_status(db, claim, L.AWAITING_REVIEW, actor, "CLEAR_APPROVE", remark=batch.batch_no, commit=False)
     db.refresh(batch)
     return batch
 
 
 def clear_reject_round(db: Session, batch: FinPettyBatch, actor: str, reason: str) -> FinPettyBatch:
     """หัวหน้าไม่อนุมัติ → รอบจบ ใบกลับไปให้เจ้าของเงินสดแก้แล้วจัดรอบใหม่ (ยอดยังถูกกันไว้ เพราะจ่ายไปแล้ว)"""
-    _set_round_status(db, batch, L.BATCH_CLEAR_REJECTED)
-    batch.clear_approved_by, batch.clear_approved_at = actor, datetime.now(timezone.utc)
-    batch.clear_reject_reason = reason
-    for claim in round_claims(db, batch.id):
-        set_status(db, claim, L.APPROVED, actor, "CLEAR_REJECT", fields={"batch_id": None}, remark=reason)
-    db.commit()
+    with _all_or_nothing(db):
+        _set_round_status(db, batch, L.BATCH_CLEAR_REJECTED)
+        batch.clear_approved_by, batch.clear_approved_at = actor, datetime.now(timezone.utc)
+        batch.clear_reject_reason = reason
+        for claim in round_claims(db, batch.id):
+            set_status(db, claim, L.APPROVED, actor, "CLEAR_REJECT", fields={"batch_id": None}, remark=reason,
+                       commit=False)
     db.refresh(batch)
     return batch
 
 
 def review_pass(db: Session, claim: FinPettyClaim, actor: str, remark: Optional[str]) -> FinPettyClaim:
-    """บัญชีตรวจผ่านทีละใบ · ใบสุดท้ายของรอบผ่านเมื่อไร รอบพร้อมตั้งเบิกทันที"""
-    out = set_status(db, claim, L.REVIEWED, actor, "ACC_PASS", fields={"review_remark": remark}, remark=remark)
-    if out.batch_id is not None:
-        batch = get_round(db, out.batch_id)
-        siblings = round_claims(db, out.batch_id)
-        if batch is not None and batch.status == L.BATCH_AWAITING_REVIEW \
-                and all(c.status == L.REVIEWED for c in siblings):
-            _set_round_status(db, batch, L.BATCH_REVIEWED)
-            db.commit()
+    """บัญชีตรวจผ่านทีละใบ · ใบสุดท้ายของรอบผ่านเมื่อไร รอบพร้อมตั้งเบิกทันที (ใบกับรอบลงพร้อมกัน)"""
+    with _all_or_nothing(db):
+        out = set_status(db, claim, L.REVIEWED, actor, "ACC_PASS", fields={"review_remark": remark},
+                         remark=remark, commit=False)
+        if out.batch_id is not None:
+            batch = get_round(db, out.batch_id)
+            siblings = round_claims(db, out.batch_id)
+            if batch is not None and batch.status == L.BATCH_AWAITING_REVIEW \
+                    and all(c.status == L.REVIEWED for c in siblings):
+                _set_round_status(db, batch, L.BATCH_REVIEWED)
+    db.refresh(out)
     return out
 
 
@@ -424,15 +442,15 @@ def voucher_round(db: Session, batch: FinPettyBatch, actor: str, voucher_no: Opt
                   voucher_date) -> FinPettyBatch:
     """บัญชีตั้งเบิกทั้งรอบ · นับยอดใหม่ เพราะเจ้าหน้าที่อาจแก้ยอดตอนบัญชีตีกลับ
     สถานะใบไม่เปลี่ยน แต่ลง log ทุกใบ ให้ประวัติของแต่ละใบเห็นว่าตั้งเบิกแล้ว"""
-    _set_round_status(db, batch, L.BATCH_VOUCHERED)
-    batch.voucher_no, batch.voucher_date = voucher_no, voucher_date
-    batch.vouchered_by, batch.vouchered_at = actor, datetime.now(timezone.utc)
-    claims = round_claims(db, batch.id)
-    batch.total_amount = sum((c.amount for c in claims), _ZERO)
-    for claim in claims:
-        log(db, claim.id, "VOUCHER", actor, remark=batch.batch_no,
-            changes={"voucher_no": voucher_no, "voucher_date": str(voucher_date)})
-    db.commit()
+    with _all_or_nothing(db):
+        _set_round_status(db, batch, L.BATCH_VOUCHERED)
+        batch.voucher_no, batch.voucher_date = voucher_no, voucher_date
+        batch.vouchered_by, batch.vouchered_at = actor, datetime.now(timezone.utc)
+        claims = round_claims(db, batch.id)
+        batch.total_amount = sum((c.amount for c in claims), _ZERO)
+        for claim in claims:
+            log(db, claim.id, "VOUCHER", actor, remark=batch.batch_no,
+                changes={"voucher_no": voucher_no, "voucher_date": str(voucher_date)})
     db.refresh(batch)
     return batch
 
@@ -440,14 +458,14 @@ def voucher_round(db: Session, batch: FinPettyBatch, actor: str, voucher_no: Opt
 def pay_round(db: Session, batch: FinPettyBatch, actor: str, pay_date,
               pay_doc_no: Optional[str] = None) -> FinPettyBatch:
     """การเงินทำจ่ายคืนเจ้าของเงินสดทั้งรอบ → ปิดรอบและทุกใบ ยอดคืนเข้า available เอง"""
-    _set_round_status(db, batch, L.BATCH_CLOSED)
-    now = datetime.now(timezone.utc)
-    batch.pay_date, batch.pay_doc_no, batch.paid_by, batch.paid_at = pay_date, pay_doc_no, actor, now
-    batch.closed_by, batch.closed_at = actor, now
-    for claim in round_claims(db, batch.id):
-        set_status(db, claim, L.CLOSED, actor, "PAY_CLOSE", remark=batch.batch_no,
-                   log_extra={"pay_date": str(pay_date), "pay_doc_no": pay_doc_no})
-    db.commit()
+    with _all_or_nothing(db):
+        _set_round_status(db, batch, L.BATCH_CLOSED)
+        now = datetime.now(timezone.utc)
+        batch.pay_date, batch.pay_doc_no, batch.paid_by, batch.paid_at = pay_date, pay_doc_no, actor, now
+        batch.closed_by, batch.closed_at = actor, now
+        for claim in round_claims(db, batch.id):
+            set_status(db, claim, L.CLOSED, actor, "PAY_CLOSE", remark=batch.batch_no,
+                       log_extra={"pay_date": str(pay_date), "pay_doc_no": pay_doc_no}, commit=False)
     db.refresh(batch)
     return batch
 
@@ -461,15 +479,15 @@ def edit_doc_numbers(db: Session, batch: FinPettyBatch, actor: str, wanted: dict
     diffs = L.doc_number_changes(batch.status, current, wanted)
     if not diffs:
         return batch
-    for key, (_, new) in diffs.items():
-        setattr(batch, key, new)
     remark = L.doc_changes_text(diffs)
     changes = {k: [None if v is None else str(v) for v in pair] for k, pair in diffs.items()}
     now = datetime.now(timezone.utc)
-    for claim in round_claims(db, batch.id):
-        db.add(FinPettyLog(claim_id=claim.id, action="EDIT_DOC_NUMBERS", action_by=actor,
-                           changes=changes, remark=remark, created_at=now))
-    db.commit()
+    with _all_or_nothing(db):
+        for key, (_, new) in diffs.items():
+            setattr(batch, key, new)
+        for claim in round_claims(db, batch.id):
+            db.add(FinPettyLog(claim_id=claim.id, action="EDIT_DOC_NUMBERS", action_by=actor,
+                               changes=changes, remark=remark, created_at=now))
     db.refresh(batch)
     return batch
 

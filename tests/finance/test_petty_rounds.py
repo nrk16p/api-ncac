@@ -274,3 +274,108 @@ class TestDdNumber:
         with pytest.raises(L.PettyRuleError) as exc:
             repo.set_dd(db_session, a, "LBDD1", actor="12345")
         assert exc.value.http_status == 409
+
+
+class TestRoundIsAllOrNothing:
+    """ทั้งรอบเปลี่ยนพร้อมกัน หรือไม่เปลี่ยนอะไรเลย — เดิม set_status commit ทีละใบ
+    ใบที่ 2 ล้มแล้วรอบค้างครึ่งทาง: รอบเปลี่ยนสถานะไปแล้ว ใบแรกเปลี่ยน ใบที่ 2 ไม่เปลี่ยน"""
+
+    def _tamper(self, db_session, claim, status):
+        claim.status = status  # จำลองใบที่ 2 อยู่ผิดสถานะ เปลี่ยนต่อไม่ได้
+        db_session.commit()
+
+    def _fresh(self, db_session, *rows):
+        db_session.expire_all()
+        return rows
+
+    def test_create_round_keeps_nothing_when_the_second_claim_fails(self, db_session, fund, approved,
+                                                                    monkeypatch):
+        from models.finance_petty_model import FinPettyBatch
+        a, b = approved(), approved()
+        real = repo.set_status
+
+        def second_one_breaks(db, claim, *args, **kwargs):
+            if claim.id == b.id:
+                raise RuntimeError("ฐานข้อมูลสะดุด")
+            return real(db, claim, *args, **kwargs)
+
+        monkeypatch.setattr(repo, "set_status", second_one_breaks)
+        with pytest.raises(RuntimeError):
+            _round(db_session, fund, [a, b])
+        self._fresh(db_session)
+        assert db_session.query(FinPettyBatch).count() == 0
+        assert (a.status, a.batch_id, b.status, b.batch_id) == ("APPROVED", None, "APPROVED", None)
+        assert "SUBMIT_ROUND" not in _actions(db_session, a)
+
+    def test_clear_approve_changes_nothing_when_the_second_claim_cannot_move(self, db_session, fund, approved):
+        a, b = approved(), approved()
+        batch = _round(db_session, fund, [a, b])
+        self._tamper(db_session, b, L.APPROVED)
+        with pytest.raises(L.PettyRuleError):
+            repo.clear_approve_round(db_session, batch, actor="600100")
+        self._fresh(db_session)
+        assert batch.status == "CLEAR_PENDING" and batch.clear_approved_by is None
+        assert a.status == "CLEAR_PENDING" and a.submitted_to_acc_at is None
+        assert "CLEAR_APPROVE" not in _actions(db_session, a)
+
+    def test_clear_reject_changes_nothing_when_the_second_claim_cannot_move(self, db_session, fund, approved):
+        a, b = approved(), approved()
+        batch = _round(db_session, fund, [a, b])
+        self._tamper(db_session, b, L.AWAITING_REVIEW)
+        with pytest.raises(L.PettyRuleError):
+            repo.clear_reject_round(db_session, batch, actor="600100", reason="x")
+        self._fresh(db_session)
+        assert batch.status == "CLEAR_PENDING" and batch.clear_reject_reason is None
+        assert a.status == "CLEAR_PENDING" and a.batch_id == batch.id
+
+    def _reviewed(self, db_session, fund, approved):
+        claims = [approved(), approved()]
+        batch = repo.clear_approve_round(db_session, _round(db_session, fund, claims), actor="600100")
+        for c in claims:
+            repo.review_pass(db_session, c, actor="80001", remark=None)
+        db_session.refresh(batch)
+        return batch, claims
+
+    def test_voucher_changes_nothing_when_a_claim_log_fails(self, db_session, fund, approved, monkeypatch):
+        batch, (a, b) = self._reviewed(db_session, fund, approved)
+        real = repo.log
+        calls = []
+
+        def second_log_breaks(db, claim_id, action, *args, **kwargs):
+            calls.append(claim_id)
+            if len(calls) == 2:
+                raise RuntimeError("ฐานข้อมูลสะดุด")
+            return real(db, claim_id, action, *args, **kwargs)
+
+        monkeypatch.setattr(repo, "log", second_log_breaks)
+        with pytest.raises(RuntimeError):
+            repo.voucher_round(db_session, batch, actor="80001", voucher_no="PV-1", voucher_date=date(2026, 10, 29))
+        self._fresh(db_session)
+        assert batch.status == "REVIEWED" and batch.voucher_no is None and batch.vouchered_at is None
+        assert "VOUCHER" not in _actions(db_session, a)
+
+    def test_pay_changes_nothing_when_the_second_claim_cannot_close(self, db_session, fund, approved):
+        batch, (a, b) = self._reviewed(db_session, fund, approved)
+        repo.voucher_round(db_session, batch, actor="80001", voucher_no="PV-1", voucher_date=date(2026, 10, 29))
+        self._tamper(db_session, b, L.AWAITING_REVIEW)
+        with pytest.raises(L.PettyRuleError):
+            repo.pay_round(db_session, batch, actor="90001", pay_date=date(2026, 10, 30), pay_doc_no="PAY-1")
+        self._fresh(db_session)
+        assert batch.status == "VOUCHERED" and batch.paid_at is None and batch.pay_doc_no is None
+        assert a.status == "REVIEWED" and b.status == "AWAITING_REVIEW"
+        assert "PAY_CLOSE" not in _actions(db_session, a)
+        assert repo.petty_committed(db_session, "12345") == Decimal("3280.00")
+
+    def test_last_pass_and_the_round_status_land_together(self, db_session, fund, approved, monkeypatch):
+        claims = [approved(), approved()]
+        batch = repo.clear_approve_round(db_session, _round(db_session, fund, claims), actor="600100")
+        repo.review_pass(db_session, claims[0], actor="80001", remark=None)
+
+        def round_update_breaks(db, batch, target):
+            raise RuntimeError("ฐานข้อมูลสะดุด")
+
+        monkeypatch.setattr(repo, "_set_round_status", round_update_breaks)
+        with pytest.raises(RuntimeError):
+            repo.review_pass(db_session, claims[1], actor="80001", remark=None)
+        self._fresh(db_session)
+        assert claims[1].status == "AWAITING_REVIEW" and batch.status == "AWAITING_REVIEW"
