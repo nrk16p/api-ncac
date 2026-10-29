@@ -2,7 +2,9 @@
 
 - ใบที่กรอกเป็นแถว: ทุกแถวเลือก พจส. หรือ พจร. · ใบเดี่ยวเลือกที่หัวใบ (detail.driver_role)
 - ใบยาง: ตำแหน่งยางต่อแถว เลือกได้หลายตำแหน่ง รหัสเดียวกับ WMS (F1–F4 · RA1–RA8 · RB1–RB13)
-- มี พจร. ในใบ (ทุกประเภท) → เจ้าของเงินสดต้องใส่เลขที่ใบรับสภาพหนี้ตอนอนุมัติ อ้างอิงแค่เลขเอกสาร
+- มี พจร. ในใบ (ทุกประเภท) → ต้องมีเลขที่ใบรับสภาพหนี้ อ้างอิงแค่เลขเอกสาร
+  เดิมบังคับตอนอนุมัติ · ผู้ใช้เปลี่ยน 29/10/2026 "กรอกเลขใบรับสภาพหนี้ ทำหลังจากโอนเงินแล้วได้"
+  → อนุมัติได้เลย เจ้าของเงินสดใส่เลขทีหลังแบบเลข DD และด่านบังคับย้ายไปตอนส่งเคลียร์
 """
 from datetime import date
 
@@ -82,15 +84,15 @@ class TestDebtDocNeeded:
         assert V.needs_debt_doc([{"driver_role": None}], {"driver_role": "พจร."}) is True
 
 
-class TestApprovalAsksForTheDebtDoc:
-    def test_pjr_without_the_number_is_blocked(self, db_session, tire, claim_payload, seq_stub, frozen_bkk):
-        claim = _open(db_session, claim_payload, _row(driver_role="พจร."))
-        with pytest.raises(HTTPException) as exc:
-            R.approve_claim(claim.form_id, ApproveIn(employee_id="12345", attachments=PAID), db_session)
-        assert exc.value.status_code == 403
-        assert any(m["key"] == "debt_doc_no" for m in exc.value.detail["missing"])
+class TestApprovalNoLongerAsksForTheDebtDoc:
+    """ผู้ใช้สั่ง 29/10/2026: เลขใบรับสภาพหนี้กรอกหลังโอนเงินได้ — อนุมัติไม่ต้องรอเลข"""
 
-    def test_the_number_is_kept(self, db_session, tire, claim_payload, seq_stub, frozen_bkk):
+    def test_pjr_without_the_number_is_approved(self, db_session, tire, claim_payload, seq_stub, frozen_bkk):
+        claim = _open(db_session, claim_payload, _row(driver_role="พจร."))
+        out = R.approve_claim(claim.form_id, ApproveIn(employee_id="12345", attachments=PAID), db_session)
+        assert out["status"] == "APPROVED" and out["debt_doc_no"] is None
+
+    def test_the_number_is_still_kept_when_given(self, db_session, tire, claim_payload, seq_stub, frozen_bkk):
         claim = _open(db_session, claim_payload, _row(driver_role="พจร."))
         out = R.approve_claim(claim.form_id, ApproveIn(employee_id="12345", attachments=PAID,
                                                        debt_doc_no=" RD-2610-015 "), db_session)
@@ -102,10 +104,31 @@ class TestApprovalAsksForTheDebtDoc:
         assert out["status"] == "APPROVED" and out["debt_doc_no"] is None
 
     def test_header_level_pjr_on_a_single_claim(self, db_session, tire, claim_payload, seq_stub, frozen_bkk):
+        claim = _open(db_session, claim_payload, _row(), detail={"driver_role": "พจร."})
+        out = R.approve_claim(claim.form_id, ApproveIn(employee_id="12345", attachments=PAID), db_session)
+        assert out["status"] == "APPROVED" and out["needs_debt_doc"] is True
+
+
+class TestClaimSaysIfItNeedsTheDebtDoc:
+    """FE ไม่ต้องคิดเองว่าใบไหนมี พจร. — BE บอกมาในใบเลย (ทั้งรายการและรายละเอียด)"""
+
+    def test_detail_of_a_pjr_claim(self, db_session, tire, claim_payload, seq_stub, frozen_bkk):
+        claim = _open(db_session, claim_payload, _row(), _row(driver_role="พจร.", ref_no="B-2"))
+        assert R.get_claim(claim.form_id, db=db_session)["needs_debt_doc"] is True
+
+    def test_detail_of_a_pjs_claim(self, db_session, tire, claim_payload, seq_stub, frozen_bkk):
+        claim = _open(db_session, claim_payload, _row())
+        assert R.get_claim(claim.form_id, db=db_session)["needs_debt_doc"] is False
+
+    def test_header_level_pjr(self, db_session, tire, claim_payload, seq_stub, frozen_bkk):
         claim = _open(db_session, claim_payload, _row(driver_role=None), detail={"driver_role": "พจร."})
-        with pytest.raises(HTTPException) as exc:
-            R.approve_claim(claim.form_id, ApproveIn(employee_id="12345", attachments=PAID), db_session)
-        assert any(m["key"] == "debt_doc_no" for m in exc.value.detail["missing"])
+        assert R.get_claim(claim.form_id, db=db_session)["needs_debt_doc"] is True
+
+    def test_list(self, db_session, tire, claim_payload, seq_stub, frozen_bkk):
+        pjr = _open(db_session, claim_payload, _row(driver_role="พจร."))
+        pjs = _open(db_session, claim_payload, _row(ref_no="B-2"))
+        rows = {c["form_id"]: c for c in R.list_claims(limit=50, offset=0, db=db_session)["items"]}
+        assert rows[pjr.form_id]["needs_debt_doc"] is True and rows[pjs.form_id]["needs_debt_doc"] is False
 
 
 class TestRequiredOnEntry:

@@ -88,6 +88,11 @@ def _item_dict(i) -> dict:
             "driver_role": i.driver_role, "tire_position": i.tire_position}
 
 
+def _needs_debt_doc(claim, items) -> bool:
+    """มี พจร. ในใบ (แถวใดแถวหนึ่ง หรือหัวใบ) → ต้องมีเลขใบรับสภาพหนี้ก่อนส่งเคลียร์"""
+    return validate.needs_debt_doc([{"driver_role": i.driver_role} for i in items], claim.detail)
+
+
 def _claim_dict(c, items, names: dict | None = None) -> dict:
     names = names or {}
     return {
@@ -107,6 +112,7 @@ def _claim_dict(c, items, names: dict | None = None) -> dict:
         "reviewed_at": c.reviewed_at.isoformat() if c.reviewed_at else None,
         "submitted_to_acc_at": c.submitted_to_acc_at.isoformat() if c.submitted_to_acc_at else None,
         "dup_override_reason": c.dup_override_reason, "batch_id": c.batch_id, "debt_doc_no": c.debt_doc_no,
+        "needs_debt_doc": _needs_debt_doc(c, items),
         "items": [_item_dict(i) for i in items],
     }
 
@@ -292,9 +298,9 @@ def approve_claim(form_id: str, payload: ApproveIn, db: Session = Depends(get_db
         else:
             send(claim.form_id, rows, clerk_email, approver_email)
 
+    # เลขใบรับสภาพหนี้ไม่บังคับตอนอนุมัติแล้ว (ผู้ใช้สั่ง 29/10/2026 "ทำหลังจากโอนเงินแล้วได้")
+    # ส่งมาก็เก็บ · ไม่ส่งก็ใส่ทีหลังทาง /debt-doc · ด่านบังคับอยู่ตอนส่งเคลียร์
     debt_doc_no = (payload.debt_doc_no or "").strip() or claim.debt_doc_no
-    if validate.needs_debt_doc([{"driver_role": i.driver_role} for i in items], claim.detail) and not debt_doc_no:
-        gate["missing"].append({"kind": "field", "key": "debt_doc_no", "label": "เลขที่ใบรับสภาพหนี้ (มี พจร. ในใบ)"})
 
     _raise_if_blocked(gate, check_duplicates=True, override_reason=payload.dup_override_reason,
                       notify=_notify)

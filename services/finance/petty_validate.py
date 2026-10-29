@@ -195,7 +195,8 @@ PJR = "พจร."
 
 
 def needs_debt_doc(items: list[Mapping], detail: Mapping | None) -> bool:
-    """มี พจร. อยู่ในใบ (แถวใดแถวหนึ่ง หรือหัวใบของใบเดี่ยว) → ต้องมีเลขที่ใบรับสภาพหนี้ตอนอนุมัติ (ทุกประเภท)"""
+    """มี พจร. อยู่ในใบ (แถวใดแถวหนึ่ง หรือหัวใบของใบเดี่ยว) → ต้องมีเลขที่ใบรับสภาพหนี้ (ทุกประเภท)
+    ใส่หลังโอนเงินได้ บังคับตอนส่งเคลียร์ ไม่ใช่ตอนอนุมัติ (ผู้ใช้สั่ง 29/10/2026)"""
     if any((item.get("driver_role") or "") == PJR for item in items):
         return True
     return isinstance(detail, Mapping) and (detail.get("driver_role") or "") == PJR
