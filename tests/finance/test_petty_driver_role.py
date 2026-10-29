@@ -305,3 +305,12 @@ class TestRequiredOnEntry:
         with pytest.raises(HTTPException) as exc:
             R._reject_incomplete_rows(db_session, "TIRE", [_row(tire_position=None)])
         assert any(m["key"] == "tire_position" for m in exc.value.detail["missing"])
+
+
+class TestClaimCarriesItsOpenTime:
+    """ใบสำคัญจ่าย: ช่องผู้ขอเบิกใช้เวลาเปิดใบเป็นตรา e-Signature (ผู้ใช้สั่ง 29/10/2026)"""
+
+    def test_detail_has_created_at(self, db_session, tire, claim_payload, seq_stub, frozen_bkk):
+        claim = _open(db_session, claim_payload, _row())
+        out = R.get_claim(claim.form_id, db=db_session)
+        assert isinstance(out["created_at"], str) and out["created_at"][:4].isdigit()

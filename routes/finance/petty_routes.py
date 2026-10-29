@@ -104,6 +104,7 @@ def _claim_dict(c, items, names: dict | None = None) -> dict:
         "payee_name": c.payee_name, "amount": float(c.amount), "dd_no": c.dd_no,
         "receipt_no": c.receipt_no, "wht_applicable": bool(c.wht_applicable),
         "detail": c.detail or {}, "status": c.status, "created_by": c.created_by,
+        "created_at": c.created_at.isoformat() if c.created_at else None,
         "created_by_name": names.get(c.created_by), "approved_by_name": names.get(c.approved_by),
         "approved_by": c.approved_by, "approved_at": c.approved_at.isoformat() if c.approved_at else None,
         "transfer_date": str(c.transfer_date) if c.transfer_date else None,
