@@ -586,18 +586,24 @@ def create_round(payload: RoundIn, db: Session = Depends(get_db), background: Ba
     if fund.holder_employee_id != payload.employee_id:
         raise HTTPException(status_code=403, detail="ส่งเคลียร์ได้เฉพาะเจ้าของเงินสดของกองทุนนี้")
 
-    blocked = []
+    blocked, no_debt_doc = [], []
     for claim_id in dict.fromkeys(payload.claim_ids):
         claim = db.query(repo.FinPettyClaim).filter(repo.FinPettyClaim.id == claim_id).first()
         if claim is None or claim.status != L.APPROVED or claim.fund_id != fund.id:
             continue  # ให้ repo.create_round บอกเหตุผล (404/409) ด้วยข้อความเดียวกันทุกที่
-        gate = _gate(db, claim, repo.claim_items(db, claim.id), validate.STAGE_SUBMIT_ACC,
-                     payload.attachments.get(claim.form_id, {}))
+        items = repo.claim_items(db, claim.id)
+        gate = _gate(db, claim, items, validate.STAGE_SUBMIT_ACC, payload.attachments.get(claim.form_id, {}))
         if gate["missing"]:
             blocked.append({"form_id": claim.form_id, "missing": gate["missing"]})
+        # มี พจร. ต้องมีเลขใบรับสภาพหนี้ก่อนส่งเคลียร์ (ย้ายมาจากด่านอนุมัติ 29/10/2026)
+        if not (claim.debt_doc_no or "").strip() and _needs_debt_doc(claim, items):
+            no_debt_doc.append(claim.form_id)
     if blocked:
         raise HTTPException(status_code=403, detail={"error": "ส่งเคลียร์ไม่ได้ เอกสารบางใบยังไม่ครบ",
                                                      "claims": blocked})
+    if no_debt_doc:
+        raise HTTPException(status_code=409, detail={"error": L.missing_debt_doc_text(no_debt_doc),
+                                                     "form_ids": no_debt_doc})
 
     people, mappings = repo.line_context(db, fresh=True)
     required = _required_level(people, fund.holder_employee_id)

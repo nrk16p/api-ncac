@@ -212,6 +212,11 @@ def debt_doc_change_text(before: Optional[str], after: Optional[str]) -> str:
     return f"เลขใบรับสภาพหนี้: {_doc_text(before)} → {_doc_text(after)}"
 
 
+def missing_debt_doc_text(form_ids: list[str]) -> str:
+    """ด่านส่งเคลียร์: ใบที่มี พจร. แต่ยังไม่มีเลขใบรับสภาพหนี้"""
+    return f"ใบ {', '.join(form_ids)} มีคนขับ พจร. ยังไม่ได้ใส่เลขใบรับสภาพหนี้"
+
+
 MANAGER_LEVEL = 5
 TOP_LEVEL = 9
 

@@ -256,6 +256,50 @@ def _round_in(*claims):
     return RoundIn(employee_id="12345", fund_id=claims[0].fund_id, claim_ids=[c.id for c in claims])
 
 
+class TestRoundAsksForTheDebtDoc:
+    """ส่งเคลียร์ = ด่านที่บังคับเลขใบรับสภาพหนี้ (ย้ายมาจากด่านอนุมัติ) · ไม่ครบใบเดียว ไม่ส่งทั้งรอบ"""
+
+    def test_missing_number_is_409_naming_the_claim(self, db_session, approved_pjr, line):
+        claim = approved_pjr()
+        with pytest.raises(HTTPException) as exc:
+            R.create_round(_round_in(claim), db_session)
+        assert exc.value.status_code == 409
+        assert exc.value.detail["form_ids"] == [claim.form_id]
+        assert exc.value.detail["error"] == (
+            f"ใบ {claim.form_id} มีคนขับ พจร. ยังไม่ได้ใส่เลขใบรับสภาพหนี้")
+
+    def test_with_the_number_the_round_goes(self, db_session, approved_pjr, line):
+        claim = approved_pjr()
+        R.set_claim_debt_doc(claim.form_id, _debt(claim, "RD-1"), db_session)
+        out = R.create_round(_round_in(claim), db_session)
+        assert out["status"] == "CLEAR_PENDING" and out["claims"][0]["debt_doc_no"] == "RD-1"
+
+    def test_number_given_at_approval_counts(self, db_session, tire, claim_payload, seq_stub, frozen_bkk, line):
+        claim = _open(db_session, claim_payload, _row(driver_role="พจร."))
+        R.approve_claim(claim.form_id, ApproveIn(employee_id="12345", attachments=PAID,
+                                                 debt_doc_no="RD-9"), db_session)
+        assert R.create_round(_round_in(claim), db_session)["status"] == "CLEAR_PENDING"
+
+    def test_pjs_claims_need_nothing(self, db_session, tire, claim_payload, seq_stub, frozen_bkk, line):
+        claim = _open(db_session, claim_payload, _row())
+        R.approve_claim(claim.form_id, ApproveIn(employee_id="12345", attachments=PAID), db_session)
+        assert R.create_round(_round_in(claim), db_session)["status"] == "CLEAR_PENDING"
+
+    def test_one_missing_blocks_the_whole_round(self, db_session, approved_pjr, line):
+        ready = approved_pjr()
+        R.set_claim_debt_doc(ready.form_id, _debt(ready, "RD-1"), db_session)
+        a, b = approved_pjr(ref_no="B-2"), approved_pjr(ref_no="B-3")
+        with pytest.raises(HTTPException) as exc:
+            R.create_round(_round_in(ready, a, b), db_session)
+        assert exc.value.status_code == 409
+        assert exc.value.detail["form_ids"] == [a.form_id, b.form_id]
+        assert exc.value.detail["error"] == (
+            f"ใบ {a.form_id}, {b.form_id} มีคนขับ พจร. ยังไม่ได้ใส่เลขใบรับสภาพหนี้")
+        db_session.expire_all()
+        assert {c.status for c in (ready, a, b)} == {"APPROVED"}
+        assert {c.batch_id for c in (ready, a, b)} == {None}
+
+
 class TestRequiredOnEntry:
     def test_tyre_row_without_a_position_is_refused(self, db_session, tire, claim_payload, seq_stub, frozen_bkk):
         with pytest.raises(HTTPException) as exc:
