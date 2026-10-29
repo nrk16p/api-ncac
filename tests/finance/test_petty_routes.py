@@ -253,12 +253,46 @@ class TestAccountingToPayment:
         out = R.review_claim(claim.form_id, ReviewIn(employee_id="80001", action="PASS"), db_session)
         assert out["status"] == "REVIEWED"
         assert R.get_round(sent_round["id"], employee_id=None, db=db_session)["status"] == "REVIEWED"
-        out = R.voucher_round(sent_round["id"], VoucherIn(employee_id="80001", voucher_no="PV-2610-001"),
-                              db_session)
+        out = R.voucher_round(sent_round["id"], VoucherIn(employee_id="80001", voucher_no="PV-2610-001",
+                                                          voucher_date="2026-10-29"), db_session)
         assert out["status"] == "VOUCHERED" and out["voucher_no"] == "PV-2610-001"
-        out = R.pay_round(sent_round["id"], PayIn(employee_id="90001", pay_date="2026-10-30"), db_session)
+        assert out["voucher_date"] == "2026-10-29" and out["pay_doc_no"] is None
+        out = R.pay_round(sent_round["id"], PayIn(employee_id="90001", pay_date="2026-10-30",
+                                                  pay_doc_no="PAY-6910-001"), db_session)
         assert out["status"] == "CLOSED" and out["pay_date"] == "2026-10-30"
+        assert out["pay_doc_no"] == "PAY-6910-001"
         assert out["claims"][0]["status"] == "CLOSED"
+
+    def test_new_fields_are_empty_until_filled(self, db_session, sent_round):
+        assert sent_round["voucher_date"] is None and sent_round["pay_doc_no"] is None
+
+    def test_a_blank_voucher_number_is_stored_as_empty(self, db_session, claim, sent_round):
+        R.clear_approve_round(sent_round["id"], RoundActionIn(employee_id="600100"), db_session)
+        R.review_claim(claim.form_id, ReviewIn(employee_id="80001", action="PASS"), db_session)
+        out = R.voucher_round(sent_round["id"], VoucherIn(employee_id="80001", voucher_no="  ",
+                                                          voucher_date="2026-10-29"), db_session)
+        assert out["status"] == "VOUCHERED" and out["voucher_no"] is None
+
+    def test_numbers_are_trimmed(self, db_session, claim, sent_round):
+        R.clear_approve_round(sent_round["id"], RoundActionIn(employee_id="600100"), db_session)
+        R.review_claim(claim.form_id, ReviewIn(employee_id="80001", action="PASS"), db_session)
+        R.voucher_round(sent_round["id"], VoucherIn(employee_id="80001", voucher_no=" PV-1 ",
+                                                    voucher_date="2026-10-29"), db_session)
+        out = R.pay_round(sent_round["id"], PayIn(employee_id="90001", pay_date="2026-10-30", pay_doc_no="   "),
+                          db_session)
+        assert out["voucher_no"] == "PV-1" and out["pay_doc_no"] is None
+
+    def test_voucher_date_is_required_and_number_is_not(self):
+        from pydantic import ValidationError
+        assert VoucherIn(employee_id="80001", voucher_date="2026-10-29").voucher_no is None
+        with pytest.raises(ValidationError):
+            VoucherIn(employee_id="80001", voucher_no="PV-1")
+
+    def test_pay_doc_no_is_optional_and_capped_at_50(self):
+        from pydantic import ValidationError
+        assert PayIn(employee_id="90001", pay_date="2026-10-30").pay_doc_no is None
+        with pytest.raises(ValidationError):
+            PayIn(employee_id="90001", pay_date="2026-10-30", pay_doc_no="X" * 51)
 
     def test_cannot_pay_before_voucher(self, db_session, claim, sent_round):
         R.clear_approve_round(sent_round["id"], RoundActionIn(employee_id="600100"), db_session)

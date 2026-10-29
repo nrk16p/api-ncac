@@ -430,8 +430,10 @@ def _round_dict(db: Session, b, fund=None, claims=None, names: dict | None = Non
         "clear_required_level": b.clear_required_level,
         "clear_approved_by": b.clear_approved_by, "clear_approved_by_name": names.get(b.clear_approved_by),
         "clear_approved_at": _iso(b.clear_approved_at), "clear_reject_reason": b.clear_reject_reason,
-        "voucher_no": b.voucher_no, "vouchered_by": b.vouchered_by, "vouchered_at": _iso(b.vouchered_at),
-        "pay_date": str(b.pay_date) if b.pay_date else None, "paid_by": b.paid_by, "paid_at": _iso(b.paid_at),
+        "voucher_no": b.voucher_no, "voucher_date": _iso(b.voucher_date),
+        "vouchered_by": b.vouchered_by, "vouchered_at": _iso(b.vouchered_at),
+        "pay_date": str(b.pay_date) if b.pay_date else None, "pay_doc_no": b.pay_doc_no,
+        "paid_by": b.paid_by, "paid_at": _iso(b.paid_at),
         "closed_by": b.closed_by, "closed_at": _iso(b.closed_at),
     }
     if claims is not None:
@@ -576,12 +578,18 @@ def clear_reject_round(batch_id: int, payload: RoundRejectIn, db: Session = Depe
     return _round_out(db, out)
 
 
+def _doc_no(value: Optional[str]) -> Optional[str]:
+    """เลขเอกสารที่คนพิมพ์: ตัดช่องว่างหัวท้าย · ว่าง = ไม่มีเลข"""
+    return (value or "").strip() or None
+
+
 @router.post("/batches/{batch_id}/voucher")
 def voucher_round(batch_id: int, payload: VoucherIn, db: Session = Depends(get_db)):
     """บัญชีตั้งเบิกทั้งรอบ (ทุกใบต้องตรวจผ่านแล้ว)"""
     batch = _round_or_404(db, batch_id)
     try:
-        out = repo.voucher_round(db, batch, payload.employee_id, payload.voucher_no.strip())
+        out = repo.voucher_round(db, batch, payload.employee_id, _doc_no(payload.voucher_no),
+                                 payload.voucher_date)
     except L.PettyRuleError as exc:
         raise _rule_error(exc)
     return _round_out(db, out)
@@ -592,7 +600,7 @@ def pay_round(batch_id: int, payload: PayIn, db: Session = Depends(get_db)):
     """การเงินทำจ่ายคืนเจ้าของเงินสด → ปิดรอบและทุกใบในรอบ"""
     batch = _round_or_404(db, batch_id)
     try:
-        out = repo.pay_round(db, batch, payload.employee_id, payload.pay_date)
+        out = repo.pay_round(db, batch, payload.employee_id, payload.pay_date, _doc_no(payload.pay_doc_no))
     except L.PettyRuleError as exc:
         raise _rule_error(exc)
     return _round_out(db, out)

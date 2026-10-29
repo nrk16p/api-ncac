@@ -209,7 +209,8 @@ class TestTheHolderApprovesAllThree:
         R.clear_approve_round(sent["id"], RoundActionIn(employee_id="600001"), db=db_session)
         for c in approved.values():
             R.review_claim(c["form_id"], ReviewIn(employee_id="80001", action="PASS"), db=db_session)
-        R.voucher_round(sent["id"], VoucherIn(employee_id="80001", voucher_no="PV-2610-001"), db=db_session)
+        R.voucher_round(sent["id"], VoucherIn(employee_id="80001", voucher_no="PV-2610-001",
+                                                   voucher_date=date(2026, 10, 29)), db=db_session)
         paid = R.pay_round(sent["id"], PayIn(employee_id="90001", pay_date=date(2026, 10, 30)), db=db_session)
         assert paid["status"] == "CLOSED" and paid["total_amount"] == 3083.0
         assert repo.petty_committed(db_session, HOLDER) == Decimal("0.00")

@@ -33,6 +33,9 @@ ALTER TABLE fin_petty_batches ADD COLUMN IF NOT EXISTS vouchered_at         time
 ALTER TABLE fin_petty_batches ADD COLUMN IF NOT EXISTS pay_date             date;
 ALTER TABLE fin_petty_batches ADD COLUMN IF NOT EXISTS paid_by              varchar(50);
 ALTER TABLE fin_petty_batches ADD COLUMN IF NOT EXISTS paid_at              timestamptz;
+-- ตั้งเบิก/ทำจ่ายกรอกแบบ Advance: วันที่ตั้งเบิก (บังคับตอนตั้งเบิก) + เลขที่ทำจ่าย (ไม่บังคับ)
+ALTER TABLE fin_petty_batches ADD COLUMN IF NOT EXISTS voucher_date         date;
+ALTER TABLE fin_petty_batches ADD COLUMN IF NOT EXISTS pay_doc_no           varchar(50);
 
 -- closed_at ว่างจนกว่าการเงินจะทำจ่าย (เดิมเป็น NOT NULL DEFAULT now() เพราะรอบเกิดตอนปิดเท่านั้น)
 ALTER TABLE fin_petty_batches ALTER COLUMN closed_at DROP NOT NULL;

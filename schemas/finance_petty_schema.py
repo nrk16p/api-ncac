@@ -151,10 +151,13 @@ class RoundRejectIn(BaseModel):
 
 
 class VoucherIn(BaseModel):
+    """เหมือน Advance: เลขที่ตั้งเบิกเว้นว่างได้ วันที่ตั้งเบิกต้องมี"""
     employee_id: str = Field(min_length=1, max_length=50)
-    voucher_no: str = Field(min_length=1, max_length=50)
+    voucher_no: Optional[str] = Field(default=None, max_length=50)
+    voucher_date: date
 
 
 class PayIn(BaseModel):
     employee_id: str = Field(min_length=1, max_length=50)
-    pay_date: date
+    pay_date: date  # วันที่โอนเงิน
+    pay_doc_no: Optional[str] = Field(default=None, max_length=50)

@@ -60,7 +60,7 @@ class TestCommitted:
         repo.review_pass(db_session, claim, actor="80001", remark=None)
         assert repo.petty_committed(db_session, "12345") == Decimal("1640.00")  # ตรวจผ่านแล้วยังไม่จ่ายคืน
         db_session.refresh(batch)
-        repo.voucher_round(db_session, batch, actor="80001", voucher_no="PV-1")
+        repo.voucher_round(db_session, batch, actor="80001", voucher_no="PV-1", voucher_date=date(2026, 10, 29))
         repo.pay_round(db_session, batch, actor="90001", pay_date=date(2026, 10, 30))
         assert repo.petty_committed(db_session, "12345") == Decimal("0.00")
 

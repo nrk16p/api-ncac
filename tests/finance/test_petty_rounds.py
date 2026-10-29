@@ -33,6 +33,11 @@ def _actions(db_session, claim):
             .filter(FinPettyLog.claim_id == claim.id).order_by(FinPettyLog.id).all()]
 
 
+def _last_log(db_session, claim):
+    return (db_session.query(FinPettyLog).filter(FinPettyLog.claim_id == claim.id)
+            .order_by(FinPettyLog.id.desc()).first())
+
+
 class TestCreateRound:
     def test_puts_every_claim_into_the_round(self, db_session, fund, approved):
         a, b = approved(), approved()
@@ -194,7 +199,8 @@ class TestVoucherAndPay:
     def test_voucher_then_pay_closes_the_round_and_releases_the_money(self, db_session, fund, approved):
         batch, (a, b) = self._reviewed_round(db_session, fund, approved)
         assert repo.petty_committed(db_session, "12345") == Decimal("3280.00")
-        repo.voucher_round(db_session, batch, actor="80001", voucher_no="PV-2610-001")
+        repo.voucher_round(db_session, batch, actor="80001", voucher_no="PV-2610-001",
+                           voucher_date=date(2026, 10, 29))
         assert batch.status == "VOUCHERED" and batch.voucher_no == "PV-2610-001"
         out = repo.pay_round(db_session, batch, actor="90001", pay_date=date(2026, 10, 30))
         assert out.status == "CLOSED" and out.pay_date == date(2026, 10, 30)
@@ -211,15 +217,44 @@ class TestVoucherAndPay:
         for c in claims:
             repo.review_pass(db_session, c, actor="80001", remark=None)
         db_session.refresh(batch)
-        repo.voucher_round(db_session, batch, actor="80001", voucher_no="PV-1")
+        repo.voucher_round(db_session, batch, actor="80001", voucher_no="PV-1", voucher_date=date(2026, 10, 29))
         assert batch.total_amount == Decimal("1740.00")
 
     def test_cannot_voucher_before_every_claim_passes(self, db_session, fund, approved):
         claims = [approved()]
         batch = repo.clear_approve_round(db_session, _round(db_session, fund, claims), actor="600100")
         with pytest.raises(L.PettyRuleError) as exc:
-            repo.voucher_round(db_session, batch, actor="80001", voucher_no="PV-1")
+            repo.voucher_round(db_session, batch, actor="80001", voucher_no="PV-1", voucher_date=date(2026, 10, 29))
         assert exc.value.http_status == 409
+
+    def test_voucher_keeps_the_date_and_each_claim_logs_it(self, db_session, fund, approved):
+        batch, (a, b) = self._reviewed_round(db_session, fund, approved)
+        repo.voucher_round(db_session, batch, actor="80001", voucher_no="PV-9", voucher_date=date(2026, 10, 29))
+        assert batch.voucher_date == date(2026, 10, 29)
+        for claim in (a, b):
+            row = _last_log(db_session, claim)
+            assert row.action == "VOUCHER" and row.action_by == "80001"
+            assert row.changes["voucher_no"] == "PV-9" and row.changes["voucher_date"] == "2026-10-29"
+
+    def test_voucher_number_may_be_left_blank(self, db_session, fund, approved):
+        # เหมือน Advance: เลขที่ตั้งเบิกเว้นได้ วันที่ต้องมี
+        batch, _ = self._reviewed_round(db_session, fund, approved)
+        repo.voucher_round(db_session, batch, actor="80001", voucher_no=None, voucher_date=date(2026, 10, 29))
+        assert batch.status == "VOUCHERED" and batch.voucher_no is None
+
+    def test_pay_keeps_the_document_number_and_logs_it(self, db_session, fund, approved):
+        batch, (a, _) = self._reviewed_round(db_session, fund, approved)
+        repo.voucher_round(db_session, batch, actor="80001", voucher_no="PV-9", voucher_date=date(2026, 10, 29))
+        out = repo.pay_round(db_session, batch, actor="90001", pay_date=date(2026, 10, 30), pay_doc_no="PAY-77")
+        assert out.pay_doc_no == "PAY-77"
+        row = _last_log(db_session, a)
+        assert row.action == "PAY_CLOSE"
+        assert row.changes["pay_doc_no"] == "PAY-77" and row.changes["pay_date"] == "2026-10-30"
+
+    def test_pay_document_number_is_optional(self, db_session, fund, approved):
+        batch, _ = self._reviewed_round(db_session, fund, approved)
+        repo.voucher_round(db_session, batch, actor="80001", voucher_no="PV-9", voucher_date=date(2026, 10, 29))
+        assert repo.pay_round(db_session, batch, actor="90001", pay_date=date(2026, 10, 30)).pay_doc_no is None
 
     def test_cannot_pay_before_voucher(self, db_session, fund, approved):
         batch, _ = self._reviewed_round(db_session, fund, approved)

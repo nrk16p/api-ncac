@@ -70,7 +70,7 @@ class TestFullPath:
         repo.clear_approve_round(db_session, batch, actor="600100")
         repo.review_pass(db_session, claim, actor="80001", remark=None)
         db_session.refresh(batch)
-        repo.voucher_round(db_session, batch, actor="80001", voucher_no="PV-1")
+        repo.voucher_round(db_session, batch, actor="80001", voucher_no="PV-1", voucher_date=date(2026, 10, 29))
         repo.pay_round(db_session, batch, actor="90001", pay_date=date(2026, 10, 30))
         assert claim.status == "CLOSED" and claim.dd_no == "LBDD26090931"
 

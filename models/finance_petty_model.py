@@ -71,10 +71,12 @@ class FinPettyBatch(Base):
     clear_approved_by = Column(String(50))
     clear_approved_at = Column(DateTime(timezone=True))
     clear_reject_reason = Column(Text)
-    voucher_no = Column(String(50))
+    voucher_no = Column(String(50))  # เว้นว่างได้เหมือน Advance
+    voucher_date = Column(Date)  # วันที่ตั้งเบิก — บังคับตอนตั้งเบิก
     vouchered_by = Column(String(50))
     vouchered_at = Column(DateTime(timezone=True))
-    pay_date = Column(Date)
+    pay_date = Column(Date)  # วันที่โอนเงิน
+    pay_doc_no = Column(String(50))  # เลขที่ทำจ่าย (ไม่บังคับ)
     paid_by = Column(String(50))
     paid_at = Column(DateTime(timezone=True))
     closed_by = Column(String(50))

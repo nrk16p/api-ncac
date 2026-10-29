@@ -56,10 +56,20 @@ def test_batch_columns_match_migration():
         "id", "fund_id", "batch_no", "total_amount", "remark", "status",
         "submitted_by", "submitted_at", "clear_required_level",
         "clear_approved_by", "clear_approved_at", "clear_reject_reason",
-        "voucher_no", "vouchered_by", "vouchered_at", "pay_date", "paid_by", "paid_at",
+        "voucher_no", "voucher_date", "vouchered_by", "vouchered_at",
+        "pay_date", "pay_doc_no", "paid_by", "paid_at",
         "closed_by", "closed_at",
     }
     assert set(FinPettyBatch.__table__.columns.keys()) == expected
+
+
+def test_new_round_columns_are_in_the_v2_migration():
+    # ไฟล์ v2 ยังไม่เคยรันบน prod และต้องรันซ้ำได้ — คอลัมน์ที่เพิ่มทีหลังต่อท้ายไฟล์เดิมแบบ IF NOT EXISTS
+    import pathlib
+    sql = (pathlib.Path(__file__).parents[2] / "scripts/migrations/2026-10-29_petty_flow_v2.sql").read_text()
+    assert "ADD COLUMN IF NOT EXISTS voucher_date" in sql
+    assert "ADD COLUMN IF NOT EXISTS pay_doc_no" in sql
+    assert FinPettyBatch.__table__.columns["pay_doc_no"].type.length == 50
 
 
 def test_batch_closed_at_is_empty_until_paid():

@@ -176,8 +176,11 @@ _NOW_FIELDS = {
 
 
 def set_status(db: Session, claim: FinPettyClaim, target: str, actor: str, action: str,
-               fields: Optional[dict] = None, remark: Optional[str] = None) -> FinPettyClaim:
-    """จังหวะเดียวที่สถานะเปลี่ยนได้ — ทุก endpoint ต้องผ่านทางนี้ จึงมี log และกฎครบเสมอ"""
+               fields: Optional[dict] = None, remark: Optional[str] = None,
+               log_extra: Optional[dict] = None) -> FinPettyClaim:
+    """จังหวะเดียวที่สถานะเปลี่ยนได้ — ทุก endpoint ต้องผ่านทางนี้ จึงมี log และกฎครบเสมอ
+
+    log_extra = ค่าที่ไม่ใช่ช่องของใบแต่ควรอยู่ใน log ด้วย เช่น เลขที่ทำจ่ายของรอบ"""
     L.assert_transition(claim.status, target)
     before = claim.status
     for key, value in (fields or {}).items():
@@ -190,6 +193,7 @@ def set_status(db: Session, claim: FinPettyClaim, target: str, actor: str, actio
     claim.status = target
     changes = {"from": before, "to": target}
     changes.update({k: str(v) for k, v in (fields or {}).items()})
+    changes.update(log_extra or {})
     log(db, claim.id, action, actor, changes=changes, remark=remark)
     db.commit()
     db.refresh(claim)
@@ -407,24 +411,33 @@ def review_pass(db: Session, claim: FinPettyClaim, actor: str, remark: Optional[
     return out
 
 
-def voucher_round(db: Session, batch: FinPettyBatch, actor: str, voucher_no: str) -> FinPettyBatch:
-    """บัญชีตั้งเบิกทั้งรอบ · นับยอดใหม่ เพราะเจ้าหน้าที่อาจแก้ยอดตอนบัญชีตีกลับ"""
+def voucher_round(db: Session, batch: FinPettyBatch, actor: str, voucher_no: Optional[str],
+                  voucher_date) -> FinPettyBatch:
+    """บัญชีตั้งเบิกทั้งรอบ · นับยอดใหม่ เพราะเจ้าหน้าที่อาจแก้ยอดตอนบัญชีตีกลับ
+    สถานะใบไม่เปลี่ยน แต่ลง log ทุกใบ ให้ประวัติของแต่ละใบเห็นว่าตั้งเบิกแล้ว"""
     _set_round_status(db, batch, L.BATCH_VOUCHERED)
-    batch.voucher_no, batch.vouchered_by, batch.vouchered_at = voucher_no, actor, datetime.now(timezone.utc)
-    batch.total_amount = sum((c.amount for c in round_claims(db, batch.id)), _ZERO)
+    batch.voucher_no, batch.voucher_date = voucher_no, voucher_date
+    batch.vouchered_by, batch.vouchered_at = actor, datetime.now(timezone.utc)
+    claims = round_claims(db, batch.id)
+    batch.total_amount = sum((c.amount for c in claims), _ZERO)
+    for claim in claims:
+        log(db, claim.id, "VOUCHER", actor, remark=batch.batch_no,
+            changes={"voucher_no": voucher_no, "voucher_date": str(voucher_date)})
     db.commit()
     db.refresh(batch)
     return batch
 
 
-def pay_round(db: Session, batch: FinPettyBatch, actor: str, pay_date) -> FinPettyBatch:
+def pay_round(db: Session, batch: FinPettyBatch, actor: str, pay_date,
+              pay_doc_no: Optional[str] = None) -> FinPettyBatch:
     """การเงินทำจ่ายคืนเจ้าของเงินสดทั้งรอบ → ปิดรอบและทุกใบ ยอดคืนเข้า available เอง"""
     _set_round_status(db, batch, L.BATCH_CLOSED)
     now = datetime.now(timezone.utc)
-    batch.pay_date, batch.paid_by, batch.paid_at = pay_date, actor, now
+    batch.pay_date, batch.pay_doc_no, batch.paid_by, batch.paid_at = pay_date, pay_doc_no, actor, now
     batch.closed_by, batch.closed_at = actor, now
     for claim in round_claims(db, batch.id):
-        set_status(db, claim, L.CLOSED, actor, "PAY_CLOSE", remark=batch.batch_no)
+        set_status(db, claim, L.CLOSED, actor, "PAY_CLOSE", remark=batch.batch_no,
+                   log_extra={"pay_date": str(pay_date), "pay_doc_no": pay_doc_no})
     db.commit()
     db.refresh(batch)
     return batch
