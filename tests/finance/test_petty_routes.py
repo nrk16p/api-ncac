@@ -1,4 +1,5 @@
-"""เทสต์ระดับ route โดยเรียกฟังก์ชันตรง ๆ (TestClient ต้อง import main ซึ่งต้องมี boto3)"""
+"""เทสต์ระดับ route โดยเรียกฟังก์ชันตรง ๆ (TestClient ของ main ต้องมี boto3)
+เรื่องลำดับ path ใช้ TestClient กับแอปเล็กที่มีแค่ router ของ petty — ดู TestRoundRoutesOverHttp"""
 import pytest
 from fastapi import HTTPException
 
@@ -791,6 +792,61 @@ class TestRoundDocNumberDuplicates:
         with pytest.raises(HTTPException) as exc:
             R.round_duplicate_doc_no(field="batch_no", value="x", exclude_id=None, db=None)
         assert exc.value.status_code == 400
+
+
+class TestRoundRoutesOverHttp:
+    """ยิง HTTP จริงผ่าน TestClient (แอปเล็กที่มีแค่ router ของ petty ไม่ต้อง import main)
+    พิสูจน์ว่า /batches/duplicate-doc-no ไม่โดน /batches/{batch_id} จับไปก่อน — ถ้าโดน จะได้ 422 (ไม่ใช่ตัวเลข)"""
+
+    @pytest.fixture
+    def client(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        from sqlalchemy.pool import StaticPool
+
+        import database
+        from database import Base
+        import models.finance_petty_model as petty
+
+        engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+        Base.metadata.create_all(engine, tables=[petty.FinPettyFund.__table__, petty.FinPettyBatch.__table__,
+                                                 petty.FinPettyClaim.__table__, petty.FinPettyLog.__table__])
+        Session = sessionmaker(bind=engine)
+        with Session() as db:
+            f = petty.FinPettyFund(branch_code="03", division_code="B02", holder_employee_id="12345")
+            db.add(f)
+            db.flush()
+            db.add(petty.FinPettyBatch(fund_id=f.id, batch_no="LB-B02-2610-B1", status="CLOSED",
+                                       voucher_no="PV-6910-001"))
+            db.commit()
+
+        def _get_db():
+            db = Session()
+            try:
+                yield db
+            finally:
+                db.close()
+
+        app = FastAPI()
+        app.include_router(R.router)
+        app.dependency_overrides[database.get_db] = _get_db
+        yield TestClient(app)
+        engine.dispose()
+
+    def test_duplicate_doc_no_answers_over_http(self, client):
+        res = client.get("/finance/petty/batches/duplicate-doc-no",
+                         params={"field": "voucher_no", "value": " pv-6910-001 "})
+        assert res.status_code == 200, res.text
+        assert res.json() == {"field": "voucher_no", "value": "pv-6910-001", "batch_nos": ["LB-B02-2610-B1"]}
+
+    def test_duplicate_doc_no_refuses_other_fields_over_http(self, client):
+        res = client.get("/finance/petty/batches/duplicate-doc-no", params={"field": "batch_no", "value": "x"})
+        assert res.status_code == 400
+
+    def test_a_numeric_round_id_still_reaches_the_detail_route(self, client):
+        assert client.get("/finance/petty/batches/9999").status_code == 404
 
 
 class TestReviewGate:
