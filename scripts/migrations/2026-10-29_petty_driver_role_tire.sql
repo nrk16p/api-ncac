@@ -4,6 +4,7 @@
 --    ใบเดี่ยว: ค่าทางด่วนเลือกที่หัวใบคู่กับชื่อ · ค่าเดินทางเลือกได้ว่าผู้เดินทางเป็น พจส./พจร. (ไม่บังคับ)
 -- 2. ใบยาง: ตำแหน่งยางต่อแถว เลือกได้หลายตำแหน่ง รหัสชุดเดียวกับผังล้อ WMS (F1–F4 · RA1–RA8 · RB1–RB13)
 -- 3. มี พจร. ในใบ (ทุกประเภท) → เจ้าของเงินสดต้องใส่เลขที่ใบรับสภาพหนี้ตอนอนุมัติ
+-- 4. ตัวเลือกผู้รับเงิน "ร้านจดทะเบียน" เปลี่ยนชื่อเป็น "นิติบุคคล" (ทั้งใน spec และใบที่เปิดไว้แล้ว)
 --
 -- ต้องรัน **ก่อน** deploy BE ที่อ่านคอลัมน์ใหม่ · รันซ้ำได้ (ช่องที่มีแล้วไม่แทรกซ้ำ)
 -- รันหลัง 2026-10-29_petty_flow_v2.sql
@@ -72,6 +73,23 @@ SET spec = jsonb_set(spec, '{item_fields}', pg_temp.petty_insert_field(spec->'it
 WHERE code = 'TIRE'
   AND (spec->'item_fields') @> '[{"key":"remark"}]'
   AND NOT (spec->'item_fields') @> '[{"key":"tire_position"}]';
+
+-- 4) ผู้รับเงิน: "ร้านจดทะเบียน" → "นิติบุคคล" (ผู้ใช้สั่ง 29/10) · กติกาบัตรประชาชนอิง "บุคคล/ร้านเงินสด" จึงไม่กระทบ
+UPDATE fin_petty_expense_types
+SET spec = jsonb_set(spec, '{header_fields}', (
+      SELECT jsonb_agg(CASE WHEN e.f->>'key' = 'payee_type'
+               THEN jsonb_set(e.f, '{options}', (
+                      SELECT jsonb_agg(CASE WHEN o #>> '{}' = 'ร้านจดทะเบียน' THEN to_jsonb('นิติบุคคล'::text) ELSE o END
+                                       ORDER BY oi)
+                      FROM jsonb_array_elements(e.f->'options') WITH ORDINALITY AS x(o, oi)))
+               ELSE e.f END ORDER BY e.ord)
+      FROM jsonb_array_elements(spec->'header_fields') WITH ORDINALITY AS e(f, ord))),
+    updated_at = now()
+WHERE (spec->'header_fields') @> '[{"key":"payee_type","options":["ร้านจดทะเบียน"]}]';
+
+UPDATE fin_petty_claims
+SET detail = jsonb_set(detail, '{payee_type}', to_jsonb('นิติบุคคล'::text)), updated_at = now()
+WHERE detail->>'payee_type' = 'ร้านจดทะเบียน';
 
 COMMIT;
 
