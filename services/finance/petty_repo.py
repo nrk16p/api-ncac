@@ -558,6 +558,21 @@ def employee_names(db: Session, employee_ids) -> dict[str, str]:
     return out
 
 
+def payee_account(db: Session, employee_id: Optional[str]) -> Optional[dict]:
+    """บัญชีรับเงินที่ใช้อยู่ (ACTIVE) ของพนักงานจาก master ของ Advance · ไม่มี/ปิดอยู่ = None
+    master มีแต่บัญชีธนาคาร (KBANK) จึงเป็นชนิด bank เสมอ"""
+    if not employee_id:
+        return None
+    from models.finance_model import FinPayeeAccount
+    row = (db.query(FinPayeeAccount)
+           .filter(FinPayeeAccount.employee_id == employee_id, FinPayeeAccount.status == "ACTIVE")
+           .first())
+    if row is None:
+        return None
+    return {"payee_account_type": "bank", "bank": row.bank, "account_no": row.account_no,
+            "account_name": row.account_name}
+
+
 def employee_email(db: Session, employee_id: Optional[str]) -> Optional[str]:
     """อีเมลของพนักงานจาก users — ไม่มีก็คืน None แล้วให้ตัวส่งข้ามไป ไม่ใช่ส่งที่อยู่ว่าง"""
     if not employee_id:

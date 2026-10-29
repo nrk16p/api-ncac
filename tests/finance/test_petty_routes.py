@@ -274,6 +274,35 @@ class TestHeadClearing:
         assert exc.value.status_code == 404
 
 
+class TestHolderBankAccountForThePayBox:
+    """กล่องจ่ายเงินของรอบต้องเห็นบัญชีของเจ้าของเงินสด · BE ไม่มี auth จึงส่งเฉพาะรายละเอียดรอบ ไม่ใส่ในรายการ"""
+
+    def _account(self, db_session, status="ACTIVE"):
+        from models.finance_model import FinPayeeAccount
+        db_session.add(FinPayeeAccount(employee_id="12345", bank="KBANK", account_no="0123456789",
+                                       account_name="ณรงค์กรณ์ อัจฉริยญาติ", status=status))
+        db_session.commit()
+
+    def test_detail_carries_the_active_account(self, db_session, sent_round):
+        self._account(db_session)
+        body = R.get_round(sent_round["id"], employee_id=None, db=db_session)
+        assert body["holder_payee"] == {"payee_account_type": "bank", "bank": "KBANK",
+                                        "account_no": "0123456789", "account_name": "ณรงค์กรณ์ อัจฉริยญาติ"}
+
+    def test_inactive_account_is_not_offered(self, db_session, sent_round):
+        self._account(db_session, status="INACTIVE")
+        assert R.get_round(sent_round["id"], employee_id=None, db=db_session)["holder_payee"] is None
+
+    def test_no_account_gives_none(self, db_session, sent_round):
+        assert R.get_round(sent_round["id"], employee_id=None, db=db_session)["holder_payee"] is None
+
+    def test_list_never_carries_account_numbers(self, db_session, sent_round):
+        self._account(db_session)
+        rows = R.list_rounds(fund_id=None, status=None, holder=None, clear_approver=None,
+                             limit=50, offset=0, db=db_session)
+        assert rows and "holder_payee" not in rows[0] and "0123456789" not in str(rows)
+
+
 class TestAccountingToPayment:
     def test_pass_voucher_pay(self, db_session, claim, sent_round):
         R.clear_approve_round(sent_round["id"], RoundActionIn(employee_id="600100"), db_session)

@@ -442,8 +442,10 @@ def _round_dict(db: Session, b, fund=None, claims=None, names: dict | None = Non
 
 
 def _round_out(db: Session, b, employee_id: Optional[str] = None) -> dict:
+    """รายละเอียดรอบ — ส่งเลขบัญชีของเจ้าของเงินสดได้ที่นี่ที่เดียว (BE ไม่มี auth ห้ามใส่ในรายการ)"""
     claims = repo.round_claims(db, b.id)
     body = _round_dict(db, b, claims=claims)
+    body["holder_payee"] = repo.payee_account(db, body["holder_employee_id"])
     claim_names = repo.employee_names(db, [x for c in claims for x in (c.created_by, c.approved_by)])
     body["claims"] = [_claim_dict(c, repo.claim_items(db, c.id), claim_names) for c in claims]
     if employee_id:

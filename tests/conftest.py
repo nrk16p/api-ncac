@@ -28,6 +28,8 @@ def db_session():
     tables = [
         master.FormSubmission.__table__, master.FormSequence.__table__,
         fin.FinAdvance.__table__,
+        # บัญชีผู้รับเงินของเจ้าของเงินสด (กล่องจ่ายเงินของรอบ) · ตาราง log ใช้ JSONB สร้างบน sqlite ไม่ได้ ไม่ต้องใช้
+        fin.FinPayeeAccountRequest.__table__, fin.FinPayeeAccount.__table__,
         users.User.__table__,  # petty_repo.employee_email อ่านอีเมลจากตารางนี้
         petty.FinPettyFund.__table__, petty.FinPettyExpenseType.__table__,
         petty.FinPettyBatch.__table__, petty.FinPettyClaim.__table__,
