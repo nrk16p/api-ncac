@@ -75,6 +75,16 @@ class TestCreateRound:
         db_session.commit()
         assert _round(db_session, fund, [approved()]).batch_no == "LB-B02-2610-B8"
 
+    def test_underscore_in_the_division_is_not_a_wildcard(self, db_session, fund, approved):
+        # LIKE ถือ _ เป็นตัวอักษรอะไรก็ได้ รอบของแผนก BX2 ต้องไม่ถูกนับเป็นของแผนก B_2
+        from models.finance_petty_model import FinPettyBatch
+        fund.division_code = "B_2"
+        db_session.add(FinPettyBatch(fund_id=fund.id, batch_no="LB-BX2-2610-B9", status="CLOSED"))
+        db_session.add(FinPettyBatch(fund_id=fund.id, batch_no="LB-B_2-2610-B3", status="CLOSED"))
+        db_session.commit()
+        assert _round(db_session, fund, [approved()]).batch_no == "LB-B_2-2610-B4"
+        assert repo._last_round_number(db_session, "03", "BX2", 2610) == 9
+
     def test_claim_not_yet_approved_is_rejected(self, db_session, fund, claim_payload, weigh_items,
                                                 seq_stub, frozen_bkk):
         claim = repo.create_claim(db_session, claim_payload(), weigh_items, actor="55555")
@@ -379,3 +389,79 @@ class TestRoundIsAllOrNothing:
             repo.review_pass(db_session, claims[1], actor="80001", remark=None)
         self._fresh(db_session)
         assert claims[1].status == "AWAITING_REVIEW" and batch.status == "AWAITING_REVIEW"
+
+
+class TestTwoRoundsAtOnce:
+    """สองคนส่งเคลียร์พร้อมกัน: เดิมอ่านเลขสูงสุดตัวเดียวกันแล้วชน unique ของ batch_no เป็น 500"""
+
+    def _stale_numbers(self, monkeypatch, stale_times):
+        real = repo._last_round_number
+        calls = []
+
+        def stale_then_real(db, branch, division, yymm):
+            calls.append(1)
+            return 0 if len(calls) <= stale_times else real(db, branch, division, yymm)
+
+        monkeypatch.setattr(repo, "_last_round_number", stale_then_real)
+        return calls
+
+    def _taken_b1(self, db_session, fund):
+        from models.finance_petty_model import FinPettyBatch
+        db_session.add(FinPettyBatch(fund_id=fund.id, batch_no="LB-B02-2610-B1", status="CLEAR_PENDING"))
+        db_session.commit()
+
+    def test_a_number_taken_in_the_meantime_is_retried_once(self, db_session, fund, approved, monkeypatch):
+        a = approved()
+        self._taken_b1(db_session, fund)
+        calls = self._stale_numbers(monkeypatch, stale_times=1)
+        batch = _round(db_session, fund, [a])
+        assert batch.batch_no == "LB-B02-2610-B2" and len(calls) == 2
+        assert a.status == "CLEAR_PENDING" and a.batch_id == batch.id
+        assert _actions(db_session, a).count("SUBMIT_ROUND") == 1
+
+    def test_a_second_collision_is_a_plain_409(self, db_session, fund, approved, monkeypatch):
+        from models.finance_petty_model import FinPettyBatch
+        a = approved()
+        self._taken_b1(db_session, fund)
+        self._stale_numbers(monkeypatch, stale_times=99)
+        with pytest.raises(L.PettyRuleError) as exc:
+            _round(db_session, fund, [a])
+        assert exc.value.http_status == 409 and "ส่งเคลียร์อีกครั้ง" in str(exc.value)
+        db_session.expire_all()
+        assert db_session.query(FinPettyBatch).count() == 1
+        assert a.status == "APPROVED" and a.batch_id is None
+
+    def test_other_integrity_errors_are_not_swallowed(self, db_session, fund, approved, monkeypatch):
+        from sqlalchemy.exc import IntegrityError
+        a = approved()
+
+        def other_constraint(*args, **kwargs):
+            raise IntegrityError("INSERT ...", {}, Exception("CHECK constraint failed: ck_fin_petty_claims_status"))
+
+        monkeypatch.setattr(repo, "set_status", other_constraint)
+        with pytest.raises(IntegrityError):
+            _round(db_session, fund, [a])
+
+    class _FakeDb:
+        def __init__(self, dialect):
+            from types import SimpleNamespace
+            self._bind = SimpleNamespace(dialect=SimpleNamespace(name=dialect))
+            self.calls = []
+
+        def get_bind(self):
+            return self._bind
+
+        def execute(self, stmt, params=None):
+            self.calls.append((str(stmt), params))
+
+    def test_postgres_locks_the_round_numbers_before_reading_the_highest(self):
+        db = self._FakeDb("postgresql")
+        repo._lock_round_numbers(db, "LB-B02-2610-B")
+        [(sql, params)] = db.calls
+        assert "pg_advisory_xact_lock(hashtext(" in sql
+        assert params == {"key": "fin_petty_batches:LB-B02-2610-B"}
+
+    def test_other_databases_skip_the_lock(self):
+        db = self._FakeDb("sqlite")
+        repo._lock_round_numbers(db, "LB-B02-2610-B")
+        assert db.calls == []

@@ -70,7 +70,8 @@ def update_fund(db: Session, fund_id: int, payload: dict, actor: str) -> FinPett
 from datetime import date, date as _date  # noqa: E402
 from decimal import Decimal  # noqa: E402
 
-from sqlalchemy import func  # noqa: E402
+from sqlalchemy import func, text  # noqa: E402
+from sqlalchemy.exc import IntegrityError  # noqa: E402
 
 from models.finance_petty_model import FinPettyClaim, FinPettyClaimItem, FinPettyLog  # noqa: E402
 from services.finance import petty_logic as L  # noqa: E402
@@ -354,19 +355,54 @@ def _set_round_status(db: Session, batch: FinPettyBatch, target: str) -> None:
     batch.status = target
 
 
+def _round_prefix(branch: str, division: str, yymm: int) -> str:
+    return L.batch_no(branch, division, yymm, 0)[:-1]  # "LB-B02-2610-B"
+
+
+def _like_literal(text_value: str) -> str:
+    """ตัด % กับ _ ออกจากการเป็นตัวแทนของ LIKE — ใช้คู่กับ escape="\\" """
+    return text_value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def _last_round_number(db: Session, branch: str, division: str, yymm: int) -> int:
     """เลขรอบสูงสุดของ สาขา-แผนก-เดือน นี้ ทุกกองทุนรวมกัน
     เลขรอบ unique ทั้งตาราง แต่กองทุนซ้ำสาขา+แผนกได้เมื่อกองเก่าปิดแล้ว จึงนับต่อกองทุนไม่ได้"""
-    prefix = L.batch_no(branch, division, yymm, 0)[:-1]  # "LB-B02-2610-B"
-    rows = db.query(FinPettyBatch.batch_no).filter(FinPettyBatch.batch_no.like(f"{prefix}%")).all()
+    prefix = _round_prefix(branch, division, yymm)
+    rows = (db.query(FinPettyBatch.batch_no)
+            .filter(FinPettyBatch.batch_no.like(_like_literal(prefix) + "%", escape="\\")).all())
     numbers = [int(no[len(prefix):]) for (no,) in rows
                if no.startswith(prefix) and no[len(prefix):].isdigit()]
     return max(numbers, default=0)
 
 
+def _lock_round_numbers(db: Session, prefix: str) -> None:
+    """ล็อกเลขรอบของ สาขา-แผนก-เดือน นี้ไว้จนจบ transaction — สองคนส่งเคลียร์พร้อมกันจะไม่อ่านเลขสูงสุดตัวเดียวกัน
+    sqlite (เทสต์) ไม่มี advisory lock จึงข้าม · ถ้ายังชนได้ unique ของ batch_no กับการลองใหม่ใน create_round รับต่อ"""
+    if db.get_bind().dialect.name != "postgresql":
+        return
+    db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": f"fin_petty_batches:{prefix}"})
+
+
+ROUND_NO_TAKEN = "เลขรอบชนกับรอบที่ส่งเข้ามาพร้อมกัน ลองกดส่งเคลียร์อีกครั้ง"
+
+
 def create_round(db: Session, fund_id: int, claim_ids: list[int], actor: str, remark: Optional[str],
                  required_level: int) -> FinPettyBatch:
-    """เจ้าของเงินสดรวมใบที่อนุมัติจ่ายแล้วของกองทุนตัวเองเป็นรอบ ส่งให้หัวหน้าอนุมัติเคลียร์"""
+    """เจ้าของเงินสดรวมใบที่อนุมัติจ่ายแล้วของกองทุนตัวเองเป็นรอบ ส่งให้หัวหน้าอนุมัติเคลียร์
+
+    เลขรอบชน (มีคนได้เลขเดียวกันไปก่อน) → ลองใหม่อีกครั้งด้วยเลขถัดไป · ชนซ้ำอีก = 409 ให้กดใหม่"""
+    for attempt in (1, 2):
+        try:
+            return _create_round_once(db, fund_id, claim_ids, actor, remark, required_level)
+        except IntegrityError as exc:  # _all_or_nothing rollback ไปแล้ว ลองใหม่ได้เลย
+            if "batch_no" not in str(exc.orig):
+                raise
+            if attempt == 2:
+                raise L.PettyRuleError(ROUND_NO_TAKEN, 409) from exc
+
+
+def _create_round_once(db: Session, fund_id: int, claim_ids: list[int], actor: str, remark: Optional[str],
+                       required_level: int) -> FinPettyBatch:
     with _all_or_nothing(db):
         fund = get_fund(db, fund_id)
         if fund is None:
@@ -383,6 +419,7 @@ def create_round(db: Session, fund_id: int, claim_ids: list[int], actor: str, re
                     f"ยังส่งเคลียร์ไม่ได้", 409)
 
         yymm = _yymm_bkk()
+        _lock_round_numbers(db, _round_prefix(fund.branch_code, fund.division_code, yymm))
         batch = FinPettyBatch(
             fund_id=fund_id, remark=remark, status=L.BATCH_CLEAR_PENDING,
             batch_no=L.batch_no(fund.branch_code, fund.division_code, yymm,
