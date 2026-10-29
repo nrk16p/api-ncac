@@ -184,7 +184,7 @@ def get_claim(form_id: str, db: Session = Depends(get_db)):
 
 from datetime import datetime, timezone  # noqa: E402
 
-from schemas.finance_petty_schema import ApproveIn, ReturnIn, ReviewIn, SubmitAccIn, TransferIn  # noqa: E402
+from schemas.finance_petty_schema import ApproveIn, DdIn, ReturnIn, ReviewIn  # noqa: E402
 from services.finance import petty_mail as mail  # noqa: E402
 from services.finance import petty_validate as validate  # noqa: E402
 
@@ -289,7 +289,8 @@ def approve_claim(form_id: str, payload: ApproveIn, db: Session = Depends(get_db
     _raise_if_blocked(gate, check_duplicates=True, override_reason=payload.dup_override_reason,
                       notify=_notify)
 
-    fields = {"approved_by": payload.employee_id}
+    # flow v2: อนุมัติ = จ่ายเงินในจังหวะเดียวกัน (สลิปโอนอยู่ในด่าน APPROVE อยู่แล้ว)
+    fields = {"approved_by": payload.employee_id, "transfer_date": payload.transfer_date or L.bkk_today()}
     if payload.dup_override_reason:
         fields["dup_override_reason"] = payload.dup_override_reason
     try:
@@ -317,40 +318,15 @@ def return_claim(form_id: str, payload: ReturnIn, db: Session = Depends(get_db),
     return _out(db, out)
 
 
-@router.post("/claims/{form_id}/transfer")
-def transfer_claim(form_id: str, payload: TransferIn, db: Session = Depends(get_db)):
+@router.post("/claims/{form_id}/dd")
+def set_claim_dd(form_id: str, payload: DdIn, db: Session = Depends(get_db)):
+    """เจ้าของเงินสดใส่เลข DD ระหว่างรอส่งเคลียร์ — ด่านตอนรวมรอบบังคับ DD เมื่อยอดถึงเกณฑ์ของประเภท"""
     claim = _claim_or_404(db, form_id)
     _require_holder(db, claim, payload.employee_id)
     try:
-        out = repo.set_status(db, claim, L.TRANSFERRED, payload.employee_id, "TRANSFER",
-                              fields={"transfer_date": payload.transfer_date})
+        out = repo.set_dd(db, claim, payload.dd_no.strip(), payload.employee_id)
     except L.PettyRuleError as exc:
         raise _rule_error(exc)
-    return _out(db, out)
-
-
-@router.post("/claims/{form_id}/submit-accounting")
-def submit_to_accounting(form_id: str, payload: SubmitAccIn, db: Session = Depends(get_db)):
-    claim = _claim_or_404(db, form_id)
-    _require_holder(db, claim, payload.employee_id)
-    if payload.dd_no:
-        claim.dd_no = payload.dd_no  # ให้ด่านเห็นเลข DD ที่เพิ่งกรอกมาพร้อมคำสั่งนี้
-    gate = _gate(db, claim, repo.claim_items(db, claim.id), validate.STAGE_SUBMIT_ACC,
-                 payload.attachments)
-    if gate["missing"]:
-        mail.notify_gate_blocked(claim.form_id, gate["missing"],
-                                 repo.employee_email(db, claim.created_by),
-                                 repo.employee_email(db, payload.employee_id))
-        raise HTTPException(status_code=403, detail={"error": "ส่งบัญชีไม่ได้ เอกสารยังไม่ครบ",
-                                                     "missing": gate["missing"]})
-
-    fields = {"dd_no": payload.dd_no} if payload.dd_no else {}
-    try:
-        out = repo.set_status(db, claim, L.AWAITING_REVIEW, payload.employee_id, "SUBMIT_ACC",
-                              fields=fields)
-    except L.PettyRuleError as exc:
-        raise _rule_error(exc)
-    _snapshot_dd(db, out)
     return _out(db, out)
 
 
@@ -386,7 +362,7 @@ def _snapshot_dd(db: Session, claim) -> None:
 
 @router.post("/claims/{form_id}/review")
 def review_claim(form_id: str, payload: ReviewIn, db: Session = Depends(get_db)):
-    """บัญชีตรวจ — ผ่านแล้วรอการเงินปิดรอบ (ยังไม่ CLOSED) หรือส่งกลับให้ผู้อนุมัติแก้"""
+    """บัญชีตรวจทีละใบ — ผ่าน หรือตีกลับให้เจ้าหน้าที่ผู้เปิดใบแก้ (แก้แล้วส่งตรงกลับบัญชี)"""
     claim = _claim_or_404(db, form_id)
     if payload.action == "SEND_BACK":
         if not payload.remark:
@@ -401,13 +377,12 @@ def review_claim(form_id: str, payload: ReviewIn, db: Session = Depends(get_db))
         raise HTTPException(status_code=409,
                             detail=f"ตรวจได้เฉพาะใบที่รอบัญชีตรวจ ใบนี้สถานะ "
                                    f"{L.STATUS_LABELS.get(claim.status, claim.status)}")
-    # PASS: ทำเครื่องหมายว่าบัญชีตรวจแล้ว ใบยังอยู่ AWAITING_REVIEW จนการเงินปิดรอบ
-    claim.reviewed_by, claim.review_remark = payload.employee_id, payload.remark
-    claim.reviewed_at = datetime.now(timezone.utc)
-    repo.log(db, claim.id, "ACC_PASS", payload.employee_id, remark=payload.remark)
-    db.commit()
-    db.refresh(claim)
-    return _out(db, claim)
+    # PASS: ใบเป็น "ตรวจผ่าน รอตั้งเบิก" · ใบสุดท้ายของรอบผ่านเมื่อไร รอบพร้อมตั้งเบิก
+    try:
+        out = repo.review_pass(db, claim, payload.employee_id, payload.remark)
+    except L.PettyRuleError as exc:
+        raise _rule_error(exc)
+    return _out(db, out)
 
 
 # ---------------------------- ยอดคงเหลือ และรอบคืนยอด ----------------------------
@@ -415,7 +390,8 @@ def review_claim(form_id: str, payload: ReviewIn, db: Session = Depends(get_db))
 from decimal import Decimal  # noqa: E402
 
 from models.finance_petty_model import FinPettyBatch  # noqa: E402
-from schemas.finance_petty_schema import BatchIn  # noqa: E402
+from schemas.finance_petty_schema import PayIn, RoundActionIn, RoundIn, RoundRejectIn, VoucherIn  # noqa: E402
+from services.finance import petty_clear as clear  # noqa: E402
 
 
 @router.get("/funds/{fund_id}/balance")
@@ -427,29 +403,191 @@ def fund_balance(fund_id: int, db: Session = Depends(get_db)):
     return {k: (float(v) if isinstance(v, Decimal) else v) for k, v in bal.items()}
 
 
+def _iso(value):
+    return value.isoformat() if value is not None else None
+
+
+def _round_dict(db: Session, b, fund=None, claims=None, names: dict | None = None) -> dict:
+    fund = fund or repo.get_fund(db, b.fund_id)
+    holder = fund.holder_employee_id if fund else None
+    names = names if names is not None else repo.employee_names(
+        db, [holder, b.submitted_by, b.clear_approved_by, b.vouchered_by, b.paid_by])
+    body = {
+        "id": b.id, "batch_no": b.batch_no, "fund_id": b.fund_id, "status": b.status,
+        "status_label": L.BATCH_STATUS_LABELS.get(b.status, b.status),
+        "branch_code": fund.branch_code if fund else None, "division_code": fund.division_code if fund else None,
+        "holder_employee_id": holder, "holder_name": names.get(holder),
+        "total_amount": float(b.total_amount), "remark": b.remark,
+        "submitted_by": b.submitted_by, "submitted_at": _iso(b.submitted_at),
+        "clear_required_level": b.clear_required_level,
+        "clear_approved_by": b.clear_approved_by, "clear_approved_by_name": names.get(b.clear_approved_by),
+        "clear_approved_at": _iso(b.clear_approved_at), "clear_reject_reason": b.clear_reject_reason,
+        "voucher_no": b.voucher_no, "vouchered_by": b.vouchered_by, "vouchered_at": _iso(b.vouchered_at),
+        "pay_date": str(b.pay_date) if b.pay_date else None, "paid_by": b.paid_by, "paid_at": _iso(b.paid_at),
+        "closed_by": b.closed_by, "closed_at": _iso(b.closed_at),
+    }
+    if claims is not None:
+        body["claim_count"] = len(claims)
+    return body
+
+
+def _round_out(db: Session, b, employee_id: Optional[str] = None) -> dict:
+    claims = repo.round_claims(db, b.id)
+    body = _round_dict(db, b, claims=claims)
+    claim_names = repo.employee_names(db, [x for c in claims for x in (c.created_by, c.approved_by)])
+    body["claims"] = [_claim_dict(c, repo.claim_items(db, c.id), claim_names) for c in claims]
+    if employee_id:
+        body["can_clear"] = _may_clear(db, b, employee_id, fresh=False)
+    return body
+
+
+def _round_or_404(db: Session, batch_id: int):
+    batch = repo.get_round(db, batch_id)
+    if batch is None:
+        raise HTTPException(status_code=404, detail="ไม่พบรอบส่งเคลียร์")
+    return batch
+
+
+def _required_level(people: dict, holder_id: Optional[str]) -> int:
+    return L.clear_required_level((people.get(holder_id) or {}).get("level"))
+
+
+def _may_clear(db: Session, batch, employee_id: str, fresh: bool = True) -> bool:
+    """หัวหน้าตามสายงานของเจ้าของเงินสด (engine เดียวกับ Advance) · รอบต้องรออนุมัติเคลียร์อยู่"""
+    if batch.status != L.BATCH_CLEAR_PENDING:
+        return False
+    fund = repo.get_fund(db, batch.fund_id)
+    if fund is None:
+        return False
+    people, mappings = repo.line_context(db, fresh=fresh)
+    required = batch.clear_required_level or _required_level(people, fund.holder_employee_id)
+    return clear.can_clear(people, mappings, fund.holder_employee_id, required, employee_id)
+
+
 @router.post("/batches", status_code=201)
-def create_batch(payload: BatchIn, db: Session = Depends(get_db)):
+def create_round(payload: RoundIn, db: Session = Depends(get_db), background: BackgroundTasks = None):
+    """เจ้าของเงินสดรวมใบที่อนุมัติจ่ายแล้วเป็นรอบ (พร้อมใบปะหน้า) ส่งให้หัวหน้าตามสายงานอนุมัติเคลียร์"""
+    fund = repo.get_fund(db, payload.fund_id)
+    if fund is None:
+        raise HTTPException(status_code=404, detail="ไม่พบกองทุน")
+    if fund.holder_employee_id != payload.employee_id:
+        raise HTTPException(status_code=403, detail="ส่งเคลียร์ได้เฉพาะเจ้าของเงินสดของกองทุนนี้")
+
+    blocked = []
+    for claim_id in dict.fromkeys(payload.claim_ids):
+        claim = db.query(repo.FinPettyClaim).filter(repo.FinPettyClaim.id == claim_id).first()
+        if claim is None or claim.status != L.APPROVED or claim.fund_id != fund.id:
+            continue  # ให้ repo.create_round บอกเหตุผล (404/409) ด้วยข้อความเดียวกันทุกที่
+        gate = _gate(db, claim, repo.claim_items(db, claim.id), validate.STAGE_SUBMIT_ACC,
+                     payload.attachments.get(claim.form_id, {}))
+        if gate["missing"]:
+            blocked.append({"form_id": claim.form_id, "missing": gate["missing"]})
+    if blocked:
+        raise HTTPException(status_code=403, detail={"error": "ส่งเคลียร์ไม่ได้ เอกสารบางใบยังไม่ครบ",
+                                                     "claims": blocked})
+
+    people, mappings = repo.line_context(db, fresh=True)
+    required = _required_level(people, fund.holder_employee_id)
     try:
-        batch = repo.close_batch(db, payload.fund_id, payload.claim_ids, payload.employee_id,
-                                 payload.remark)
+        batch = repo.create_round(db, fund.id, payload.claim_ids, payload.employee_id, payload.remark,
+                                  required_level=required)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except L.PettyRuleError as exc:
         raise _rule_error(exc)
-    return {"id": batch.id, "batch_no": batch.batch_no, "fund_id": batch.fund_id,
-            "total_amount": float(batch.total_amount), "closed_at": batch.closed_at.isoformat()}
+
+    heads = clear.clear_notify(people, mappings, fund.holder_employee_id, required)
+    emails = [repo.employee_email(db, p["employee_id"]) for p in heads]
+    holder_name = repo.employee_names(db, [fund.holder_employee_id]).get(fund.holder_employee_id)
+    args = (batch.id, batch.batch_no, holder_name, len(payload.claim_ids), batch.total_amount, emails)
+    if background is not None:
+        background.add_task(mail.notify_round_submitted, *args)
+    else:
+        mail.notify_round_submitted(*args)
+    return _round_out(db, batch)
 
 
 @router.get("/batches")
-def list_batches(fund_id: Optional[int] = None, limit: int = Query(default=50, le=200),
-                 db: Session = Depends(get_db)):
-    q = db.query(FinPettyBatch)
+def list_rounds(fund_id: Optional[int] = None, status: Optional[str] = None, holder: Optional[str] = None,
+                clear_approver: Optional[str] = None, limit: int = Query(default=50, le=200), offset: int = 0,
+                db: Session = Depends(get_db)):
+    """holder = รอบของกองทุนที่คนนั้นถือ · clear_approver = รอบที่คนนั้นอนุมัติเคลียร์ได้ · status คั่นด้วย ,"""
+    fund_ids = None
+    if holder:
+        fund_ids = [f.id for f in repo.list_funds(db, holder=holder, active_only=False)]
     if fund_id:
-        q = q.filter(FinPettyBatch.fund_id == fund_id)
-    rows = q.order_by(FinPettyBatch.id.desc()).limit(limit).all()
-    return [{"id": b.id, "batch_no": b.batch_no, "fund_id": b.fund_id,
-             "total_amount": float(b.total_amount), "closed_by": b.closed_by,
-             "closed_at": b.closed_at.isoformat(), "remark": b.remark} for b in rows]
+        fund_ids = [fund_id] if fund_ids is None else [x for x in fund_ids if x == fund_id]
+    if clear_approver:
+        status = L.BATCH_CLEAR_PENDING
+    rows = repo.list_rounds(db, fund_ids=fund_ids, status=status, limit=limit, offset=offset)
+    if clear_approver:
+        rows = [b for b in rows if _may_clear(db, b, clear_approver, fresh=False)]
+    out = []
+    for b in rows:
+        out.append(_round_dict(db, b, claims=repo.round_claims(db, b.id)))
+    return out
+
+
+@router.get("/batches/{batch_id}")
+def get_round(batch_id: int, employee_id: Optional[str] = None, db: Session = Depends(get_db)):
+    """รอบ + ใบทั้งหมดในรอบ · ส่ง employee_id มาเพื่อรู้ว่าคนนั้นกดอนุมัติเคลียร์ได้ไหม (can_clear)"""
+    return _round_out(db, _round_or_404(db, batch_id), employee_id)
+
+
+@router.post("/batches/{batch_id}/clear-approve")
+def clear_approve_round(batch_id: int, payload: RoundActionIn, db: Session = Depends(get_db)):
+    batch = _round_or_404(db, batch_id)
+    if batch.status == L.BATCH_CLEAR_PENDING and not _may_clear(db, batch, payload.employee_id):
+        raise HTTPException(status_code=403, detail="อนุมัติเคลียร์ได้เฉพาะผู้จัดการตามสายงานของเจ้าของเงินสด")
+    try:
+        out = repo.clear_approve_round(db, batch, payload.employee_id)
+    except L.PettyRuleError as exc:
+        raise _rule_error(exc)
+    for claim in repo.round_claims(db, out.id):
+        _snapshot_dd(db, claim)  # ส่งถึงบัญชีแล้ว ล็อกรายละเอียด DD ไว้ ไม่ให้เปลี่ยนตามที่ ATMS แก้ย้อนหลัง
+    return _round_out(db, out)
+
+
+@router.post("/batches/{batch_id}/clear-reject")
+def clear_reject_round(batch_id: int, payload: RoundRejectIn, db: Session = Depends(get_db),
+                       background: BackgroundTasks = None):
+    batch = _round_or_404(db, batch_id)
+    if batch.status == L.BATCH_CLEAR_PENDING and not _may_clear(db, batch, payload.employee_id):
+        raise HTTPException(status_code=403, detail="ไม่อนุมัติได้เฉพาะผู้จัดการตามสายงานของเจ้าของเงินสด")
+    try:
+        out = repo.clear_reject_round(db, batch, payload.employee_id, payload.reason.strip())
+    except L.PettyRuleError as exc:
+        raise _rule_error(exc)
+    fund = repo.get_fund(db, out.fund_id)
+    holder_email = repo.employee_email(db, fund.holder_employee_id) if fund else None
+    args = (out.id, out.batch_no, out.clear_reject_reason, holder_email)
+    if background is not None:
+        background.add_task(mail.notify_round_rejected, *args)
+    else:
+        mail.notify_round_rejected(*args)
+    return _round_out(db, out)
+
+
+@router.post("/batches/{batch_id}/voucher")
+def voucher_round(batch_id: int, payload: VoucherIn, db: Session = Depends(get_db)):
+    """บัญชีตั้งเบิกทั้งรอบ (ทุกใบต้องตรวจผ่านแล้ว)"""
+    batch = _round_or_404(db, batch_id)
+    try:
+        out = repo.voucher_round(db, batch, payload.employee_id, payload.voucher_no.strip())
+    except L.PettyRuleError as exc:
+        raise _rule_error(exc)
+    return _round_out(db, out)
+
+
+@router.post("/batches/{batch_id}/pay")
+def pay_round(batch_id: int, payload: PayIn, db: Session = Depends(get_db)):
+    """การเงินทำจ่ายคืนเจ้าของเงินสด → ปิดรอบและทุกใบในรอบ"""
+    batch = _round_or_404(db, batch_id)
+    try:
+        out = repo.pay_round(db, batch, payload.employee_id, payload.pay_date)
+    except L.PettyRuleError as exc:
+        raise _rule_error(exc)
+    return _round_out(db, out)
 
 
 @router.get("/trucks")

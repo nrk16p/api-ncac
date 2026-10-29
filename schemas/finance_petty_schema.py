@@ -80,6 +80,8 @@ class ClaimIn(BaseModel):
 class ApproveIn(BaseModel):
     employee_id: str = Field(min_length=1, max_length=50)
     dup_override_reason: Optional[str] = None
+    # flow v2: อนุมัติ = จ่ายเงินในจังหวะเดียวกัน · ไม่ส่งมา = วันนี้ตามเวลาไทย
+    transfer_date: Optional[date] = None
     # จำนวนไฟล์ที่แนบจริงต่อหมวด เช่น {"weigh_slip": 16, "transfer": 1}
     # BE ไม่มี client S3 ของตัวเอง (ของเดิมก็เป็นแบบนี้) FE นับจาก lib/s3 แล้วส่งมาให้ด่านตรวจ
     attachments: dict[str, int] = Field(default_factory=dict)
@@ -90,15 +92,9 @@ class ReturnIn(BaseModel):
     reason: str = Field(min_length=1)
 
 
-class TransferIn(BaseModel):
+class DdIn(BaseModel):
     employee_id: str = Field(min_length=1, max_length=50)
-    transfer_date: date
-
-
-class SubmitAccIn(BaseModel):
-    employee_id: str = Field(min_length=1, max_length=50)
-    dd_no: Optional[str] = Field(default=None, max_length=50)
-    attachments: dict[str, int] = Field(default_factory=dict)
+    dd_no: str = Field(min_length=1, max_length=50)
 
 
 class ReviewIn(BaseModel):
@@ -107,8 +103,29 @@ class ReviewIn(BaseModel):
     remark: Optional[str] = None
 
 
-class BatchIn(BaseModel):
+class RoundIn(BaseModel):
+    """เจ้าของเงินสดรวมใบเป็นรอบส่งเคลียร์ · attachments = จำนวนไฟล์ต่อหมวด แยกตามเลขที่ใบ"""
     employee_id: str = Field(min_length=1, max_length=50)
     fund_id: int
     claim_ids: list[int] = Field(min_length=1)
     remark: Optional[str] = None
+    attachments: dict[str, dict[str, int]] = Field(default_factory=dict)
+
+
+class RoundActionIn(BaseModel):
+    employee_id: str = Field(min_length=1, max_length=50)
+
+
+class RoundRejectIn(BaseModel):
+    employee_id: str = Field(min_length=1, max_length=50)
+    reason: str = Field(min_length=1)
+
+
+class VoucherIn(BaseModel):
+    employee_id: str = Field(min_length=1, max_length=50)
+    voucher_no: str = Field(min_length=1, max_length=50)
+
+
+class PayIn(BaseModel):
+    employee_id: str = Field(min_length=1, max_length=50)
+    pay_date: date

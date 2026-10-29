@@ -41,10 +41,34 @@ def test_item_columns_match_migration():
     assert set(FinPettyClaimItem.__table__.columns.keys()) == expected
 
 
-def test_status_check_constraint_lists_seven_statuses():
+def test_status_check_constraint_lists_the_v2_statuses():
     ck = [c for c in FinPettyClaim.__table__.constraints if c.name == "ck_fin_petty_claims_status"]
     assert len(ck) == 1
     sql = str(ck[0].sqltext)
-    for status in ("PENDING_APPROVAL", "RETURNED", "APPROVED", "TRANSFERRED",
-                   "AWAITING_REVIEW", "SENT_BACK", "CLOSED"):
+    # TRANSFERRED ยังอยู่ใน CHECK เพื่อให้ SQL ย้ายใบเก่าได้โดยไม่ล้ม และไม่ทำให้แถวเก่าผิดกติกา
+    for status in ("PENDING_APPROVAL", "RETURNED", "APPROVED", "CLEAR_PENDING", "AWAITING_REVIEW",
+                   "SENT_BACK", "REVIEWED", "CLOSED", "TRANSFERRED"):
         assert status in sql
+
+
+def test_batch_columns_match_migration():
+    expected = {
+        "id", "fund_id", "batch_no", "total_amount", "remark", "status",
+        "submitted_by", "submitted_at", "clear_required_level",
+        "clear_approved_by", "clear_approved_at", "clear_reject_reason",
+        "voucher_no", "vouchered_by", "vouchered_at", "pay_date", "paid_by", "paid_at",
+        "closed_by", "closed_at",
+    }
+    assert set(FinPettyBatch.__table__.columns.keys()) == expected
+
+
+def test_batch_closed_at_is_empty_until_paid():
+    col = FinPettyBatch.__table__.columns["closed_at"]
+    assert col.nullable and col.server_default is None
+
+
+def test_batch_status_check_lists_round_statuses():
+    ck = [c for c in FinPettyBatch.__table__.constraints if c.name == "ck_fin_petty_batches_status"]
+    assert len(ck) == 1
+    for status in ("CLEAR_PENDING", "CLEAR_REJECTED", "AWAITING_REVIEW", "REVIEWED", "VOUCHERED", "CLOSED"):
+        assert status in str(ck[0].sqltext)

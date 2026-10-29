@@ -59,29 +59,26 @@ class TestReturnAndResubmit:
 
 
 class TestFullPath:
-    def test_seven_steps_end_at_closed(self, db_session, claim):
-        repo.set_status(db_session, claim, L.APPROVED, actor="12345", action="APPROVE")
-        repo.set_status(db_session, claim, L.TRANSFERRED, actor="12345", action="TRANSFER",
+    """flow v2 (29/10/2026): อนุมัติ+จ่าย → รอบ → หัวหน้าอนุมัติเคลียร์ → บัญชีตรวจ → ทำจ่ายทั้งรอบ"""
+
+    def test_every_step_ends_at_closed(self, db_session, fund, claim):
+        repo.set_status(db_session, claim, L.APPROVED, actor="12345", action="APPROVE",
                         fields={"transfer_date": date(2026, 9, 25)})
-        repo.set_status(db_session, claim, L.AWAITING_REVIEW, actor="12345", action="SUBMIT_ACC",
-                        fields={"dd_no": "LBDD26090931"})
-        repo.set_status(db_session, claim, L.CLOSED, actor="90001", action="CLOSE")
+        assert claim.approved_at is not None and claim.transfer_slip_at is not None
+        repo.set_dd(db_session, claim, "LBDD26090931", actor="12345")
+        batch = repo.create_round(db_session, fund.id, [claim.id], actor="12345", remark=None, required_level=5)
+        repo.clear_approve_round(db_session, batch, actor="600100")
+        repo.review_pass(db_session, claim, actor="80001", remark=None)
+        db_session.refresh(batch)
+        repo.voucher_round(db_session, batch, actor="80001", voucher_no="PV-1")
+        repo.pay_round(db_session, batch, actor="90001", pay_date=date(2026, 10, 30))
         assert claim.status == "CLOSED" and claim.dd_no == "LBDD26090931"
 
-    def test_accounting_can_send_back_then_pass(self, db_session, claim):
+    def test_timestamp_is_not_overwritten_on_the_second_pass(self, db_session, fund, claim, weigh_items):
         repo.set_status(db_session, claim, L.APPROVED, actor="12345", action="APPROVE")
-        repo.set_status(db_session, claim, L.TRANSFERRED, actor="12345", action="TRANSFER")
-        repo.set_status(db_session, claim, L.AWAITING_REVIEW, actor="12345", action="SUBMIT_ACC")
-        repo.set_status(db_session, claim, L.SENT_BACK, actor="80001", action="SEND_BACK",
-                        fields={"review_remark": "ใบชั่งเบลอ"})
-        out = repo.set_status(db_session, claim, L.AWAITING_REVIEW, actor="12345", action="SUBMIT_ACC")
-        assert out.status == "AWAITING_REVIEW" and out.review_remark == "ใบชั่งเบลอ"
-
-    def test_timestamp_is_not_overwritten_on_the_second_pass(self, db_session, claim):
-        repo.set_status(db_session, claim, L.APPROVED, actor="12345", action="APPROVE")
-        repo.set_status(db_session, claim, L.TRANSFERRED, actor="12345", action="TRANSFER")
-        repo.set_status(db_session, claim, L.AWAITING_REVIEW, actor="12345", action="SUBMIT_ACC")
+        batch = repo.create_round(db_session, fund.id, [claim.id], actor="12345", remark=None, required_level=5)
+        repo.clear_approve_round(db_session, batch, actor="600100")
         first = claim.submitted_to_acc_at
         repo.set_status(db_session, claim, L.SENT_BACK, actor="80001", action="SEND_BACK")
-        repo.set_status(db_session, claim, L.AWAITING_REVIEW, actor="12345", action="SUBMIT_ACC")
-        assert claim.submitted_to_acc_at == first
+        repo.update_draft(db_session, claim, {}, weigh_items, actor="55555")
+        assert claim.status == "AWAITING_REVIEW" and claim.submitted_to_acc_at == first

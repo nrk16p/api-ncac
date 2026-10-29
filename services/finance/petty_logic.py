@@ -8,42 +8,86 @@ import re
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Iterable, Mapping
+from typing import Iterable, Mapping, Optional
 
 PENDING_APPROVAL = "PENDING_APPROVAL"
 RETURNED = "RETURNED"
 APPROVED = "APPROVED"
-TRANSFERRED = "TRANSFERRED"
+CLEAR_PENDING = "CLEAR_PENDING"
 AWAITING_REVIEW = "AWAITING_REVIEW"
 SENT_BACK = "SENT_BACK"
+REVIEWED = "REVIEWED"
 CLOSED = "CLOSED"
+TRANSFERRED = "TRANSFERRED"  # flow เดิม (โอนแยกขั้น) — เลิกใช้ 29/10/2026 เก็บไว้ให้ป้ายของ log เก่าอ่านออก
 
 def bkk_today() -> date:
     """วันนี้ตามเวลาไทย — ใช้ตัดสินว่าวันที่ในรายการเป็นอนาคตหรือไม่ (ไม่ใช้ UTC ที่ช้ากว่า 7 ชม.)"""
     return datetime.now(ZoneInfo("Asia/Bangkok")).date()
 
 
-STATUSES = (PENDING_APPROVAL, RETURNED, APPROVED, TRANSFERRED, AWAITING_REVIEW, SENT_BACK, CLOSED)
+# flow v2 (ผู้ใช้สั่ง 29/10/2026): เจ้าของเงินสดอนุมัติพร้อมจ่าย → ส่งเคลียร์เป็นรอบ → หัวหน้าอนุมัติเคลียร์
+# → บัญชีตรวจ (ผ่าน → ตั้งเบิก/ทำจ่ายทั้งรอบ → ปิด · ไม่ผ่าน → ตีกลับเจ้าหน้าที่ แก้แล้วส่งตรงกลับบัญชี)
+STATUSES = (PENDING_APPROVAL, RETURNED, APPROVED, CLEAR_PENDING, AWAITING_REVIEW, SENT_BACK, REVIEWED, CLOSED)
 
 STATUS_LABELS = {
-    PENDING_APPROVAL: "รออนุมัติ",
+    PENDING_APPROVAL: "รอเจ้าของเงินสดอนุมัติ",
     RETURNED: "ตีกลับผู้เบิก",
-    APPROVED: "อนุมัติแล้ว รอโอน",
-    TRANSFERRED: "โอนแล้ว รอเคลียร์เอกสาร",
+    APPROVED: "อนุมัติจ่ายแล้ว รอส่งเคลียร์",
+    CLEAR_PENDING: "รอหัวหน้าอนุมัติเคลียร์",
     AWAITING_REVIEW: "รอบัญชีตรวจ",
-    SENT_BACK: "ส่งกลับแก้ไข",
-    CLOSED: "คืนยอดแล้ว",
+    SENT_BACK: "บัญชีตีกลับ รอแก้ไข",
+    REVIEWED: "บัญชีตรวจผ่าน รอตั้งเบิก",
+    CLOSED: "ปิดแล้ว",
+    TRANSFERRED: "โอนแล้ว (ขั้นตอนเดิม)",
 }
 
 ALLOWED = {
     PENDING_APPROVAL: (APPROVED, RETURNED),
     RETURNED: (PENDING_APPROVAL,),
-    APPROVED: (TRANSFERRED,),
-    TRANSFERRED: (AWAITING_REVIEW,),
-    AWAITING_REVIEW: (CLOSED, SENT_BACK),
+    APPROVED: (CLEAR_PENDING,),
+    CLEAR_PENDING: (AWAITING_REVIEW, APPROVED),  # หัวหน้าไม่อนุมัติ → กลับไปให้เจ้าของเงินสดจัดรอบใหม่
+    AWAITING_REVIEW: (REVIEWED, SENT_BACK),
     SENT_BACK: (AWAITING_REVIEW,),
+    REVIEWED: (CLOSED,),
     CLOSED: (),
 }
+
+# ---- รอบส่งเคลียร์ (fin_petty_batches) — ชุดใบของกองทุนเดียว พร้อมใบปะหน้า ----
+BATCH_CLEAR_PENDING = "CLEAR_PENDING"
+BATCH_CLEAR_REJECTED = "CLEAR_REJECTED"
+BATCH_AWAITING_REVIEW = "AWAITING_REVIEW"
+BATCH_REVIEWED = "REVIEWED"
+BATCH_VOUCHERED = "VOUCHERED"
+BATCH_CLOSED = "CLOSED"
+
+BATCH_STATUSES = (BATCH_CLEAR_PENDING, BATCH_CLEAR_REJECTED, BATCH_AWAITING_REVIEW, BATCH_REVIEWED,
+                  BATCH_VOUCHERED, BATCH_CLOSED)
+
+BATCH_STATUS_LABELS = {
+    BATCH_CLEAR_PENDING: "รอหัวหน้าอนุมัติเคลียร์",
+    BATCH_CLEAR_REJECTED: "หัวหน้าไม่อนุมัติ",
+    BATCH_AWAITING_REVIEW: "รอบัญชีตรวจ",
+    BATCH_REVIEWED: "ตรวจผ่าน รอตั้งเบิก",
+    BATCH_VOUCHERED: "ตั้งเบิกแล้ว รอทำจ่าย",
+    BATCH_CLOSED: "จ่ายแล้ว ปิดรอบ",
+}
+
+BATCH_ALLOWED = {
+    BATCH_CLEAR_PENDING: (BATCH_AWAITING_REVIEW, BATCH_CLEAR_REJECTED),
+    BATCH_CLEAR_REJECTED: (),
+    BATCH_AWAITING_REVIEW: (BATCH_REVIEWED,),
+    BATCH_REVIEWED: (BATCH_VOUCHERED,),
+    BATCH_VOUCHERED: (BATCH_CLOSED,),
+    BATCH_CLOSED: (),
+}
+
+MANAGER_LEVEL = 5
+TOP_LEVEL = 9
+
+
+def clear_required_level(holder_level: Optional[int]) -> int:
+    """หัวหน้าที่อนุมัติเคลียร์ = ผู้จัดการตามสายงาน: อย่างน้อยระดับผู้จัดการ และต้องสูงกว่าเจ้าของเงินสด"""
+    return min(max(MANAGER_LEVEL, (holder_level or 0) + 1), TOP_LEVEL)
 
 
 class PettyRuleError(Exception):
@@ -59,6 +103,16 @@ def assert_transition(current: str, target: str) -> None:
     if target not in ALLOWED[current]:
         label = STATUS_LABELS.get(current, current)
         raise PettyRuleError(f"ทำรายการนี้ไม่ได้ ใบนี้สถานะ {label} อยู่แล้ว", 409)
+    return None
+
+
+def assert_batch_transition(current: str, target: str) -> None:
+    """กติกาเดียวกับใบ แต่สำหรับรอบ · ไม่ได้ก็ 409 พร้อมสถานะรอบเป็นคำไทย"""
+    if current not in BATCH_ALLOWED:
+        raise PettyRuleError(f"สถานะรอบไม่ถูกต้อง ({current})", 409)
+    if target not in BATCH_ALLOWED[current]:
+        label = BATCH_STATUS_LABELS.get(current, current)
+        raise PettyRuleError(f"ทำรายการนี้ไม่ได้ รอบนี้สถานะ {label} อยู่แล้ว", 409)
     return None
 
 

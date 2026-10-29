@@ -7,28 +7,54 @@ from services.finance import petty_logic as L
 
 
 class TestTransitions:
+    """flow v2 (29/10/2026): เจ้าของเงินสดอนุมัติ+จ่าย → ส่งเป็นรอบ → หัวหน้าอนุมัติเคลียร์ → บัญชีตรวจ → ทำจ่ายทั้งรอบ"""
+
     def test_submit_to_approved(self):
         assert L.assert_transition("PENDING_APPROVAL", "APPROVED") is None
 
     def test_returned_can_be_resubmitted(self):
         assert L.assert_transition("RETURNED", "PENDING_APPROVAL") is None
 
-    def test_sent_back_goes_to_awaiting_review_again(self):
+    def test_approved_goes_into_a_round(self):
+        assert L.assert_transition("APPROVED", "CLEAR_PENDING") is None
+
+    def test_head_approval_sends_to_accounting(self):
+        assert L.assert_transition("CLEAR_PENDING", "AWAITING_REVIEW") is None
+
+    def test_head_rejection_returns_to_the_holder(self):
+        assert L.assert_transition("CLEAR_PENDING", "APPROVED") is None
+
+    def test_accounting_passes_or_sends_back(self):
+        assert L.assert_transition("AWAITING_REVIEW", "REVIEWED") is None
+        assert L.assert_transition("AWAITING_REVIEW", "SENT_BACK") is None
+
+    def test_sent_back_goes_straight_back_to_accounting(self):
         assert L.assert_transition("SENT_BACK", "AWAITING_REVIEW") is None
+
+    def test_paying_the_round_closes_a_reviewed_claim(self):
+        assert L.assert_transition("REVIEWED", "CLOSED") is None
 
     def test_cannot_approve_twice(self):
         with pytest.raises(L.PettyRuleError) as exc:
             L.assert_transition("APPROVED", "APPROVED")
         assert exc.value.http_status == 409
-        assert "อนุมัติแล้ว" in str(exc.value)
+        assert "อนุมัติจ่ายแล้ว" in str(exc.value)
 
-    def test_cannot_skip_transfer(self):
+    def test_cannot_skip_the_head(self):
         with pytest.raises(L.PettyRuleError):
             L.assert_transition("APPROVED", "AWAITING_REVIEW")
+
+    def test_cannot_close_before_accounting_passes(self):
+        with pytest.raises(L.PettyRuleError):
+            L.assert_transition("AWAITING_REVIEW", "CLOSED")
 
     def test_closed_is_terminal(self):
         with pytest.raises(L.PettyRuleError):
             L.assert_transition("CLOSED", "AWAITING_REVIEW")
+
+    def test_old_transferred_status_no_longer_moves(self):
+        with pytest.raises(L.PettyRuleError):
+            L.assert_transition("TRANSFERRED", "AWAITING_REVIEW")
 
     def test_unknown_status_is_rejected(self):
         with pytest.raises(L.PettyRuleError):
@@ -36,16 +62,60 @@ class TestTransitions:
 
 
 class TestLabels:
-    def test_seven_statuses(self):
-        assert len(L.STATUSES) == 7
+    def test_eight_statuses(self):
+        assert L.STATUSES == ("PENDING_APPROVAL", "RETURNED", "APPROVED", "CLEAR_PENDING",
+                              "AWAITING_REVIEW", "SENT_BACK", "REVIEWED", "CLOSED")
 
-    def test_labels_cover_every_status(self):
-        assert set(L.STATUS_LABELS) == set(L.STATUSES)
+    def test_labels_cover_every_status_and_the_old_one(self):
+        assert set(L.STATUS_LABELS) == set(L.STATUSES) | {"TRANSFERRED"}
 
-    def test_label_wording_matches_spec(self):
-        assert L.STATUS_LABELS["APPROVED"] == "อนุมัติแล้ว รอโอน"
-        assert L.STATUS_LABELS["TRANSFERRED"] == "โอนแล้ว รอเคลียร์เอกสาร"
-        assert L.STATUS_LABELS["CLOSED"] == "คืนยอดแล้ว"
+    def test_label_wording(self):
+        assert L.STATUS_LABELS["PENDING_APPROVAL"] == "รอเจ้าของเงินสดอนุมัติ"
+        assert L.STATUS_LABELS["APPROVED"] == "อนุมัติจ่ายแล้ว รอส่งเคลียร์"
+        assert L.STATUS_LABELS["CLEAR_PENDING"] == "รอหัวหน้าอนุมัติเคลียร์"
+        assert L.STATUS_LABELS["SENT_BACK"] == "บัญชีตีกลับ รอแก้ไข"
+        assert L.STATUS_LABELS["REVIEWED"] == "บัญชีตรวจผ่าน รอตั้งเบิก"
+        assert L.STATUS_LABELS["CLOSED"] == "ปิดแล้ว"
+
+
+class TestBatchTransitions:
+    def test_round_path(self):
+        assert L.assert_batch_transition("CLEAR_PENDING", "AWAITING_REVIEW") is None
+        assert L.assert_batch_transition("AWAITING_REVIEW", "REVIEWED") is None
+        assert L.assert_batch_transition("REVIEWED", "VOUCHERED") is None
+        assert L.assert_batch_transition("VOUCHERED", "CLOSED") is None
+
+    def test_head_can_reject_a_round(self):
+        assert L.assert_batch_transition("CLEAR_PENDING", "CLEAR_REJECTED") is None
+
+    def test_rejected_round_is_terminal(self):
+        with pytest.raises(L.PettyRuleError) as exc:
+            L.assert_batch_transition("CLEAR_REJECTED", "AWAITING_REVIEW")
+        assert exc.value.http_status == 409
+
+    def test_cannot_pay_before_voucher(self):
+        with pytest.raises(L.PettyRuleError) as exc:
+            L.assert_batch_transition("REVIEWED", "CLOSED")
+        assert "ตรวจผ่าน รอตั้งเบิก" in str(exc.value)
+
+    def test_labels_cover_every_round_status(self):
+        assert set(L.BATCH_STATUS_LABELS) == set(L.BATCH_STATUSES)
+
+
+class TestClearRequiredLevel:
+    """หัวหน้าที่อนุมัติเคลียร์ = ผู้จัดการตามสายงาน: อย่างน้อยระดับ 5 และสูงกว่าเจ้าของเงินสด"""
+
+    def test_staff_holder_needs_a_manager(self):
+        assert L.clear_required_level(3) == 5
+
+    def test_manager_holder_needs_the_next_level_up(self):
+        assert L.clear_required_level(5) == 6
+
+    def test_capped_at_ceo(self):
+        assert L.clear_required_level(9) == 9
+
+    def test_unknown_level_needs_a_manager(self):
+        assert L.clear_required_level(None) == 5
 
 
 class TestNormalizePlate:

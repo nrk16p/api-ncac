@@ -16,7 +16,9 @@ from fastapi import HTTPException
 
 from models.finance_petty_model import FinPettyExpenseType, FinPettyFund
 from routes.finance import petty_routes as R
-from schemas.finance_petty_schema import ApproveIn, SubmitAccIn, TransferIn
+from schemas.finance_petty_schema import (
+    ApproveIn, DdIn, PayIn, ReviewIn, RoundActionIn, RoundIn, VoucherIn,
+)
 from services.finance import petty_logic as L
 from services.finance import petty_repo as repo
 
@@ -184,13 +186,30 @@ class TestTheHolderApprovesAllThree:
     def test_the_response_carries_the_lettered_number_only(self, approved):
         assert approved["TRAVEL"]["form_id"] == "LB-B02-2610-003" and "project_code" not in approved["TRAVEL"]
 
-    def test_the_whole_round_trip_reaches_accounting(self, db_session, approved):
-        claim = approved["TIRE"]
-        R.transfer_claim(claim["form_id"],
-                         TransferIn(employee_id=HOLDER, transfer_date=date(2026, 10, 1)),
-                         db=db_session)
-        sent = R.submit_to_accounting(claim["form_id"],
-                                   SubmitAccIn(employee_id=HOLDER, dd_no="LBDD26090931",
-                                               attachments=_required_attachments("TIRE")),
-                                   db=db_session)
-        assert sent["status"] == "AWAITING_REVIEW"
+    def test_the_whole_round_trip_ends_with_the_fund_paid_back(self, db_session, master, approved,
+                                                               monkeypatch):
+        # flow v2: คุณณรงค์กรณ์ (ระดับ 5) ส่งทั้ง 3 ใบเป็นรอบเดียว → ผู้จัดการตามสายงาน (ระดับ 6) อนุมัติเคลียร์
+        # → บัญชีตรวจผ่านทีละใบ → ตั้งเบิก → การเงินทำจ่าย → ยอดกลับมาเต็ม
+        people = {
+            HOLDER: {"employee_id": HOLDER, "id": 1, "level": 5, "department_id": 11, "division_id": 4,
+                     "site_id": 3, "active": True},
+            "600001": {"employee_id": "600001", "id": 2, "level": 6, "department_id": 11, "division_id": 4,
+                       "site_id": 3, "active": True},
+        }
+        monkeypatch.setattr(repo, "line_context", lambda db, fresh=True: (people, {}))
+        fund_id = approved["TIRE"]["fund_id"]
+        for code in ("TIRE", "WEIGH"):
+            R.set_claim_dd(approved[code]["form_id"], DdIn(employee_id=HOLDER, dd_no="LBDD26090931"),
+                           db=db_session)
+        sent = R.create_round(RoundIn(employee_id=HOLDER, fund_id=fund_id,
+                                      claim_ids=[c["id"] for c in approved.values()],
+                                      attachments={c["form_id"]: _required_attachments(code)
+                                                   for code, c in approved.items()}), db=db_session)
+        assert sent["clear_required_level"] == 6 and sent["claim_count"] == 3
+        R.clear_approve_round(sent["id"], RoundActionIn(employee_id="600001"), db=db_session)
+        for c in approved.values():
+            R.review_claim(c["form_id"], ReviewIn(employee_id="80001", action="PASS"), db=db_session)
+        R.voucher_round(sent["id"], VoucherIn(employee_id="80001", voucher_no="PV-2610-001"), db=db_session)
+        paid = R.pay_round(sent["id"], PayIn(employee_id="90001", pay_date=date(2026, 10, 30)), db=db_session)
+        assert paid["status"] == "CLOSED" and paid["total_amount"] == 3083.0
+        assert repo.petty_committed(db_session, HOLDER) == Decimal("0.00")

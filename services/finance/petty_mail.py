@@ -86,3 +86,49 @@ def notify_duplicate(form_id: str, duplicates, clerk_email=None, approver_email=
         return
     mail.send_finance_email(to, f"[เงินสดย่อย] รายการอาจซ้ำ {form_id}",
                             render_duplicate(form_id, duplicates))
+
+
+def _round_frame(title: str, batch_no: str, body: str) -> str:
+    return (
+        f"<div style='font-family:sans-serif;font-size:14px;line-height:1.6'>"
+        f"<p style='font-size:16px;margin:0 0 8px'><strong>{escape(title)}</strong></p>"
+        f"<p style='margin:0 0 8px'>รอบส่งเคลียร์เงินสดย่อย <strong>{escape(batch_no)}</strong></p>"
+        f"{body}</div>"
+    )
+
+
+def _round_link(batch_id: int) -> str:
+    import os
+    url = mail.build_link(os.getenv("FE_BASE_URL"), f"/finance/petty/rounds/{int(batch_id)}")
+    return (f"<p style='margin:8px 0 0'><a href='{escape(url, quote=True)}'>เปิดดูรอบนี้</a></p>"
+            if url else "")
+
+
+def render_round_submitted(batch_id: int, batch_no: str, holder_name: Optional[str], count: int, total) -> str:
+    who = escape(holder_name) if holder_name else "เจ้าของเงินสด"
+    return _round_frame("มีรอบเงินสดย่อยรอคุณอนุมัติเคลียร์", batch_no,
+                        f"<p style='margin:0'>{who} ส่งมา {int(count)} ใบ รวม {float(total):,.2f} บาท</p>"
+                        + _round_link(batch_id))
+
+
+def render_round_rejected(batch_id: int, batch_no: str, reason: str) -> str:
+    return _round_frame("หัวหน้าไม่อนุมัติเคลียร์รอบนี้", batch_no,
+                        f"<p style='margin:0'>เหตุผล: {escape(reason)}</p>"
+                        "<p style='margin:8px 0 0'>ใบในรอบกลับไปรอส่งเคลียร์ แก้แล้วจัดรอบใหม่ได้เลย</p>"
+                        + _round_link(batch_id))
+
+
+def notify_round_submitted(batch_id: int, batch_no: str, holder_name, count: int, total, to: list) -> None:
+    to = [a for a in dict.fromkeys(to or []) if a]
+    if not to:
+        log.info("petty round email skipped (no head email): %s", batch_no)
+        return
+    mail.send_finance_email(to, f"[เงินสดย่อย] รออนุมัติเคลียร์ {batch_no}",
+                            render_round_submitted(batch_id, batch_no, holder_name, count, total))
+
+
+def notify_round_rejected(batch_id: int, batch_no: str, reason: str, holder_email=None) -> None:
+    if not holder_email:
+        return
+    mail.send_finance_email([holder_email], f"[เงินสดย่อย] ไม่อนุมัติเคลียร์ {batch_no}",
+                            render_round_rejected(batch_id, batch_no, reason))

@@ -5,7 +5,9 @@ from fastapi import HTTPException
 from routes.finance import petty_routes as R
 from services.finance import petty_logic as L
 from services.finance import petty_repo as repo
-from schemas.finance_petty_schema import ApproveIn, ReviewIn, SubmitAccIn, TransferIn
+from schemas.finance_petty_schema import (
+    ApproveIn, DdIn, PayIn, ReviewIn, RoundActionIn, RoundIn, RoundRejectIn, VoucherIn,
+)
 
 WEIGH_SPEC = {
     "item_based": True,
@@ -113,28 +115,157 @@ class TestApprovalGate:
         assert out["status"] == "APPROVED" and out["dup_override_reason"] == "ชั่ง 2 เที่ยวจริง"
 
 
-class TestSubmitAccountingGate:
-    def _to_transferred(self, db_session, claim):
-        R.approve_claim(claim.form_id,
-                        ApproveIn(employee_id="12345", attachments=FULL,
-                                  dup_override_reason="ชั่ง 2 เที่ยว"), db_session)
-        R.transfer_claim(claim.form_id,
-                         TransferIn(employee_id="12345", transfer_date="2026-09-25"), db_session)
+HOLDER_LEVEL = 4
 
-    def test_dd_is_required_over_500(self, db_session, claim):
-        self._to_transferred(db_session, claim)
+
+def _person(eid, uid, level, dept=30, division=7, site=3, active=True):
+    return {"employee_id": eid, "id": uid, "level": level, "department_id": dept,
+            "division_id": division, "site_id": site, "active": active}
+
+
+@pytest.fixture
+def line(monkeypatch):
+    """สายงานของเจ้าของเงินสด 12345 (ระดับ 4): ผู้จัดการ 600100 แผนกเดียวกัน · 600200 อยู่แผนกอื่น"""
+    people = {p["employee_id"]: p for p in (
+        _person("12345", 1, HOLDER_LEVEL), _person("600100", 2, 5), _person("600200", 3, 6, dept=99, division=99),
+    )}
+    monkeypatch.setattr(repo, "line_context", lambda db, fresh=True: (people, {}))
+    return people
+
+
+def _approve(db_session, claim):
+    return R.approve_claim(claim.form_id,
+                           ApproveIn(employee_id="12345", attachments=FULL, transfer_date="2026-09-25",
+                                     dup_override_reason="ชั่ง 2 เที่ยว"), db_session)
+
+
+class TestApproveIsAlsoThePayment:
+    def test_approval_records_the_payment_date(self, db_session, claim):
+        out = _approve(db_session, claim)
+        assert out["status"] == "APPROVED" and out["transfer_date"] == "2026-09-25"
+
+    def test_payment_date_defaults_to_today(self, db_session, claim):
+        out = R.approve_claim(claim.form_id, ApproveIn(employee_id="12345", attachments=FULL,
+                                                       dup_override_reason="x"), db_session)
+        assert out["transfer_date"] == str(L.bkk_today())
+
+
+class TestDdBeforeTheRound:
+    def test_holder_sets_the_dd(self, db_session, claim):
+        _approve(db_session, claim)
+        out = R.set_claim_dd(claim.form_id, DdIn(employee_id="12345", dd_no="LBDD26090931"), db_session)
+        assert out["dd_no"] == "LBDD26090931"
+
+    def test_only_the_holder(self, db_session, claim):
+        _approve(db_session, claim)
         with pytest.raises(HTTPException) as exc:
-            R.submit_to_accounting(claim.form_id, SubmitAccIn(employee_id="12345", attachments=FULL),
-                                   db_session)
+            R.set_claim_dd(claim.form_id, DdIn(employee_id="99999", dd_no="LBDD1"), db_session)
         assert exc.value.status_code == 403
-        assert any(m["key"] == "dd_no" for m in exc.value.detail["missing"])
 
-    def test_dd_given_with_the_command_satisfies_the_gate(self, db_session, claim):
-        self._to_transferred(db_session, claim)
-        out = R.submit_to_accounting(claim.form_id,
-                                     SubmitAccIn(employee_id="12345", dd_no="LBDD26090931",
-                                                 attachments=FULL), db_session)
-        assert out["status"] == "AWAITING_REVIEW" and out["dd_no"] == "LBDD26090931"
+
+def _round_in(claim, **over):
+    body = {"employee_id": "12345", "fund_id": claim.fund_id, "claim_ids": [claim.id],
+            "attachments": {claim.form_id: FULL}}
+    body.update(over)
+    return RoundIn(**body)
+
+
+class TestCreateRound:
+    def test_dd_is_required_over_500_and_the_error_names_the_claim(self, db_session, claim, line):
+        _approve(db_session, claim)
+        with pytest.raises(HTTPException) as exc:
+            R.create_round(_round_in(claim), db_session)
+        assert exc.value.status_code == 403
+        bad = exc.value.detail["claims"]
+        assert bad[0]["form_id"] == claim.form_id and any(m["key"] == "dd_no" for m in bad[0]["missing"])
+
+    def test_round_goes_to_the_head(self, db_session, claim, line):
+        _approve(db_session, claim)
+        R.set_claim_dd(claim.form_id, DdIn(employee_id="12345", dd_no="LBDD26090931"), db_session)
+        out = R.create_round(_round_in(claim), db_session)
+        assert out["status"] == "CLEAR_PENDING" and out["clear_required_level"] == 5
+        assert out["claim_count"] == 1 and out["total_amount"] == 1640.0
+        assert out["claims"][0]["status"] == "CLEAR_PENDING"
+
+    def test_only_the_holder_may_send_a_round(self, db_session, claim, line):
+        _approve(db_session, claim)
+        with pytest.raises(HTTPException) as exc:
+            R.create_round(_round_in(claim, employee_id="99999"), db_session)
+        assert exc.value.status_code == 403
+
+    def test_claim_not_approved_is_409(self, db_session, claim, line):
+        claim.dd_no = "LBDD1"
+        db_session.commit()
+        with pytest.raises(HTTPException) as exc:
+            R.create_round(_round_in(claim), db_session)
+        assert exc.value.status_code == 409
+
+
+@pytest.fixture
+def sent_round(db_session, claim, line):
+    _approve(db_session, claim)
+    R.set_claim_dd(claim.form_id, DdIn(employee_id="12345", dd_no="LBDD26090931"), db_session)
+    return R.create_round(_round_in(claim), db_session)
+
+
+class TestHeadClearing:
+    def test_manager_in_the_line_approves(self, db_session, sent_round):
+        out = R.clear_approve_round(sent_round["id"], RoundActionIn(employee_id="600100"), db_session)
+        assert out["status"] == "AWAITING_REVIEW" and out["clear_approved_by"] == "600100"
+        assert out["claims"][0]["status"] == "AWAITING_REVIEW"
+
+    def test_someone_outside_the_line_is_403(self, db_session, sent_round):
+        with pytest.raises(HTTPException) as exc:
+            R.clear_approve_round(sent_round["id"], RoundActionIn(employee_id="600200"), db_session)
+        assert exc.value.status_code == 403
+
+    def test_the_holder_cannot_approve_their_own_round(self, db_session, sent_round):
+        with pytest.raises(HTTPException) as exc:
+            R.clear_approve_round(sent_round["id"], RoundActionIn(employee_id="12345"), db_session)
+        assert exc.value.status_code == 403
+
+    def test_reject_sends_the_claims_back_to_the_holder(self, db_session, sent_round):
+        out = R.clear_reject_round(sent_round["id"], RoundRejectIn(employee_id="600100", reason="บิลไม่ครบ"),
+                                   db_session)
+        assert out["status"] == "CLEAR_REJECTED" and out["clear_reject_reason"] == "บิลไม่ครบ"
+        assert out["claims"] == []  # ใบหลุดจากรอบแล้ว
+
+    def test_round_detail_says_who_may_clear(self, db_session, sent_round):
+        assert R.get_round(sent_round["id"], employee_id="600100", db=db_session)["can_clear"] is True
+        assert R.get_round(sent_round["id"], employee_id="600200", db=db_session)["can_clear"] is False
+
+    def test_head_queue_lists_only_rounds_they_may_clear(self, db_session, sent_round):
+        mine = R.list_rounds(fund_id=None, status=None, holder=None, clear_approver="600100",
+                             limit=50, offset=0, db=db_session)
+        theirs = R.list_rounds(fund_id=None, status=None, holder=None, clear_approver="600200",
+                               limit=50, offset=0, db=db_session)
+        assert [r["id"] for r in mine] == [sent_round["id"]] and theirs == []
+
+    def test_unknown_round_is_404(self, db_session, line):
+        with pytest.raises(HTTPException) as exc:
+            R.clear_approve_round(9999, RoundActionIn(employee_id="600100"), db_session)
+        assert exc.value.status_code == 404
+
+
+class TestAccountingToPayment:
+    def test_pass_voucher_pay(self, db_session, claim, sent_round):
+        R.clear_approve_round(sent_round["id"], RoundActionIn(employee_id="600100"), db_session)
+        out = R.review_claim(claim.form_id, ReviewIn(employee_id="80001", action="PASS"), db_session)
+        assert out["status"] == "REVIEWED"
+        assert R.get_round(sent_round["id"], employee_id=None, db=db_session)["status"] == "REVIEWED"
+        out = R.voucher_round(sent_round["id"], VoucherIn(employee_id="80001", voucher_no="PV-2610-001"),
+                              db_session)
+        assert out["status"] == "VOUCHERED" and out["voucher_no"] == "PV-2610-001"
+        out = R.pay_round(sent_round["id"], PayIn(employee_id="90001", pay_date="2026-10-30"), db_session)
+        assert out["status"] == "CLOSED" and out["pay_date"] == "2026-10-30"
+        assert out["claims"][0]["status"] == "CLOSED"
+
+    def test_cannot_pay_before_voucher(self, db_session, claim, sent_round):
+        R.clear_approve_round(sent_round["id"], RoundActionIn(employee_id="600100"), db_session)
+        R.review_claim(claim.form_id, ReviewIn(employee_id="80001", action="PASS"), db_session)
+        with pytest.raises(HTTPException) as exc:
+            R.pay_round(sent_round["id"], PayIn(employee_id="90001", pay_date="2026-10-30"), db_session)
+        assert exc.value.status_code == 409
 
 
 class TestDuplicateCheckEndpoint:

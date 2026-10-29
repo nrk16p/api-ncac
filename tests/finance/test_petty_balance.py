@@ -55,9 +55,13 @@ class TestCommitted:
                                              seq_stub, frozen_bkk):
         claim = repo.create_claim(db_session, claim_payload(), weigh_items, actor="55555")
         repo.set_status(db_session, claim, L.APPROVED, "12345", "APPROVE")
-        repo.set_status(db_session, claim, L.TRANSFERRED, "12345", "TRANSFER")
-        repo.set_status(db_session, claim, L.AWAITING_REVIEW, "12345", "SUBMIT_ACC")
-        repo.set_status(db_session, claim, L.CLOSED, "90001", "CLOSE")
+        batch = repo.create_round(db_session, fund.id, [claim.id], actor="12345", remark=None, required_level=5)
+        repo.clear_approve_round(db_session, batch, actor="600100")
+        repo.review_pass(db_session, claim, actor="80001", remark=None)
+        assert repo.petty_committed(db_session, "12345") == Decimal("1640.00")  # ตรวจผ่านแล้วยังไม่จ่ายคืน
+        db_session.refresh(batch)
+        repo.voucher_round(db_session, batch, actor="80001", voucher_no="PV-1")
+        repo.pay_round(db_session, batch, actor="90001", pay_date=date(2026, 10, 30))
         assert repo.petty_committed(db_session, "12345") == Decimal("0.00")
 
     def test_returned_claim_does_not_hold_money(self, db_session, fund, claim_payload, weigh_items,
@@ -96,53 +100,3 @@ class TestFundBalance:
     def test_unknown_fund_raises(self, db_session, fund):
         with pytest.raises(LookupError):
             repo.fund_balance(db_session, fund.id + 99)
-
-
-class TestCloseBatch:
-    def _ready_claim(self, db_session, claim_payload, weigh_items):
-        claim = repo.create_claim(db_session, claim_payload(), weigh_items, actor="55555")
-        repo.set_status(db_session, claim, L.APPROVED, "12345", "APPROVE")
-        repo.set_status(db_session, claim, L.TRANSFERRED, "12345", "TRANSFER")
-        repo.set_status(db_session, claim, L.AWAITING_REVIEW, "12345", "SUBMIT_ACC")
-        return claim
-
-    def test_closes_every_claim_and_sums_the_total(self, db_session, fund, claim_payload,
-                                                   weigh_items, seq_stub, frozen_bkk):
-        a = self._ready_claim(db_session, claim_payload, weigh_items)
-        b = self._ready_claim(db_session, claim_payload, weigh_items)
-        batch = repo.close_batch(db_session, fund.id, [a.id, b.id], actor="90001", remark=None)
-        assert batch.total_amount == Decimal("3280.00")
-        assert {a.status, b.status} == {"CLOSED"}
-        assert a.batch_id == batch.id
-
-    def test_batch_no_is_sequential_per_fund_and_month(self, db_session, fund, claim_payload,
-                                                       weigh_items, seq_stub, frozen_bkk):
-        a = self._ready_claim(db_session, claim_payload, weigh_items)
-        first = repo.close_batch(db_session, fund.id, [a.id], actor="90001", remark=None)
-        b = self._ready_claim(db_session, claim_payload, weigh_items)
-        second = repo.close_batch(db_session, fund.id, [b.id], actor="90001", remark=None)
-        assert first.batch_no.endswith("-B1") and second.batch_no.endswith("-B2")
-
-    def test_claim_not_in_awaiting_review_is_rejected(self, db_session, fund, claim_payload,
-                                                      weigh_items, seq_stub, frozen_bkk):
-        claim = repo.create_claim(db_session, claim_payload(), weigh_items, actor="55555")
-        with pytest.raises(L.PettyRuleError) as exc:
-            repo.close_batch(db_session, fund.id, [claim.id], actor="90001", remark=None)
-        assert exc.value.http_status == 409
-
-    def test_claim_from_another_fund_is_rejected(self, db_session, fund, claim_payload,
-                                                weigh_items, seq_stub, frozen_bkk):
-        from models.finance_petty_model import FinPettyFund
-        other = FinPettyFund(branch_code="01", division_code="A01", holder_employee_id="22222")
-        db_session.add(other)
-        db_session.commit()
-        claim = self._ready_claim(db_session, claim_payload, weigh_items)
-        with pytest.raises(L.PettyRuleError):
-            repo.close_batch(db_session, other.id, [claim.id], actor="90001", remark=None)
-
-    def test_missing_claim_id_is_rejected(self, db_session, fund, claim_payload, weigh_items,
-                                          seq_stub, frozen_bkk):
-        a = self._ready_claim(db_session, claim_payload, weigh_items)
-        with pytest.raises(L.PettyRuleError) as exc:
-            repo.close_batch(db_session, fund.id, [a.id, 9999], actor="90001", remark=None)
-        assert exc.value.http_status == 404

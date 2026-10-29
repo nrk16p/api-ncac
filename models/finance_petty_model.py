@@ -14,9 +14,16 @@ JSONish = JSON().with_variant(JSONB(), "postgresql")
 
 from database import Base
 
+# flow v2 (29/10/2026) · TRANSFERRED เลิกใช้แต่ยังอยู่ใน CHECK ให้แถวเก่าไม่ผิดกติกา
 PETTY_STATUSES = (
-    "PENDING_APPROVAL", "RETURNED", "APPROVED", "TRANSFERRED", "AWAITING_REVIEW", "SENT_BACK", "CLOSED",
+    "PENDING_APPROVAL", "RETURNED", "APPROVED", "CLEAR_PENDING", "AWAITING_REVIEW", "SENT_BACK", "REVIEWED",
+    "CLOSED", "TRANSFERRED",
 )
+PETTY_BATCH_STATUSES = ("CLEAR_PENDING", "CLEAR_REJECTED", "AWAITING_REVIEW", "REVIEWED", "VOUCHERED", "CLOSED")
+
+
+def _in_list(column: str, values) -> str:
+    return f"{column} IN (" + ",".join(f"'{v}'" for v in values) + ")"
 
 
 class FinPettyFund(Base):
@@ -56,8 +63,26 @@ class FinPettyBatch(Base):
     batch_no = Column(String(30), nullable=False, unique=True)
     total_amount = Column(Numeric(12, 2), nullable=False, default=0, server_default="0")
     remark = Column(Text)
+    # รอบส่งเคลียร์ (flow v2): เจ้าของเงินสดสร้าง → หัวหน้าอนุมัติเคลียร์ → บัญชีตรวจ → ตั้งเบิก → การเงินทำจ่าย
+    status = Column(String(30), nullable=False, default="CLEAR_PENDING", server_default="CLEAR_PENDING")
+    submitted_by = Column(String(50))
+    submitted_at = Column(DateTime(timezone=True))
+    clear_required_level = Column(Integer)
+    clear_approved_by = Column(String(50))
+    clear_approved_at = Column(DateTime(timezone=True))
+    clear_reject_reason = Column(Text)
+    voucher_no = Column(String(50))
+    vouchered_by = Column(String(50))
+    vouchered_at = Column(DateTime(timezone=True))
+    pay_date = Column(Date)
+    paid_by = Column(String(50))
+    paid_at = Column(DateTime(timezone=True))
     closed_by = Column(String(50))
-    closed_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    closed_at = Column(DateTime(timezone=True))
+
+    __table_args__ = (
+        CheckConstraint(_in_list("status", PETTY_BATCH_STATUSES), name="ck_fin_petty_batches_status"),
+    )
 
 
 class FinPettyClaim(Base):
@@ -97,11 +122,7 @@ class FinPettyClaim(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
     __table_args__ = (
-        CheckConstraint(
-            "status IN ('PENDING_APPROVAL','RETURNED','APPROVED','TRANSFERRED',"
-            "'AWAITING_REVIEW','SENT_BACK','CLOSED')",
-            name="ck_fin_petty_claims_status",
-        ),
+        CheckConstraint(_in_list("status", PETTY_STATUSES), name="ck_fin_petty_claims_status"),
         CheckConstraint("amount >= 0", name="ck_fin_petty_claims_amount"),
         Index("ix_fin_petty_claims_fund_status", "fund_id", "status"),
         Index("ix_fin_petty_claims_status", "status"),
