@@ -640,7 +640,6 @@ def list_rounds(fund_id: Optional[int] = None, status: Optional[str] = None, hol
     return out
 
 
-
 @router.get("/batches/duplicate-doc-no")
 def round_duplicate_doc_no(field: str, value: str, exclude_id: Optional[int] = None,
                            db: Session = Depends(get_db)):
