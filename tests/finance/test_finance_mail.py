@@ -349,7 +349,8 @@ def test_queue_event_failed_step_line_rolls_back_and_still_queues(monkeypatch):
     db = _FailingDb()
     bg = BackgroundTasks()
     fm.queue_event(bg, db, fm.STEP_PENDING, NS(id=1, form_id="F", created_by="E1", current_approval_level=2))
-    assert db.rollbacks == 1 and len(bg.tasks) == 1
+    # one rollback for the step line, one for the requester CC lookup; the approvers' email is still queued
+    assert db.rollbacks == 2 and len(bg.tasks) == 1
 
 
 # ---------------------------- renders ----------------------------
@@ -362,10 +363,16 @@ CTX = {"form_id": "ADV-2610-001", "requester_name": '<b>สมชาย</b> & "�
 @pytest.mark.parametrize("event", list(fm._TITLES))
 def test_every_event_renders_and_escapes(event):
     subject, html = fm.render_event_email(event, CTX)
-    assert subject.startswith("[Finance Advance] ADV-2610-001")
+    # สองฉบับที่ CC บัญชีใช้หัวข้อเดียวกับไลน์กลุ่ม ที่เหลือคงรูปเดิม
+    if event == fm.CLEAR_APPROVED:  # จดหมายตามถ้อยคำบัญชี หัวเรื่องลงท้ายด้วยชื่อผู้เบิก (20/10/2026)
+        assert subject.startswith("การเคลียร์เงิน Advance ผ่านการอนุมัติครบทุกขั้นแล้ว ")
+    else:
+        assert subject.startswith("[Finance Advance] ADV-2610-001") or (
+            subject.startswith("เบิกเงิน Advance · ") and subject.endswith("ADV-2610-001"))
     assert "\n" not in subject
     assert "<script>" not in html and "<b>" not in html
-    assert "&lt;b&gt;" in html and "&amp;" in html
+    # จดหมายอนุมัติเคลียร์ใช้แค่ชื่อต้นในเนื้อความ ตัว & อยู่ในนามสกุลส่วนหลังเลยไม่โผล่ใน html
+    assert "&lt;b&gt;" in html and ("&amp;" in html or event == fm.CLEAR_APPROVED)
     assert "15,000.00" in html
 
 
@@ -418,7 +425,7 @@ def test_pick_recipients_dedupes_and_caps(caplog):
 
 
 def _person(eid, uid, level, dept, active=True):
-    return {"employee_id": eid, "id": uid, "level": level, "department_id": dept, "active": active}
+    return {"employee_id": eid, "id": uid, "level": level, "department_id": dept, "division_id": dept, "active": active}
 
 
 def test_step_approver_emails_selection(monkeypatch):
@@ -445,8 +452,40 @@ def test_step_approver_emails_selection(monkeypatch):
              NS(id=5, email="map@x.com"), NS(id=1, email="r@x.com"), NS(id=8, email="ex@x.com"),
              NS(id=9, email=None), NS(id=10, email="big@x.com")]
     sub = NS(id=1, created_by="R", current_approval_level=2)
-    assert fm.step_approver_emails(_Db(users), sub) == ["a@x.com", "map@x.com", "big@x.com"]
+    # อีเมลเฉพาะระดับที่ขั้นนั้นต้องการ (ผู้ใช้สั่ง 21/10/2026) — A2 (6), EX (5), BIG (9) ยังกดได้แต่ไม่ได้อีเมล
+    assert fm.step_approver_emails(_Db(users), sub) == ["a@x.com", "map@x.com"]
     sub1 = NS(id=1, created_by="R", current_approval_level=1)
     monkeypatch.setattr(approval_repo, "current_round_logs", lambda db, sid: [])
     out = fm.step_approver_emails(_Db(users), sub1)
-    assert "ex@x.com" in out and "r@x.com" not in out and "out@x.com" not in out
+    assert out == ["a@x.com", "map@x.com"]
+    assert "ex@x.com" not in out and "r@x.com" not in out and "out@x.com" not in out and "big@x.com" not in out
+
+
+# ---- อีเมลรออนุมัติถึงคนสาขาเดียวกับผู้เบิกก่อน (ผู้ใช้สั่ง 26/10/2026) ทั้งตอนขอเบิกและตอนเคลียร์
+
+def _branch_people():
+    def at(eid, uid, level, site):
+        return {**_person(eid, uid, level, 10), "site_id": site}
+    return {p["employee_id"]: p for p in (at("R", 1, 2, 2), at("LKB", 2, 3, 2), at("SRB", 3, 3, 3))}
+
+
+_BRANCH_USERS = [NS(id=2, email="lkb@x.com"), NS(id=3, email="srb@x.com")]
+
+
+def test_step_approver_emails_prefer_the_requester_branch(monkeypatch):
+    ctx = approval_repo.ApprovalContext(tiers=[], people=_branch_people(), mappings={})
+    monkeypatch.setattr(approval_repo, "load_context", lambda db, fresh=False: ctx)
+    monkeypatch.setattr(approval_repo, "describe", lambda db, eid, amount, ctx=None: {
+        "steps": [{"step": 1, "required_level": 3, "label": "x"}]})
+    monkeypatch.setattr(approval_repo, "_amount_of", lambda db, sid: 1500)
+    monkeypatch.setattr(approval_repo, "current_round_logs", lambda db, sid: [])
+    sub = NS(id=1, created_by="R", current_approval_level=1)
+    assert fm.step_approver_emails(_Db(_BRANCH_USERS), sub) == ["lkb@x.com"]
+
+
+def test_clear_approver_emails_prefer_the_requester_branch(monkeypatch):
+    ctx = approval_repo.ApprovalContext(tiers=[], people=_branch_people(), mappings={})
+    monkeypatch.setattr(ar, "_clear_round_approvers", lambda db, form_id: ())
+    info = {"steps": [{"step": 1, "required_level": 3, "label": "x"}]}
+    sub = NS(id=1, created_by="R", form_id="ADV-2610-001")
+    assert ar._clear_approver_emails(_Db(_BRANCH_USERS), sub, info, ctx, 1) == ["lkb@x.com"]

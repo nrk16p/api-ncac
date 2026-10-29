@@ -21,6 +21,7 @@ AWAITING_CLEARING = "AWAITING_CLEARING"
 SENT_BACK = "SENT_BACK"
 AWAITING_REVIEW = "AWAITING_REVIEW"
 CLOSED = "CLOSED"
+CLEARING_APPROVAL = "CLEARING_APPROVAL"  # ผู้เบิกส่งเคลียร์แล้ว รอหัวหน้าอนุมัติก่อนถึงบัญชี
 RETURNED = "RETURNED"  # v3 §6: Finance sent it back to the requester to edit + resubmit
 
 STATUS_LABELS = {
@@ -32,6 +33,7 @@ STATUS_LABELS = {
     SENT_BACK: "ส่งกลับแก้ไข",
     AWAITING_REVIEW: "รอบัญชีตรวจ",
     CLOSED: "ปิดแล้ว",
+    CLEARING_APPROVAL: "รออนุมัติเคลียร์",
     RETURNED: "ตีกลับให้ผู้เบิกแก้ไข",
 }
 
@@ -40,6 +42,7 @@ FIN_VOUCHER_REJECTED = "VOUCHER_REJECTED"  # legacy (v2 reject-voucher); still m
 FIN_RETURNED = "RETURNED"        # v3 §6: waiting for the requester
 FIN_RESUBMITTED = "RESUBMITTED"  # v3 §6: the requester sent it again (re-approval, then รอตั้งเบิก)
 FIN_PAID = "PAID"
+FIN_CLEAR_PENDING = "CLEAR_PENDING"   # รออนุมัติการเคลียร์ (ผู้ใช้สั่ง 19/10/2026)
 FIN_CLEARING_SUBMITTED = "CLEARING_SUBMITTED"
 FIN_SENT_BACK = "SENT_BACK"
 FIN_CLOSED = "CLOSED"
@@ -51,6 +54,7 @@ _FIN_TO_STATUS = {
     FIN_RESUBMITTED: AWAITING_VOUCHER,
     FIN_PAID: AWAITING_CLEARING,
     FIN_SENT_BACK: SENT_BACK,
+    FIN_CLEAR_PENDING: CLEARING_APPROVAL,
     FIN_CLEARING_SUBMITTED: AWAITING_REVIEW,
     FIN_CLOSED: CLOSED,
 }
@@ -319,6 +323,55 @@ def check_fresh(expected, actual):
     """Optimistic check: the clearing Finance reviewed must be the one stored now."""
     if expected is not None and actual is not None and expected != actual:
         raise InvalidTransition("ข้อมูลเคลียร์ถูกแก้ไขหลังจากเปิดหน้านี้ กรุณารีเฟรชหน้าจอ")
+
+
+CLEAR_DOC_NO_RE = re.compile(r"^[A-Za-z0-9]+$")
+CLEAR_DOC_NO_LEN = 14  # ผู้ใช้สั่ง 26/10/2026 (เดิม 10 หลัก แล้วปลดล็อก) — คอลัมน์ยังเป็น String(100)
+# เลขเอกสารที่บัญชี/การเงินกรอก — หน้าเว็บเช็กซ้ำก่อนบันทึก (ผู้ใช้สั่ง 21/10/2026 แจ้งเมื่อเลขซ้ำ)
+DOC_NO_FIELDS = ("voucher_no", "payment_doc_no", "clear_doc_no")
+
+
+def check_clear_doc_no(value) -> str:
+    """เลขที่เอกสารเคลียร์เงิน: บังคับกรอก ตัวเลขหรืออักษรอังกฤษ (ผู้ใช้สั่ง 21/10/2026)
+    ต้อง 14 หลักพอดี (ผู้ใช้สั่ง 26/10/2026 เปลี่ยนจาก 10 หลัก)"""
+    text = (value or "").strip()
+    _require(bool(text), "กรุณากรอกเลขที่เอกสารเคลียร์เงิน")
+    _require(bool(CLEAR_DOC_NO_RE.match(text)),
+             "เลขที่เอกสารเคลียร์เงินใช้ได้แค่ตัวเลขกับอักษรอังกฤษ ไม่มีขีดหรือเว้นวรรค")
+    _require(len(text) == CLEAR_DOC_NO_LEN, f"เลขที่เอกสารเคลียร์เงินต้องมี {CLEAR_DOC_NO_LEN} หลัก (ตอนนี้ {len(text)} หลัก)")
+    return text
+
+
+DOC_NO_LABELS = {"voucher_no": "เลขที่ตั้งเบิก", "payment_doc_no": "เลขที่ทำจ่าย", "clear_doc_no": "เลขที่เอกสารเคลียร์เงิน"}
+DOC_NO_EDIT_STATUSES = (AWAITING_PAYMENT, AWAITING_CLEARING, SENT_BACK, CLEARING_APPROVAL, AWAITING_REVIEW, CLOSED)
+
+
+def check_doc_numbers(status, current: Mapping, new: Mapping, *, remark) -> dict:
+    """การเงินแก้เลขเอกสารที่กรอกผิด (ผู้ใช้สั่ง 26/10/2026): เลขที่ตั้งเบิก / เลขที่ทำจ่าย / เลขที่เคลียร์ ทุกสถานะหลังตั้งเบิก
+    รวมปิดรายการแล้ว · แก้ได้เฉพาะเลขที่มีอยู่แล้ว · เหตุผลไม่บังคับ เก็บประวัติเลขเดิม → เลขใหม่ไว้พอ
+    เลขที่เคลียร์ใช้กฎเดียวกับตอนปิดรายการ · `new` = {field: value} ที่ส่งมา (None = ไม่แก้ช่องนั้น)
+    คืน {field: ค่าใหม่} เฉพาะช่องที่เปลี่ยนจริง · `remark` รับไว้เพื่อให้ผู้เรียกส่งต่อ ไม่ได้ตรวจ"""
+    _require_status(status, DOC_NO_EDIT_STATUSES, "แก้ไขเลขที่เอกสาร")
+    changes = {}
+    for field in DOC_NO_FIELDS:
+        value = new.get(field)
+        if value is None:
+            continue
+        if current.get(field) is None:
+            raise InvalidTransition(f"ยังไม่มี{DOC_NO_LABELS[field]}ให้แก้ไข กรุณารีเฟรชหน้าจอ")
+        text = check_clear_doc_no(value) if field == "clear_doc_no" else str(value).strip()
+        _require(bool(text), f"กรุณากรอก{DOC_NO_LABELS[field]}")
+        if text != current.get(field):
+            changes[field] = text
+    _require(bool(changes), "ไม่มีเลขที่เปลี่ยน")
+    return changes
+
+
+def check_original_received(received_date, today) -> date:
+    """ปิดรายการได้เมื่อรับเอกสารตัวจริงแล้ว พร้อมวันที่รับ (ผู้ใช้สั่ง 21/10/2026)"""
+    _require(received_date is not None, "กรุณาติ๊กรับเอกสารตัวจริงแล้ว และใส่วันที่รับเอกสารตัวจริง")
+    _require(received_date <= today, "วันที่รับเอกสารตัวจริงต้องไม่เกินวันนี้")
+    return received_date
 
 
 def check_confirm(status, *, settle_amount, settle_date):

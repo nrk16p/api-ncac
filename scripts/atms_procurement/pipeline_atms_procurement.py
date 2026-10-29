@@ -29,7 +29,7 @@ from datetime import datetime, timedelta
 import requests
 import urllib3
 from bs4 import BeautifulSoup
-from pymongo import MongoClient, UpdateOne, ReplaceOne
+from pymongo import MongoClient, UpdateOne
 
 urllib3.disable_warnings()
 
@@ -317,7 +317,11 @@ def scrape_deposit(session, from_date, db, collect_ids=None):
                     collect_ids.append(dep)
         if not rows:
             break
-        ops = [ReplaceOne({"deposit_id": r["deposit_id"]}, r, upsert=True) for r in rows]
+        # $set ไม่ใช่ ReplaceOne — หัวใบมีฟิลด์ที่หน้า index ไม่มี (grand_total/vat_rate/
+        # vat_amount/amount_net/totals_at จาก parse_deposit_totals) การ replace ทั้งก้อน
+        # จะลบทิ้งทุกรอบ · เจอจริง 13/10/2026: ระหว่าง backfill 24 นาที ใบเดือน ก.ย.-ต.ค.
+        # หายไป ~1.3 พันใบ เพราะ pipeline บน Render วิ่งทับทุก 4 ชม.
+        ops = [UpdateOne({"deposit_id": r["deposit_id"]}, {"$set": r}, upsert=True) for r in rows]
         col.bulk_write(ops, ordered=False)
         up += len(ops)
         nxt = next_page(soup, page)
@@ -326,6 +330,49 @@ def scrape_deposit(session, from_date, db, collect_ids=None):
         page = nxt
         time.sleep(0.3)
     return {"upserted": up}
+
+
+def parse_deposit_totals(html):
+    """แถวสรุปท้ายตารางในหน้า /inv/deposit/view/id/<id> → ยอดที่ ATMS คิดไว้แล้ว
+
+    ทำไมต้องเก็บ: หน้า index ให้แค่ "รวม" (ก่อนภาษี) ซึ่งเป็นค่าที่ลง deposit_header.amount
+    มาตลอด แต่ยอดที่ต้องจ่ายจริงคือ "รวมสุทธิ" ที่อยู่เฉพาะในหน้า detail — เดิมถูกข้ามทิ้ง
+    (แถวสรุปมี 3 คอลัมน์ ไม่ผ่านเงื่อนไข len(cells) < 7 ของ parse_deposit_items)
+    ทำให้ /ap-tracking ต้องเดา VAT จากอัตราของใบ PO ซึ่งผิดได้
+
+    **อัตราภาษีอยู่ที่ระดับใบ DD ไม่ใช่ PO และไม่ใช่ผู้ขาย** (ตรวจจริง 13/10/2026):
+      LBDD26100363 ผงซักฟอก → ภาษี 7% รวมสุทธิ 428.00 · PO LBPO26100198 รวม 428 (ตรงกัน)
+      LBDD26090768 ค่าขนส่ง  → ภาษี 0% รวมสุทธิ 2,000.00 · PO LBPO26090605 รวม 2,140 (ไม่ตรง)
+      ผู้ขายรายเดียวกัน (ศรีเต็งกลการ, supplier_master.vatRate = "7") ออกได้ทั้ง 7% และ 0%
+    จึงต้องอ่านจากหน้า DD เท่านั้น ห้ามคำนวณเอง
+
+    รูปแบบแถว: ["grand total", "400.00", ""] · ["ภาษีมูลค่าเพิ่ม 7%", "28.00", ""] ·
+               ["รวมสุทธิ", "428.00", ""]
+    คืน {} เมื่อไม่เจอแถวสรุป (หน้าเพี้ยน/ไม่มีรายการ) — ผู้เรียกจะไม่เขียนทับของเดิม
+    เก็บเป็นสตริงตามหน้าเว็บเหมือนฟิลด์อื่นในคอลเลกชันนี้ (ฝั่งที่ใช้ parse เองอยู่แล้ว)
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    table = soup.find("table", class_="defaultTable") or data_table(soup)
+    if not table:
+        return {}
+    out = {}
+    for tr in table.find_all("tr"):
+        cells = [c.get_text(" ", strip=True) for c in tr.find_all(["th", "td"])]
+        if len(cells) < 2 or len(cells) >= 7:
+            continue
+        label, value = cells[0], cells[1]
+        low = label.lower()
+        if low.startswith("grand total"):
+            out["grand_total"] = value
+        elif "ภาษีมูลค่าเพิ่ม" in label:
+            out["vat_amount"] = value
+            m = re.search(r"(\d+(?:\.\d+)?)\s*%", label)
+            if m:
+                out["vat_rate"] = m.group(1)
+        elif low.startswith("รวมสุทธิ") or label.startswith("รวมสุทธิ"):
+            out["amount_net"] = value
+    # ไม่มี "รวมสุทธิ" = อ่านไม่ได้จริง ๆ · ยอมทิ้งทั้งก้อนดีกว่าเขียนครึ่ง ๆ กลาง ๆ ลงฐาน
+    return out if "amount_net" in out else {}
 
 
 def parse_deposit_items(html, deposit_id):
@@ -407,7 +454,7 @@ def changed_deposit_ids_from_log(session, days=3):
 def stale_deposit_ids(db, deposit_ids):
     """ใบที่ผลรวมรายการ != ยอดหัวใบ = รายการค้าง (ชั้นกันเหนียวของ changed_deposit_ids_from_log)
 
-    หัวใบถูก ReplaceOne ทุกรอบอยู่แล้ว การเทียบจึงฟรี ไม่ต้องยิง ATMS เพิ่มสักครั้ง
+    หัวใบถูกอัปเดตทุกรอบอยู่แล้ว การเทียบจึงฟรี ไม่ต้องยิง ATMS เพิ่มสักครั้ง
     ชั้นนี้จับสิ่งที่ log จับไม่ได้ — ใบที่ scrape ครั้งแรกไม่ครบ หรือช่วงที่ log ขาด
     ATMS ปัดเศษ "รวม" ทีละบรรทัด ใบยาวจึงเพี้ยนได้ระดับสตางค์ → เผื่อ tolerance ตามจำนวนบรรทัด
     (วัดจริงทั้งคอลเลกชัน 16,472 ใบ: เพี้ยนสูงสุด 0.03 บาทที่ 39 บรรทัด)
@@ -439,6 +486,29 @@ def stale_deposit_ids(db, deposit_ids):
     return stale
 
 
+def ids_missing_totals(db, deposit_ids):
+    """ใบที่หัวใบยังไม่มี amount_net (ยอดรวมสุทธิจากหน้า DD) — ต้องเปิดหน้า detail มาเก็บ
+
+    ใบเก่าทั้งหมดเข้าเงื่อนไขนี้ตอนเริ่มใช้ฟิลด์นี้ (13/10/2026) จึงให้คิวต่ำกว่าใบที่
+    เปลี่ยน/ยังไม่มีรายการ แล้วค่อย ๆ ไล่เติมรอบละไม่เกินเพดาน ATMS_DD_ITEM_LIMIT
+    เติมทีเดียวทั้งก้อนด้วย scripts/atms_procurement/backfill_deposit_totals.py (รันในเครื่อง)
+    """
+    ids = sorted({int(i) for i in deposit_ids if i})
+    if not ids:
+        return set()
+    out = set()
+    for i in range(0, len(ids), 1000):
+        chunk = ids[i:i + 1000]
+        # totals_missing = เคยเปิดหน้านั้นแล้วไม่มีตารางยอดจริง ๆ (ใบเปล่ายอด 0.00 มี 386 ใบ
+        # ตอนเติมย้อนหลัง 13/10/2026) — ไม่ต้องไล่ดึงซ้ำทุกรอบตลอดไป
+        for h in db["deposit_header"].find(
+                {"deposit_id": {"$in": chunk}, "amount_net": {"$exists": False},
+                 "totals_missing": {"$ne": True}},
+                {"_id": 0, "deposit_id": 1}):
+            out.add(int(h["deposit_id"]))
+    return out
+
+
 def scrape_deposit_items(session, deposit_ids, db, workers=None, force_ids=None):
     """ดึงรายการสินค้าของใบ DD ที่ "ยังไม่มีใน deposit_items" + ใบใน force_ids ที่รู้ว่าเปลี่ยน
 
@@ -467,11 +537,16 @@ def scrape_deposit_items(session, deposit_ids, db, workers=None, force_ids=None)
     for i in range(0, len(ids), 1000):
         have.update(col.distinct("deposit_id", {"deposit_id": {"$in": ids[i:i + 1000]}}))
     forced  = {int(i) for i in (force_ids or set())} & set(ids)
-    missing = [i for i in ids if i not in have or i in forced]
+    # ใบที่มีรายการแล้วแต่หัวใบยังไม่มียอดรวมสุทธิ ก็ต้องเปิดหน้า detail เหมือนกัน
+    no_total = ids_missing_totals(db, ids) - forced
+    missing = [i for i in ids if i not in have or i in forced or i in no_total]
     if forced:
         log(f"deposit_items: ดึงซ้ำ {len(forced & have):,} ใบที่รู้ว่าเปลี่ยน/ยอดไม่ตรง")
-    # ใบที่รู้ว่าเปลี่ยนต้องได้คิวก่อน — ไม่งั้นรอบที่ยังเติมย้อนหลังอยู่จะดันมันตกเพดานไปเรื่อย ๆ
-    missing.sort(key=lambda i: 0 if i in forced else 1)
+    if no_total & have:
+        log(f"deposit_items: เติมยอดรวมสุทธิอีก {len(no_total & have):,} ใบ (หัวใบยังไม่มี amount_net)")
+    # คิว: ใบที่รู้ว่าเปลี่ยน → ใบที่ยังไม่มีรายการ → ใบที่ขาดแค่ยอดรวมสุทธิ
+    # (กลุ่มสุดท้ายคือใบเก่าทั้งก้อน ถ้าไม่กดไว้ท้ายคิวมันจะดันงานจริงตกเพดานทุกรอบ)
+    missing.sort(key=lambda i: 0 if i in forced else (2 if i in no_total and i in have else 1))
     todo, remaining = missing[:cap], max(0, len(missing) - cap)
     if remaining:
         log(f"deposit_items: ค้างอีก {remaining:,} ใบ (เพดาน {cap:,}/รอบ) — จะดึงต่อในรอบถัดไป")
@@ -479,14 +554,15 @@ def scrape_deposit_items(session, deposit_ids, db, workers=None, force_ids=None)
         return {"todo": 0, "fetched": 0, "items": 0, "remaining": 0, "errors": 0}
 
     now = datetime.utcnow()
-    fetched = errors = total_items = 0
+    fetched = errors = total_items = totals_written = 0
 
     def work(dep_id):
+        """คืน (items, totals) · None = ยิงไม่สำเร็จ ให้รอบหน้าลองใหม่"""
         for _ in range(2):                       # retry 1 ครั้ง (transient/หน้าว่าง)
             try:
                 r = session.get(f"{BASE}/inv/deposit/view/id/{dep_id}", timeout=45)
                 r.raise_for_status()
-                return parse_deposit_items(r.text, dep_id)
+                return parse_deposit_items(r.text, dep_id), parse_deposit_totals(r.text)
             except Exception:
                 time.sleep(0.4)
         return None
@@ -495,11 +571,19 @@ def scrape_deposit_items(session, deposit_ids, db, workers=None, force_ids=None)
         futs = {ex.submit(work, d): d for d in todo}
         for fut in as_completed(futs):
             dep_id = futs[fut]
-            items = fut.result()
-            if items is None:                    # ยิงไม่สำเร็จ — ปล่อยให้รอบหน้าลองใหม่ (ยังนับว่า missing)
+            res = fut.result()
+            if res is None:                      # ยิงไม่สำเร็จ — ปล่อยให้รอบหน้าลองใหม่ (ยังนับว่า missing)
                 errors += 1
                 continue
+            items, totals = res
             fetched += 1
+            # ยอดที่ ATMS คิดไว้ (grand total / ภาษี / รวมสุทธิ) — ลงหัวใบ ไม่ใช่รายการ
+            # เขียนเฉพาะเมื่ออ่านได้ครบ ไม่งั้นปล่อยของเดิมไว้ (ดู parse_deposit_totals)
+            if totals:
+                db["deposit_header"].update_one(
+                    {"deposit_id": dep_id},
+                    {"$set": {**totals, "totals_at": now}})
+                totals_written += 1
             if not items:                        # ใบที่ไม่มีรายการจริง ๆ ก็มี — ไม่ต้องเขียนอะไร
                 continue
             for it in items:
@@ -509,7 +593,7 @@ def scrape_deposit_items(session, deposit_ids, db, workers=None, force_ids=None)
             total_items += len(items)
 
     return {"todo": len(todo), "fetched": fetched, "items": total_items,
-            "remaining": remaining, "errors": errors}
+            "totals": totals_written, "remaining": remaining, "errors": errors}
 
 
 # ── PR / PO line items (detail) ───────────────────────────────────────────────

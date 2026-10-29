@@ -19,8 +19,9 @@ def test_fin_advances_constraints():
     assert "UNIQUE (submission_id)" in ddl
     assert "UNIQUE (form_id)" in ddl
     assert "amount_paid >= 0" in ddl
-    assert ("fin_status IN ('VOUCHERED','VOUCHER_REJECTED','RETURNED','RESUBMITTED','PAID','CLEARING_SUBMITTED',"
-            "'SENT_BACK','CLOSED')") in ddl
+    # ตรงกับ prod หลัง 2026-10-19 (มี CLEAR_PENDING และยอมให้ว่าง)
+    assert ("fin_status IS NULL OR fin_status IN ('VOUCHERED','VOUCHER_REJECTED','RETURNED','RESUBMITTED',"
+            "'PAID','CLEAR_PENDING','CLEARING_SUBMITTED','SENT_BACK','CLOSED')") in ddl
     assert "amount_paid NUMERIC(12, 2)," in ddl
     assert "transfer_date DATE," in ddl
     assert "NUMERIC(12, 2)" in ddl

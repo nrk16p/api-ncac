@@ -1,10 +1,10 @@
 """Pure rules: ADV approval by amount (menait-service spec 2026-09-29-finance-advance-v2-design.md §3),
-two steps since v3 (spec 2026-10-05-finance-advance-v3-design.md §5).
+one step per TOA level since 26/10/2026 (user: "ทุกขั้นตามขั้น TOA").
 
 No DB, no FastAPI. Inputs are plain dicts so everything is unit-testable.
-Person: {"employee_id", "id", "level", "department_id", "active"}.
+Person: {"employee_id", "id", "level", "department_id", "division_id", "active"}.
 Tier:   {"clause", "amount_max" (Decimal | None = no cap), "min_level", "approver_label", "sort_order"}.
-Step:   {"step", "required_level", "label"} — step 1 = หัวหน้าถัดไป, step 2 = ผู้มีอำนาจตาม TOA.
+Step:   {"step", "required_level", "label"} — one per TOA level above the requester; last = ผู้มีอำนาจตาม TOA.
 Log:    {"id", "level_no", "action", "action_by" (users.id), "action_at", "remark"} (form_approval_logs).
 """
 from __future__ import annotations
@@ -13,8 +13,16 @@ from decimal import Decimal, InvalidOperation
 from typing import Iterable, Mapping, Optional
 
 from services.finance.advance_logic import AdvanceRuleError
+from services.finance.permission_logic import is_superadmin
 
 ORG_WIDE_LEVEL = 9
+
+# ขั้นพิเศษ (ผู้ใช้สั่ง 26/10/2026): ใบของแผนกบัญชี (6) ยอดเกิน 2,000 (ทุกข้อยกเว้น 6.7) ต้องผ่าน 690041 อีกขั้น
+# แทรกตามระดับของเขา เช่น 610055 ขอ 1,500 หัวหน้า (ระดับ 3) กดจบ · ขอ 5,000 หัวหน้า → 690041
+# ขอ 15,000 หัวหน้า → 690041 → ผู้จัดการ (ระดับ 5)
+# คนที่อยู่ขั้นหลังในสายเดียวกันอนุมัติแทน + ข้ามขั้นพิเศษได้ (ผู้ใช้สั่ง 26/10/2026 จาก ADV-2610-022) — ขั้นพิเศษจำ
+# ระดับของขั้นถัดไปไว้ใน stand_in_level · ขั้นพิเศษที่อยู่ท้ายสายไม่มีคนขั้นหลัง ต้องเป็นคนที่กำหนดเท่านั้น
+SPECIAL_STEPS = ({"department_id": 6, "except_clauses": ("6.7",), "employee_id": "690041"},)
 TAB_MINE = "mine"
 TAB_DELEGABLE = "delegable"
 
@@ -62,29 +70,31 @@ def required_level(tier_min_level: int, requester_level: Optional[int]) -> int:
     return max(tier_min_level, min(requester_level + 1, ORG_WIDE_LEVEL))
 
 
-def leader_level(requester_level: Optional[int]) -> int:
-    """Step 1 (หัวหน้าถัดไป): the next level up, capped at the org-wide level."""
-    if requester_level is None:
-        raise AdvanceRuleError(MSG_NO_LEVEL)
-    return min(requester_level + 1, ORG_WIDE_LEVEL)
-
-
-def leader_label(level: int) -> str:
-    return f"หัวหน้าระดับ {level} ขึ้นไป"
-
-
 def toa_label(level: int, clause, approver_label) -> str:
     return f"ระดับ {level} ขึ้นไป (ข้อ {clause} · {approver_label})"
 
 
-def plan_steps(requester_level: Optional[int], tier: Mapping) -> list:
-    """Step 1 always; step 2 only when the TOA level is above step 1's level (min 1, max 2 steps)."""
-    first = leader_level(requester_level)
-    steps = [{"step": STEP_LEADER, "required_level": first, "label": leader_label(first)}]
+def leader_label(level: int, approver_label) -> str:
+    return f"หัวหน้าระดับ {level} ขึ้นไป ({approver_label})"
+
+
+def plan_steps(requester_level: Optional[int], tier: Mapping, tiers: Iterable[Mapping]) -> list:
+    """ไล่ทุกขั้นตามชั้น TOA (ผู้ใช้สั่ง 26/10/2026 "ทุกขั้นตามขั้น TOA" แทนขั้นเดียวของ 21/10/2026)
+
+    ขั้นสุดท้าย = ระดับ TOA ของยอดนั้น แต่ต้องสูงกว่าผู้เบิกอย่างน้อยหนึ่งระดับ (เพดาน ORG_WIDE_LEVEL)
+    ขั้นก่อนหน้า = ทุกชั้น TOA ใน `tiers` ที่สูงกว่าระดับผู้เบิกและต่ำกว่าขั้นสุดท้าย เรียงจากต่ำไปสูง
+    เช่น ผู้เบิกระดับ 2 ขอ 60,000 → ระดับ 3 → 5 → 8 · ระดับ 3 ขอ 15,000 → ระดับ 5 ขั้นเดียว
+    ใช้ทั้งตอนขอเบิกและตอนอนุมัติเคลียร์ คนระดับสูงกว่ากดแทนได้และข้ามขั้นที่ระดับตัวเองถึง
+    """
     final = required_level(tier["min_level"], requester_level)
-    if final > first:
-        steps.append({"step": STEP_TOA, "required_level": final,
-                      "label": toa_label(final, tier["clause"], tier["approver_label"])})
+    by_level = {}
+    for t in sorted(tiers, key=lambda t: t["sort_order"]):
+        if requester_level < t["min_level"] < final:
+            by_level.setdefault(t["min_level"], t)
+    steps = [{"step": i, "required_level": level, "label": leader_label(level, by_level[level]["approver_label"])}
+             for i, level in enumerate(sorted(by_level), start=STEP_LEADER)]
+    steps.append({"step": len(steps) + 1, "required_level": final,
+                  "label": toa_label(final, tier["clause"], tier["approver_label"])})
     return steps
 
 
@@ -97,24 +107,40 @@ def current_step_of(steps: list, current_level) -> int:
     return min(max(number, STEP_LEADER), len(steps))
 
 
-def skipped_steps(steps: list, current_step: int, approver_level: Optional[int]) -> list:
-    """Later steps the approver's own level already satisfies (dynamic skip), up to the first one it doesn't."""
-    skipped = []
-    for spec in sorted(steps, key=lambda s: s["step"]):
-        if spec["step"] <= current_step:
-            continue
-        if approver_level is None or approver_level < spec["required_level"]:
-            break
-        skipped.append(spec["step"])
-    return skipped
+def _covers(spec: Mapping, approver_level: Optional[int], approver_id=None) -> bool:
+    """Does this approval also satisfy `spec`? A named step (ขั้นพิเศษ) when it is that person, or someone whose
+    level reaches the step after it in the chain (stand_in_level; superadmin passes approver_id=None, never covers);
+    else by level."""
+    if spec.get("approver"):
+        if approver_id is None:
+            return False
+        if str(approver_id) == str(spec["approver"]):
+            return True
+        stand_in = spec.get("stand_in_level")
+        return stand_in is not None and approver_level is not None and approver_level >= stand_in
+    return approver_level is not None and approver_level >= spec["required_level"]
 
 
-def next_after_approval(steps: list, current_step: int, approver_level: Optional[int]) -> tuple:
-    """('approved', None) when nothing is left after the skip, else ('step', the next step number)."""
+def skipped_steps(steps: list, current_step: int, approver_level: Optional[int], approver_id=None,
+                  done: Iterable[int] = ()) -> list:
+    """Later steps this approval also satisfies (dynamic skip) and that are not approved yet in this round (`done`).
+    Steps climb by level, so a level skip only jumps over a ขั้นพิเศษ it does not cover: e.g. 3 → 690041 → 5
+    approved at step 1 by a level-5 manager logs step 3 now, and step 2 still waits for 690041."""
+    done = set(done)
+    return [spec["step"] for spec in sorted(steps, key=lambda s: s["step"])
+            if spec["step"] > current_step and spec["step"] not in done
+            and _covers(spec, approver_level, approver_id)]
+
+
+def next_after_approval(steps: list, current_step: int, approver_level: Optional[int], approver_id=None,
+                        done: Iterable[int] = ()) -> tuple:
+    """('approved', None) when nothing is left after this approval, else ('step', the next step number).
+    A step already approved in this round (`done`, e.g. by an earlier skip) is not waited for again."""
+    done = set(done)
     for spec in sorted(steps, key=lambda s: s["step"]):
-        if spec["step"] <= current_step:
+        if spec["step"] <= current_step or spec["step"] in done:
             continue
-        if approver_level is None or approver_level < spec["required_level"]:
+        if not _covers(spec, approver_level, approver_id):
             return OUTCOME_STEP, spec["step"]
     return OUTCOME_APPROVED, None
 
@@ -122,6 +148,17 @@ def next_after_approval(steps: list, current_step: int, approver_level: Optional
 def skip_remark(step: int, from_step: int, approver_level: int, required: int) -> str:
     return (f"ผ่านขั้น {step} พร้อมการอนุมัติขั้น {from_step}: "
             f"ผู้อนุมัติระดับ {approver_level} ถึงระดับ {required} ที่ขั้น {step} ต้องการ")
+
+
+def skip_note(spec: Mapping, from_step: int, approver_level, approver_id=None) -> str:
+    """The log remark for a step passed by the approval of `from_step` (level skip, the named person's own,
+    or a later-step approver standing in for the named person)."""
+    if spec.get("approver"):
+        if approver_id is not None and str(approver_id) != str(spec["approver"]):
+            return (f"ผ่านขั้นพิเศษ (ขั้น {spec['step']}) พร้อมการอนุมัติขั้น {from_step}: "
+                    f"ผู้อนุมัติระดับ {approver_level} อยู่ขั้นหลังในสายเดียวกัน อนุมัติแทนได้")
+        return f"ผ่านขั้นพิเศษ (ขั้น {spec['step']}) พร้อมการอนุมัติขั้น {from_step}: เป็นผู้อนุมัติที่ขั้นพิเศษกำหนด"
+    return skip_remark(spec["step"], from_step, approver_level, spec["required_level"])
 
 
 # ---------------------------- approval rounds (v3 §6) ----------------------------
@@ -171,12 +208,17 @@ def leader_approved(round_logs: Iterable[Mapping], current_level=None) -> bool:
 
 # ---------------------------- eligibility ----------------------------
 
-def can_approve(approver: Mapping, requester: Mapping, required: int, mapped_departments: Iterable[int],
-                excluded: Iterable[int] = ()) -> bool:
+def can_approve(approver: Mapping, requester: Mapping, required: int, mapped_divisions: Iterable[int],
+                excluded: Iterable[int] = (), widen_to_division: bool = False, named: Optional[str] = None) -> bool:
     """`required` is the level of the step being approved; `excluded` holds users.id values (the earlier steps'
-    approvers of the current round)."""
+    approvers of the current round). `widen_to_division` also lets anyone in the requester's division (ฝ่าย)
+    approve — see needs_division_fallback. `named` = ขั้นพิเศษ: only that employee, whatever the level."""
     if not approver.get("active"):
         return False
+    if named is not None:
+        return (str(approver.get("employee_id")) == str(named)
+                and approver.get("employee_id") != requester.get("employee_id")
+                and not (approver.get("id") is not None and approver.get("id") in set(excluded)))
     level = approver.get("level")
     if level is None or level < required:
         return False
@@ -189,31 +231,98 @@ def can_approve(approver: Mapping, requester: Mapping, required: int, mapped_dep
     dept = requester.get("department_id")
     if dept is None:
         return False
-    return approver.get("department_id") == dept or dept in set(mapped_departments)
+    if approver.get("department_id") == dept:
+        return True
+    division = requester.get("division_id")
+    if division is None:
+        return False
+    return division in set(mapped_divisions) or (widen_to_division and approver.get("division_id") == division)
+
+
+def _in_own_department(approver: Mapping, requester: Mapping) -> bool:
+    return requester.get("department_id") is not None and approver.get("department_id") == requester["department_id"]
+
+
+def needs_division_fallback(people: Iterable[Mapping], requester: Mapping, required: int,
+                            mappings: Mapping[str, Iterable[int]], excluded: Iterable[int] = (),
+                            named: Optional[str] = None) -> bool:
+    """หาผู้อนุมัติในแผนกของผู้เบิกก่อน ถ้าในแผนกไม่มีใครอนุมัติได้เลย ค่อยขยายไปคนในฝ่ายเดียวกัน (25/10/2026)
+
+    นับเฉพาะคนในแผนกของผู้เบิกจริง ๆ — ผู้ดูแลฝ่าย (form_approver_divisions) กับผู้บริหารระดับ ORG_WIDE_LEVEL
+    ต่างแผนกไม่นับ (26/10/2026: ผู้ดูแลฝ่ายระดับ 7–8 ครอบเกือบทุกฝ่าย ถ้านับ fallback ไม่เกิดเลย
+    ใบยอดเล็กจึงข้ามหัวหน้าในฝ่ายไปหาผู้บริหาร 168 กรณีจากการลองกับข้อมูลจริง เทียบ 45 กรณีก่อนย้ายแผนก)
+    """
+    if named is not None or requester is None or requester.get("division_id") is None:
+        return False
+    excluded = frozenset(excluded)
+    return not any(_in_own_department(p, requester)
+                   and can_approve(p, requester, required, mappings.get(p["employee_id"], ()), excluded)
+                   for p in people)
+
+
+def may_approve(people: Iterable[Mapping], approver: Mapping, requester: Mapping, required: int,
+                mappings: Mapping[str, Iterable[int]], excluded: Iterable[int] = (),
+                named: Optional[str] = None, stand_in_level: Optional[int] = None) -> bool:
+    """can_approve with the department → division fallback decided from everyone in `people`.
+    At a named step, someone else may stand in when they may approve the step after it (`stand_in_level`)."""
+    if named is not None and stand_in_level is not None and str(approver.get("employee_id")) != str(named):
+        return may_approve(people, approver, requester, stand_in_level, mappings, excluded)
+    widen = needs_division_fallback(people, requester, required, mappings, excluded, named)
+    return can_approve(approver, requester, required, mappings.get(approver.get("employee_id"), ()), excluded,
+                       widen_to_division=widen, named=named)
 
 
 def _eligible(people: Iterable[Mapping], requester: Mapping, required: int,
-              mappings: Mapping[str, Iterable[int]], excluded: Iterable[int]) -> list:
+              mappings: Mapping[str, Iterable[int]], excluded: Iterable[int], named: Optional[str] = None) -> list:
+    people = list(people)
     excluded = frozenset(excluded)
+    widen = needs_division_fallback(people, requester, required, mappings, excluded, named)
     return [p for p in people
-            if can_approve(p, requester, required, mappings.get(p["employee_id"], ()), excluded)]
+            if can_approve(p, requester, required, mappings.get(p["employee_id"], ()), excluded,
+                           widen_to_division=widen, named=named)]
+
+
+def notify_approvers(eligible: Iterable[Mapping], required: int, requester: Optional[Mapping] = None,
+                     named: Optional[str] = None) -> list:
+    """ใครควร "ได้รับอีเมล" (ผู้ใช้สั่ง 21/10/2026): เฉพาะคนระดับที่ TOA กำหนด
+    = ชั้นต่ำสุดในกลุ่มที่อนุมัติได้ (ถ้าไม่มีใครระดับตรงพอดี ใช้ชั้นถัดขึ้นไปที่มีคน)
+    คนระดับสูงกว่ายังกดอนุมัติได้เหมือนเดิมผ่านลิงก์ใบ แค่ไม่ได้อีเมล
+
+    สาขาก่อน (ผู้ใช้สั่ง 26/10/2026): ถ้าสาขาของผู้เบิก (site_id) มีคนอนุมัติได้ ส่งเฉพาะคนสาขานั้น
+    (ชั้นต่ำสุดในสาขา) ถ้าสาขานั้นไม่มีใครเลย ค่อยส่งตามชั้นต่ำสุดจากทุกสาขา · สิทธิ์กดอนุมัติไม่เปลี่ยน
+    """
+    if named is not None:  # ขั้นพิเศษ: อีเมลถึงคนที่กำหนดคนเดียว
+        return [p for p in eligible if str(p.get("employee_id")) == str(named)]
+    people = [p for p in eligible if p.get("level") is not None and p["level"] >= required]
+    if not people:
+        return []
+    site = requester.get("site_id") if requester else None
+    same_site = [p for p in people if site is not None and p.get("site_id") == site]
+    people = same_site or people
+    lowest = min(p["level"] for p in people)
+    return [p for p in people if p["level"] == lowest]
 
 
 def eligible_approvers(people: Iterable[Mapping], requester: Mapping, required: int,
-                       mappings: Mapping[str, Iterable[int]], excluded: Iterable[int] = ()) -> list:
+                       mappings: Mapping[str, Iterable[int]], excluded: Iterable[int] = (),
+                       named: Optional[str] = None) -> list:
     """Every person who may approve a step of `required` level (not only the lowest level)."""
-    return _eligible(people, requester, required, mappings, excluded)
+    return _eligible(people, requester, required, mappings, excluded, named)
 
 
 def direct_level(people: Iterable[Mapping], requester: Mapping, required: int,
-                 mappings: Mapping[str, Iterable[int]], excluded: Iterable[int] = ()) -> Optional[int]:
-    levels = [p["level"] for p in _eligible(people, requester, required, mappings, excluded)]
+                 mappings: Mapping[str, Iterable[int]], excluded: Iterable[int] = (),
+                 named: Optional[str] = None) -> Optional[int]:
+    levels = [p["level"] for p in _eligible(people, requester, required, mappings, excluded, named)
+              if p.get("level") is not None]
     return min(levels) if levels else None
 
 
 def direct_approvers(people: Iterable[Mapping], requester: Mapping, required: int,
-                     mappings: Mapping[str, Iterable[int]], excluded: Iterable[int] = ()) -> list:
-    eligible = _eligible(people, requester, required, mappings, excluded)
+                     mappings: Mapping[str, Iterable[int]], excluded: Iterable[int] = (),
+                     named: Optional[str] = None) -> list:
+    eligible = [p for p in _eligible(people, requester, required, mappings, excluded, named)
+                if p.get("level") is not None]
     if not eligible:
         return []
     lowest = min(p["level"] for p in eligible)
@@ -224,15 +333,39 @@ def approval_tab(approver_level: int, direct: Optional[int]) -> str:
     return TAB_MINE if direct is not None and approver_level <= direct else TAB_DELEGABLE
 
 
+def special_step_approver(requester: Optional[Mapping], tier: Mapping, people: Mapping[str, Mapping]) -> Optional[str]:
+    """employee_id ของขั้นพิเศษที่ใบนี้ต้องผ่าน (SPECIAL_STEPS) — ไม่มีเมื่อเป็นใบของคนนั้นเอง หรือคนนั้นไม่ active"""
+    if requester is None:
+        return None
+    for rule in SPECIAL_STEPS:
+        if requester.get("department_id") == rule["department_id"] and tier["clause"] not in rule["except_clauses"]:
+            who = people.get(rule["employee_id"])
+            if who is not None and who.get("active") and rule["employee_id"] != requester.get("employee_id"):
+                return rule["employee_id"]
+    return None
+
+
+def special_label(employee_id) -> str:
+    return f"ขั้นพิเศษแผนกบัญชี (รหัส {employee_id})"
+
+
 def evaluate(tiers, people: Mapping[str, Mapping], mappings, requester_employee_id: str, amount) -> dict:
     """The whole chain. `required_level` / `direct_level` are the final step's (the TOA, as in v2)."""
     tier = pick_tier(tiers, amount)
     requester = people.get(requester_employee_id)
-    steps = plan_steps(requester.get("level") if requester else None, tier)
+    steps = plan_steps(requester.get("level") if requester else None, tier, tiers)
     required = steps[-1]["required_level"]
     direct = direct_level(people.values(), requester, required, mappings)
     if direct is None:  # the final step's approvers also qualify for step 1, so this covers every step
         raise AdvanceRuleError(MSG_NO_APPROVER)
+    special = special_step_approver(requester, tier, people)
+    if special is not None:  # แทรกตามระดับของคนที่กำหนด: หลังขั้นที่ระดับไม่เกินเขา ก่อนขั้นที่สูงกว่า
+        level = people[special].get("level") or 0
+        at = next((i for i, s in enumerate(steps) if s["required_level"] > level), len(steps))
+        stand_in = steps[at]["required_level"] if at < len(steps) else None  # ขั้นถัดไปในสาย (ไม่มีถ้าอยู่ท้าย)
+        named_step = {"required_level": level, "label": special_label(special), "approver": special,
+                      "stand_in_level": stand_in}
+        steps = [{**s, "step": i} for i, s in enumerate(steps[:at] + [named_step] + steps[at:], start=STEP_LEADER)]
     return {"clause": tier["clause"], "approver_label": tier["approver_label"], "min_level": tier["min_level"],
             "required_level": required, "direct_level": direct, "steps": steps}
 
@@ -243,12 +376,20 @@ def evaluate_step(evaluated: Mapping, people: Mapping[str, Mapping], mappings, r
     steps = evaluated["steps"]
     step = current_step_of(steps, current_level)
     spec = steps[step - 1]
+    named = spec.get("approver")
     excluded = excluded_approver(round_logs, step)
     requester = people.get(requester_employee_id)
-    direct = (direct_level(people.values(), requester, spec["required_level"], mappings, excluded)
+    direct = (direct_level(people.values(), requester, spec["required_level"], mappings, excluded, named)
               if requester is not None else None)
     return {"step": step, "total_steps": len(steps), "required_level": spec["required_level"],
-            "label": spec["label"], "direct_level": direct, "excluded": excluded}
+            "label": spec["label"], "direct_level": direct, "excluded": excluded, "approver": named,
+            "stand_in_level": spec.get("stand_in_level")}
+
+
+def superadmin_may_approve(approver_employee_id, requester_employee_id, requester) -> bool:
+    """superadmin อนุมัติได้ทุกขั้นทุกใบ ยกเว้นใบของตัวเอง (ผู้ใช้สั่ง 20/10/2026)"""
+    return (requester is not None and is_superadmin(approver_employee_id)
+            and str(approver_employee_id) != str(requester_employee_id))
 
 
 def decide(evaluated: Mapping, people: Mapping[str, Mapping], mappings, requester_employee_id: str,
@@ -258,11 +399,16 @@ def decide(evaluated: Mapping, people: Mapping[str, Mapping], mappings, requeste
     approver = people.get(approver_employee_id)
     requester = people.get(requester_employee_id)
     allowed = (approver is not None and requester is not None
-               and can_approve(approver, requester, state["required_level"],
-                               mappings.get(approver_employee_id, ()), state["excluded"]))
+               and may_approve(people.values(), approver, requester, state["required_level"],
+                               mappings, state["excluded"], state["approver"], state["stand_in_level"]))
     level = approver.get("level") if approver is not None else None
+    who = approver_employee_id
+    if not allowed and superadmin_may_approve(approver_employee_id, requester_employee_id, requester):
+        # superadmin กดแทนได้ทุกขั้น แต่ผ่านแค่ขั้นนี้ ไม่ข้ามขั้นถัดไปด้วยระดับหรือตัวตนของตัวเอง
+        allowed, level, who = True, state["required_level"], None
     steps = evaluated["steps"]
-    outcome, next_step = next_after_approval(steps, state["step"], level)
+    done = {a["step"] for a in step_approvals(round_logs)}
+    outcome, next_step = next_after_approval(steps, state["step"], level, who, done)
     return {"allowed": allowed, "step": state["step"], "total_steps": state["total_steps"], "steps": steps,
-            "approver_level": level, "outcome": outcome, "next_step": next_step,
-            "skipped": skipped_steps(steps, state["step"], level)}
+            "approver_level": level, "approver_employee_id": who, "outcome": outcome, "next_step": next_step,
+            "skipped": skipped_steps(steps, state["step"], level, who, done)}

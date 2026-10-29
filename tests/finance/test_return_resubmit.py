@@ -16,7 +16,7 @@ from sqlalchemy.dialects import postgresql  # noqa: E402
 from sqlalchemy.exc import IntegrityError  # noqa: E402
 from sqlalchemy.schema import CreateTable  # noqa: E402
 
-from models.finance_model import FinAdvance, FinAdvanceLog, FinPayeeAccount  # noqa: E402
+from models.finance_model import FinAdvance, FinPermission, FinAdvanceLog, FinPayeeAccount  # noqa: E402
 from models.master_model import FormApprovalLog, FormSubmission, FormSubmissionValue  # noqa: E402
 from models.user_model import User  # noqa: E402
 from routes.finance import advance_routes as ar  # noqa: E402
@@ -236,7 +236,8 @@ def _check_list(text):
 def test_model_check_matches_migration():
     ddl = str(CreateTable(FinAdvance.__table__).compile(dialect=postgresql.dialect()))
     sql = MIGRATION.read_text(encoding="utf-8")
-    assert _check_list(ddl) == V3_FIN_STATUSES
+    # v3 SQL เพิ่ม RETURNED/RESUBMITTED · โมเดลตามทันชุดล่าสุดของ prod (2026-10-19 เพิ่ม CLEAR_PENDING)
+    assert set(V3_FIN_STATUSES) <= set(_check_list(ddl)) and "CLEAR_PENDING" in _check_list(ddl)
     assert _check_list(sql) == V3_FIN_STATUSES
     assert set(PROD_FIN_STATUSES) <= set(V3_FIN_STATUSES)  # existing prod rows keep passing
 
@@ -297,6 +298,9 @@ class _Q:
     def order_by(self, *a):
         return self
 
+    def all(self):
+        return self.result if isinstance(self.result, list) else []
+
     def first(self):
         return self.result
 
@@ -316,6 +320,8 @@ class _Db:
             return _Q(self.master)
         if entity is FinAdvanceLog:  # the resubmit's lookup of the latest RETURN snapshot
             return _Q(self.return_log)
+        if entity is FinPermission:  # สิทธิ์ตามหน้าที่ — ว่าง = ยังไม่ตั้งค่า ใช้กติกาเดิม
+            return _Q([])
         raise AssertionError(f"unexpected query {entity}")
 
     def add(self, obj):
@@ -338,7 +344,7 @@ class _Db:
         return [o for o in self.added if isinstance(o, kind)]
 
 
-FINANCE = NS(id=77, employee_id="F1", department_id=4)
+FINANCE = NS(id=77, employee_id="F1", department_id=6)  # บัญชี: ตั้งเบิก/ตีกลับ (ผู้ใช้สั่ง 21/10/2026)
 REQUESTER = NS(id=55, employee_id="E1")
 
 
@@ -689,8 +695,10 @@ def test_voucher_after_reapproval_goes_to_awaiting_payment(wired):
     ("voucher_advance", {"voucher_date": "2026-10-06"}),
     ("pay_advance", {"amount_paid": "100", "transfer_date": "2026-10-06"}),
 ])
-def test_finance_cannot_continue_while_returned(wired, route, body):
+def test_finance_cannot_continue_while_returned(wired, route, body, monkeypatch):
     from schemas.finance_schema import PayIn, VoucherIn
+    if route == "pay_advance":  # บันทึกจ่ายเป็นของแผนกการเงิน
+        monkeypatch.setattr(ar, "require_finance", lambda db, employee_id: NS(id=78, employee_id="F2", department_id=4))
     schema = VoucherIn if route == "voucher_advance" else PayIn
     db = _Db(adv=_adv("RETURNED"))
     with pytest.raises(HTTPException) as ei:

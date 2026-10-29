@@ -126,10 +126,29 @@ def build_user_response(user: User, db: Session):
 
     # Department
     department_name = None
+    department_th = None
+    division = None
+    path = None
     if user.department_id:
         department = db.get(Department, user.department_id)
         if department:
             department_name = department.department_name_en
+            department_th = department.department_name_th
+            d = department.division
+            if d:
+                division = {
+                    "division_id": d.division_id,
+                    "division_th": d.division_th,
+                    "division_eng": d.division_eng,
+                    "division_code": d.division_code,
+                }
+                if d.path:
+                    path = {
+                        "path_id": d.path.path_id,
+                        "path_th": d.path.path_th,
+                        "path_eng": d.path.path_eng,
+                        "path_code": d.path.path_code,
+                    }
 
     # Site
     site_name = None
@@ -148,6 +167,9 @@ def build_user_response(user: User, db: Session):
         "site_id": user.site_id,
         "department": department_name,
         "department_id":user.department_id,
+        "department_th": department_th,
+        "division": division,
+        "path": path,
         "position": position_name,
         "position_level": position_level,
         "position_level_id": position_level_id,
@@ -185,6 +207,16 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Invalid credentials"
     )
+
+# ============================================================
+# SESSION USER — ข้อมูลเดียวกับตอน login (ไม่มี token) ให้ menaIT เซ็น session ใหม่เมื่อข้อมูลเปลี่ยน
+# ============================================================
+@router.get("/session-user/{employee_id}")
+def session_user(employee_id: str, db: Session = Depends(get_db)):
+    user = db.query(User).filter_by(employee_id=employee_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return build_user_response(user, db)
 
 # ============================================================
 # REGISTER (LOCAL) 5

@@ -35,6 +35,8 @@ class FinAdvance(Base):
     amount_paid = Column(Numeric(12, 2))     # ยอดเงิน — NULL until paid
     transfer_date = Column(Date)             # วันที่โอนเงิน — NULL until paid
     clear_due_date = Column(Date)            # กำหนดการเคลียร์ — NULL until paid
+    clear_approval_level = Column(Integer)      # ขั้นอนุมัติเคลียร์ที่ค้างอยู่ (1/2) NULL = ไม่ได้รออนุมัติ
+    clear_approved_clause = Column(String(10))  # ข้อ TOA ที่อนุมัติเคลียร์ไปแล้ว ใช้ดูว่าแก้แล้วข้ามชั้นไหม
     paid_by = Column(String(50))
     paid_at = Column(DateTime(timezone=True))
 
@@ -42,6 +44,7 @@ class FinAdvance(Base):
     clear_date = Column(Date)                # วันที่ส่งเอกสารเคลียร์
     amount_actual = Column(Numeric(12, 2))   # ยอดใช้จริง
     clear_doc_no = Column(String(100))       # เอกสารเคลียร์
+    original_received_date = Column(Date)    # วันที่รับเอกสารตัวจริง (ติ๊กตอนปิดรายการ 21/10/2026)
     settle_amount = Column(Numeric(12, 2))   # รับคืน (+) / เบิกเพิ่ม (−)
     settle_date = Column(Date)               # วันที่โอนเงินคืน
     remark = Column(Text)                    # หมายเหตุ
@@ -60,8 +63,9 @@ class FinAdvance(Base):
         CheckConstraint("amount_paid >= 0", name="ck_fin_advances_amount_paid"),
         CheckConstraint("amount_actual IS NULL OR amount_actual >= 0", name="ck_fin_advances_amount_actual"),
         # widened by scripts/migrations/2026-10-05_finance_advance_v3.sql (RETURNED, RESUBMITTED)
-        CheckConstraint("fin_status IN ('VOUCHERED','VOUCHER_REJECTED','RETURNED','RESUBMITTED','PAID',"
-                        "'CLEARING_SUBMITTED','SENT_BACK','CLOSED')",
+        # ตรงกับ prod (scripts/migrations/2026-10-19_finance_clear_approval.sql)
+        CheckConstraint("fin_status IS NULL OR fin_status IN ('VOUCHERED','VOUCHER_REJECTED','RETURNED','RESUBMITTED',"
+                        "'PAID','CLEAR_PENDING','CLEARING_SUBMITTED','SENT_BACK','CLOSED')",
                         name="ck_fin_advances_fin_status"),
         Index("ix_fin_advances_fin_status", "fin_status"),
         Index("ix_fin_advances_clear_due_date", "clear_due_date"),
@@ -180,4 +184,38 @@ class FinPayeeAccountLog(Base):
 
     __table_args__ = (
         Index("ix_fin_payee_account_logs_employee_id", "employee_id"),
+    )
+
+
+class FinPermission(Base):
+    """สิทธิ์ตามหน้าที่ของงาน Advance (ผู้ใช้ตัดสิน 2026-10-19).
+    ว่างเปล่าสำหรับสิทธิ์ใด = ยังไม่ตั้งค่า ระบบใช้กติกาเดิม (ทุกคนในแผนกการเงิน/บัญชี)."""
+    __tablename__ = "fin_permissions"
+
+    employee_id = Column(String(50), primary_key=True)
+    permission = Column(String(30), primary_key=True)
+    granted_by = Column(String(50))
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_fin_permissions_permission", "permission"),
+    )
+
+
+class FinClearApprovalLog(Base):
+    """ประวัติการอนุมัติการเคลียร์ (ผู้ใช้สั่ง 19/10/2026) แยกจากการอนุมัติตอนขอเบิก"""
+    __tablename__ = "fin_clear_approval_logs"
+
+    id = Column(Integer, primary_key=True)
+    form_id = Column(String(80), nullable=False)
+    step = Column(Integer, nullable=False)          # 1 หัวหน้าถัดไป · 2 ผู้มีอำนาจตาม TOA
+    action = Column(String(20), nullable=False)     # APPROVED / REJECTED / SUBMITTED
+    clause = Column(String(10))
+    amount_actual = Column(Numeric(12, 2))
+    remark = Column(Text)
+    action_by = Column(String(50))
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_fin_clear_approval_logs_form_id", "form_id"),
     )

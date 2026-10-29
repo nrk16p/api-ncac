@@ -71,6 +71,7 @@ from routes import (
     users,
     clients,
     departments,
+    divisions,
     sites,
     locations,
     vehicles,
@@ -101,6 +102,8 @@ from routes.drivingdistance import router as drivingdistance_router
 from routes.atms_maintenance import router as atms_maintenance_router
 from routes.atms_tms import router as atms_tms_router
 from routes.atms.openjob import router as atms_openjob_router
+from routes.atms.deposit_totals import router as atms_deposit_totals_router
+from routes.atms.sku_lookup import router as atms_sku_lookup_router
 from routes.news_safety_talk import router as news_safety_talk_router
 from routes.news_case_report import router as news_case_report_router
 from routes.news_accident_case import router as news_accident_case_router
@@ -120,6 +123,7 @@ app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(clients.router)
 app.include_router(departments.router)
+app.include_router(divisions.router)
 app.include_router(sites.router)
 app.include_router(locations.router)
 app.include_router(vehicles.router)
@@ -173,6 +177,8 @@ app.include_router(atms_tms_router)
 
 # ATMS (เปิด job แจ้งซ่อม / ขอเปลี่ยนยาง)
 app.include_router(atms_openjob_router)
+app.include_router(atms_deposit_totals_router)
+app.include_router(atms_sku_lookup_router)
 
 # Finance — เบิกเงิน Advance
 app.include_router(finance_router)
@@ -210,7 +216,7 @@ async def startup_event():
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
     from apscheduler.triggers.cron import CronTrigger
     from pytz import timezone as tz
-    from routes.pipeline.pipeline_routes import _run
+    from routes.pipeline.pipeline_routes import _run, run_wms_sku_sync_morning
 
     scheduler = AsyncIOScheduler(timezone=tz("Asia/Bangkok"))
     # Run LD → SCCO → CPAC sequentially so they don't hammer ATMS at the same time
@@ -233,6 +239,10 @@ async def startup_event():
     # ทุกชั่วโมง 07:15–20:15 BKK → 00–13 UTC นาที 15 (เลี่ยง :00 ของ procurement light ที่ใช้ ~11 นาที
     # และ :30 ของ stockmovement light) · งานเบา ~10–20 requests ต่อรอบ ไม่ถึงนาที
     scheduler.add_job(_run, CronTrigger(hour="0-13", minute=15), args=["atms_pr_quick"], id="sched_atms_pr_quick")
+    # รอบเช้า mena-wms /safety-stock: sync คงเหลือ/min/max จาก ATMS แล้ว build — 05:55 BKK → 22:55 UTC
+    # ใช้ราว 3 นาที จบก่อน atms_procurement 06:00 จะได้ไม่ยิง ATMS พร้อมกัน
+    # ⚠️ ช่อง 06:00 ใน BUILD_SCHEDULE ของ mena-wms (lib/safety-stock-core.ts) อิงเวลานี้ — เลื่อนแล้วต้องแก้ที่โน่นด้วย
+    scheduler.add_job(run_wms_sku_sync_morning, CronTrigger(hour=22, minute=55), id="sched_wms_sku_sync_morning")  # 05:55 BKK
     # master ซัพพลายเออร์ (เครดิตเทอมของ mena-wms /ap-tracking) — 06:40 BKK → 23:40 UTC
     # ต่อท้าย atms_procurement (23:00 UTC) เพื่อให้ ddCount นับจาก deposit_header ที่เพิ่งรีเฟรชแล้ว
     # และไม่ยิง ATMS พร้อมกัน · งานเบา ~11 คำขอ ใช้เวลาไม่ถึงนาที
@@ -245,6 +255,8 @@ async def startup_event():
     scheduler.add_job(_run, CronTrigger(hour=23, minute=30), args=["engineon_trip_summary"], id="sched_engineon_trip_summary")  # 06:30 BKK
     # fuel series (fuel-control-center spec 2026-10-06) — BKK→UTC −7:
     # Besttech per-vehicle /history for yesterday at 01:30 BKK → 18:30 UTC (~76 min at 35 s per call;
+    # the same raw points also give Besttech engine-on → summary_engineon and overspeed → analytics.overspeed,
+    # which the Terminus engineon 04:00 / overspeed 04:30 jobs then leave alone — scripts/fuel/besttech_derived.py;
     # /history_all is avoided — it locks the key out); fuel_nightly at 04:15 BKK → 21:15 UTC:
     # Besttech catch-up only if the 01:30 run left nothing and is not still running, then Terminus
     # once engine-on (21:00 UTC, ~1 min) has read the same day — done before stockmovement 22:00 UTC

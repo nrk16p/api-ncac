@@ -6,6 +6,8 @@ from services.email_service import render_form_rejected_th ,  send_email , rende
 from services.notify_guard import ADVANCE_FORM_TYPE, notifications_enabled
 from services.finance import advance_logic as fin_logic
 from services.finance import approval_repo
+
+REJECT_REMARK_REQUIRED = "กรุณาระบุเหตุผลที่ไม่อนุมัติ"
 from services.finance import finance_mail as fin_mail
 
 from models.master_model import (
@@ -15,8 +17,8 @@ from models.master_model import (
     FormMaster,
 )
 from models import User, Position, Department
-from models.form_approver_department import FormApproverDepartment
-from schemas.form_approver_schema import ApproverDepartmentCreate
+from models.form_approver_division import FormApproverDivision
+from schemas.form_approver_schema import ApproverDivisionCreate
 from datetime import datetime, timedelta
 
 router = APIRouter(prefix="/forms", tags=["Forms - Approval"])
@@ -68,7 +70,7 @@ def _get_request_cache(db: Session) -> dict:
             "active_users": None,
             "positions_level_by_id": None,
             "departments_by_id": None,
-            "approver_dept_pairs": None,
+            "approver_division_pairs": None,
             "rules_by_form_level": None,
             "eligible_approver_memo": {},
         }
@@ -113,15 +115,15 @@ def _load_departments(db: Session, cache: dict) -> dict:
     return cache["departments_by_id"]
 
 
-def _load_approver_dept_pairs(db: Session, cache: dict) -> set:
-    if cache["approver_dept_pairs"] is None:
-        cache["approver_dept_pairs"] = {
-            (r.employee_id, r.department_id)
-            for r in db.query(FormApproverDepartment)
-            .filter(FormApproverDepartment.is_active == True)
+def _load_approver_division_pairs(db: Session, cache: dict) -> set:
+    if cache["approver_division_pairs"] is None:
+        cache["approver_division_pairs"] = {
+            (r.employee_id, r.division_id)
+            for r in db.query(FormApproverDivision)
+            .filter(FormApproverDivision.is_active == True)
             .all()
         }
-    return cache["approver_dept_pairs"]
+    return cache["approver_division_pairs"]
 
 
 def _load_rules_by_form_level(db: Session, cache: dict) -> dict:
@@ -181,13 +183,21 @@ def get_applicable_rule(
     return None
 
 
+# Approver scope: look in the requester's department first; only when no
+# one there (incl. the cross-division responsibility table) has the
+# rule's level do we widen to the whole division (ฝ่าย).
+SCOPE_DEPARTMENT = "department"
+SCOPE_DIVISION = "division"
+
+
 def _rule_has_eligible_approver(
     db: Session,
     rule: FormApprovalRule,
     requester: User,
+    scope: str = SCOPE_DEPARTMENT,
 ) -> bool:
     cache = _get_request_cache(db)
-    memo_key = (rule.id, requester.department_id)
+    memo_key = (rule.id, requester.department_id, scope)
     memo = cache["eligible_approver_memo"]
     if memo_key in memo:
         return memo[memo_key]
@@ -202,12 +212,13 @@ def _rule_has_eligible_approver(
         if not approver_level:
             continue
 
-        if can_user_approve(
+        if _approver_in_scope(
             db=db,
             rule=rule,
             approver=user,
             approver_level=approver_level,
             requester=requester,
+            scope=scope,
         ):
             result = True
             break
@@ -224,39 +235,52 @@ def get_applicable_rule_with_fallback(
     requester: User,
 ) -> FormApprovalRule | None:
     rule = get_applicable_rule(db, form_master_id, creator_level, level_no)
-
-    if rule and _rule_has_eligible_approver(db, rule, requester):
-        return rule
-
     cache = _get_request_cache(db)
     candidates = _load_rules_by_form_level(db, cache).get((form_master_id, level_no), [])
 
-    for candidate in candidates:
-        if rule and candidate.id == rule.id:
-            continue
-        if _rule_has_eligible_approver(db, candidate, requester):
-            return candidate
+    # department first (whole existing search), then the same search
+    # widened to the division
+    for scope in (SCOPE_DEPARTMENT, SCOPE_DIVISION):
+        if rule and _rule_has_eligible_approver(db, rule, requester, scope):
+            return rule
+
+        for candidate in candidates:
+            if rule and candidate.id == rule.id:
+                continue
+            if _rule_has_eligible_approver(db, candidate, requester, scope):
+                return candidate
 
     return None
 
 
-def approver_can_handle_department(
+def approver_can_handle_division(
     db: Session,
     employee_id: str,
-    department_id: int,
+    division_id: int | None,
 ) -> bool:
+    if division_id is None:
+        return False
     cache = _get_request_cache(db)
-    pairs = _load_approver_dept_pairs(db, cache)
-    return (employee_id, department_id) in pairs
+    pairs = _load_approver_division_pairs(db, cache)
+    return (employee_id, division_id) in pairs
 
 
-def can_user_approve(
+def get_division_id(db: Session, department_id: int | None) -> int | None:
+    if department_id is None:
+        return None
+    cache = _get_request_cache(db)
+    dept = _load_departments(db, cache).get(department_id)
+    return dept.division_id if dept else None
+
+
+def _approver_in_scope(
     *,
     db: Session,
     rule: FormApprovalRule,
     approver: User,
     approver_level: int,
     requester: User,
+    scope: str,
 ) -> bool:
 
     # --------------------------------
@@ -278,15 +302,46 @@ def can_user_approve(
     if requester.department_id == approver.department_id:
         return True
 
-    # 2️⃣ Cross department via responsibility table
-    if approver_can_handle_department(
+    # 2️⃣ Cross division via responsibility table (form_approver_divisions)
+    if approver_can_handle_division(
         db=db,
         employee_id=approver.employee_id,
-        department_id=requester.department_id,
+        division_id=get_division_id(db, requester.department_id),
     ):
         return True
 
+    # 3️⃣ Same division — only for the division pass
+    if scope == SCOPE_DIVISION:
+        division_id = get_division_id(db, requester.department_id)
+        if division_id is not None and division_id == get_division_id(db, approver.department_id):
+            return True
+
     return False
+
+
+def can_user_approve(
+    *,
+    db: Session,
+    rule: FormApprovalRule,
+    approver: User,
+    approver_level: int,
+    requester: User,
+) -> bool:
+    if _approver_in_scope(
+        db=db, rule=rule, approver=approver, approver_level=approver_level,
+        requester=requester, scope=SCOPE_DEPARTMENT,
+    ):
+        return True
+
+    # Division approvers count only when the department has no one at
+    # this rule's level.
+    if _rule_has_eligible_approver(db, rule, requester, SCOPE_DEPARTMENT):
+        return False
+
+    return _approver_in_scope(
+        db=db, rule=rule, approver=approver, approver_level=approver_level,
+        requester=requester, scope=SCOPE_DIVISION,
+    )
 
 
 # ============================================================
@@ -548,35 +603,35 @@ def approve_submission(
         FormSubmission.form_id == form_id
     ).first()
     if not submission:
-        raise HTTPException(404, "Submission not found")
+        raise HTTPException(404, "ไม่พบคำขอนี้ในระบบ")
 
     if submission.status_approve != "In Progress":
-        raise HTTPException(400, "Submission not in approvable state")
+        raise HTTPException(400, "คำขอนี้ไม่ได้อยู่ในสถานะที่อนุมัติได้ กรุณารีเฟรชหน้าจอ")
 
     requester = get_user_by_employee_id(db, submission.created_by)
     approver = get_user_by_employee_id(db, employee_id)
     if not requester or not approver:
-        raise HTTPException(404, "User not found")
+        raise HTTPException(404, "ไม่พบข้อมูลผู้ใช้ในระบบ")
 
     advance = is_advance_submission(submission)
     if advance:
         # two-step chain (v3 §5): lock the row so concurrent approvals of the same step serialize
         db.refresh(submission, with_for_update=True)
         if submission.status_approve != "In Progress":
-            raise HTTPException(400, "Submission not in approvable state")
+            raise HTTPException(400, "คำขอนี้ไม่ได้อยู่ในสถานะที่อนุมัติได้ กรุณารีเฟรชหน้าจอ")
         decision = approval_repo.approval_decision(db, submission, employee_id)
         if not decision["allowed"]:
-            raise HTTPException(403, "Not authorized to approve")
+            raise HTTPException(403, "คุณไม่มีอำนาจอนุมัติคำขอนี้")
     else:
         approver_level = get_employee_position_level(db, employee_id)
         if not approver_level:
-            raise HTTPException(403, "Approver has no position level")
+            raise HTTPException(403, "ไม่พบระดับตำแหน่งของผู้อนุมัติ กรุณาติดต่อฝ่ายบุคคล")
 
         pos_req = db.query(Position).filter(
             Position.position_id == requester.position_id
         ).first()
         if not pos_req:
-            raise HTTPException(400, "Requester position not found")
+            raise HTTPException(400, "ไม่พบระดับตำแหน่งของผู้ขอเบิก กรุณาติดต่อฝ่ายบุคคล")
 
         rule = get_applicable_rule_with_fallback(
             db=db,
@@ -586,7 +641,7 @@ def approve_submission(
             requester=requester,
         )
         if not rule:
-            raise HTTPException(400, "Approval rule not found")
+            raise HTTPException(400, "ไม่พบกติกาการอนุมัติของแบบฟอร์มนี้ กรุณาติดต่อผู้ดูแลระบบ")
 
         if not can_user_approve(
             db=db,
@@ -595,7 +650,7 @@ def approve_submission(
             approver_level=approver_level,
             requester=requester,
         ):
-            raise HTTPException(403, "Not authorized to approve")
+            raise HTTPException(403, "คุณไม่มีอำนาจอนุมัติคำขอนี้")
 
     if advance:
         # log level_no = current step; finish (Approved) or move to step 2 (stays In Progress)
@@ -627,6 +682,7 @@ def approve_submission(
             db,
             fin_mail.APPROVED if submission.status_approve == "Approved" else fin_mail.STEP_PENDING,
             submission,
+            approver_name=f"{approver.firstname} {approver.lastname}".strip() or None,
         )
     if submission.status_approve == "Approved" and notifications_enabled(submission.form):
 
@@ -674,37 +730,40 @@ def reject_submission(
         FormSubmission.form_id == form_id
     ).first()
     if not submission:
-        raise HTTPException(404, "Submission not found")
+        raise HTTPException(404, "ไม่พบคำขอนี้ในระบบ")
 
     if submission.status_approve != "In Progress":
-        raise HTTPException(400, "Submission not in approvable state")
+        raise HTTPException(400, "คำขอนี้ไม่ได้อยู่ในสถานะที่อนุมัติได้ กรุณารีเฟรชหน้าจอ")
 
     requester = get_user_by_employee_id(db, submission.created_by)
     approver = get_user_by_employee_id(db, employee_id)
     if not requester or not approver:
-        raise HTTPException(404, "User not found")
+        raise HTTPException(404, "ไม่พบข้อมูลผู้ใช้ในระบบ")
 
     advance = is_advance_submission(submission)
     level_no = submission.current_approval_level
+    if advance and not (remark or "").strip():
+        # หน้าจอบังคับอยู่แล้ว แต่ยิง API ตรงด้วยเหตุผลว่างเคยผ่าน ผู้เบิกจะไม่รู้ว่าถูกปฏิเสธเพราะอะไร
+        raise HTTPException(400, REJECT_REMARK_REQUIRED)
     if advance:
         # same eligibility as approve, at the current step (v3 §5): a reject at any step → Rejected
         db.refresh(submission, with_for_update=True)
         if submission.status_approve != "In Progress":
-            raise HTTPException(400, "Submission not in approvable state")
+            raise HTTPException(400, "คำขอนี้ไม่ได้อยู่ในสถานะที่อนุมัติได้ กรุณารีเฟรชหน้าจอ")
         decision = approval_repo.approval_decision(db, submission, employee_id)
         if not decision["allowed"]:
-            raise HTTPException(403, "Not authorized to reject")
+            raise HTTPException(403, "คุณไม่มีอำนาจไม่อนุมัติคำขอนี้")
         level_no = decision["step"]
     else:
         approver_level = get_employee_position_level(db, employee_id)
         if not approver_level:
-            raise HTTPException(403, "Approver has no position level")
+            raise HTTPException(403, "ไม่พบระดับตำแหน่งของผู้อนุมัติ กรุณาติดต่อฝ่ายบุคคล")
 
         pos_req = db.query(Position).filter(
             Position.position_id == requester.position_id
         ).first()
         if not pos_req:
-            raise HTTPException(400, "Requester position not found")
+            raise HTTPException(400, "ไม่พบระดับตำแหน่งของผู้ขอเบิก กรุณาติดต่อฝ่ายบุคคล")
 
         rule = get_applicable_rule_with_fallback(
             db=db,
@@ -714,7 +773,7 @@ def reject_submission(
             requester=requester,
         )
         if not rule:
-            raise HTTPException(400, "Approval rule not found")
+            raise HTTPException(400, "ไม่พบกติกาการอนุมัติของแบบฟอร์มนี้ กรุณาติดต่อผู้ดูแลระบบ")
 
         if not can_user_approve(
             db=db,
@@ -723,7 +782,7 @@ def reject_submission(
             approver_level=approver_level,
             requester=requester,
         ):
-            raise HTTPException(403, "Not authorized to reject")
+            raise HTTPException(403, "คุณไม่มีอำนาจไม่อนุมัติคำขอนี้")
 
     db.add(FormApprovalLog(
         submission_id=submission.id,
@@ -768,74 +827,74 @@ def reject_submission(
 # 🛠 Approver Responsibility (Admin)
 # ============================================================
 
-@router.post("/approvers/departments")
-def assign_departments(
-    payload: ApproverDepartmentCreate,
+@router.post("/approvers/divisions")
+def assign_divisions(
+    payload: ApproverDivisionCreate,
     db: Session = Depends(get_db),
 ):
-    dept_ids = set(payload.department_ids)
+    division_ids = set(payload.division_ids)
 
-    for dept_id in dept_ids:
-        row = db.query(FormApproverDepartment).filter(
-            FormApproverDepartment.employee_id == payload.employee_id,
-            FormApproverDepartment.department_id == dept_id,
+    for division_id in division_ids:
+        row = db.query(FormApproverDivision).filter(
+            FormApproverDivision.employee_id == payload.employee_id,
+            FormApproverDivision.division_id == division_id,
         ).first()
 
         if not row:
-            db.add(FormApproverDepartment(
+            db.add(FormApproverDivision(
                 employee_id=payload.employee_id,
-                department_id=dept_id,
+                division_id=division_id,
                 is_active=True,
             ))
         else:
             row.is_active = True
 
     db.commit()
-    approval_repo.clear_context_cache()  # approver-department mappings feed the cached approval context
+    approval_repo.clear_context_cache()  # approver-division mappings feed the cached approval context
 
     return {
-        "message": "Departments assigned",
+        "message": "Divisions assigned",
         "employee_id": payload.employee_id,
-        "department_ids": list(dept_ids),
+        "division_ids": list(division_ids),
     }
 
 
-@router.get("/approvers/{employee_id}/departments")
-def get_departments_by_employee(
+@router.get("/approvers/{employee_id}/divisions")
+def get_divisions_by_employee(
     employee_id: str,
     db: Session = Depends(get_db),
 ):
-    rows = db.query(FormApproverDepartment).filter(
-        FormApproverDepartment.employee_id == employee_id,
-        FormApproverDepartment.is_active == True,
+    rows = db.query(FormApproverDivision).filter(
+        FormApproverDivision.employee_id == employee_id,
+        FormApproverDivision.is_active == True,
     ).all()
 
     return {
         "employee_id": employee_id,
-        "departments": [r.department_id for r in rows],
+        "divisions": [r.division_id for r in rows],
     }
 
 
-@router.delete("/approvers/{employee_id}/departments/{department_id}")
-def remove_department(
+@router.delete("/approvers/{employee_id}/divisions/{division_id}")
+def remove_division(
     employee_id: str,
-    department_id: int,
+    division_id: int,
     db: Session = Depends(get_db),
 ):
-    row = db.query(FormApproverDepartment).filter(
-        FormApproverDepartment.employee_id == employee_id,
-        FormApproverDepartment.department_id == department_id,
+    row = db.query(FormApproverDivision).filter(
+        FormApproverDivision.employee_id == employee_id,
+        FormApproverDivision.division_id == division_id,
     ).first()
 
     if not row:
-        raise HTTPException(404, "Mapping not found")
+        raise HTTPException(404, "ไม่พบการผูกฝ่ายของผู้อนุมัติ")
 
     row.is_active = False
     db.commit()
     approval_repo.clear_context_cache()
 
     return {
-        "message": "Department removed",
+        "message": "Division removed",
         "employee_id": employee_id,
-        "department_id": department_id,
+        "division_id": division_id,
     }

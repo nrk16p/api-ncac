@@ -29,6 +29,7 @@ log = logging.getLogger(__name__)
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
 MAX_RECIPIENTS = 20
+ACCOUNT_MAILBOX_DEFAULT = "accountbkk@menatransport.co.th"
 _ORIGIN = re.compile(r"^https?://[A-Za-z0-9.-]+(:[0-9]+)?$")
 
 # events
@@ -41,8 +42,16 @@ RETURNED = "returned"
 PAID = "paid"
 SENT_BACK = "sent_back"
 CLOSED = "closed"
+CLEAR_SUBMITTED = "clear_submitted"
+CLEAR_APPROVED = "clear_approved"
+CLEAR_PENDING = "clear_pending"
+CLEAR_REJECTED = "clear_rejected"
 APPROVER_EVENTS = (SUBMITTED, RESUBMITTED, STEP_PENDING)
-REQUESTER_EVENTS = (APPROVED, REJECTED, RETURNED, PAID, SENT_BACK, CLOSED)
+REQUESTER_EVENTS = (APPROVED, REJECTED, RETURNED, PAID, SENT_BACK, CLOSED, CLEAR_SUBMITTED)
+# งานถึงมือบัญชี: สรุปเลขที่ ผู้เบิก ยอดเงิน และ CC กล่องบัญชี (ผู้ใช้สั่ง 20/10/2026)
+ACCOUNT_CC_EVENTS = (APPROVED, CLEAR_SUBMITTED, CLEAR_APPROVED)
+# หน้าตาแบบสรุปยอด (หัวเรื่อง "เบิกเงิน Advance · …") — รอท่านอนุมัติการเคลียร์ใช้แบบเดียวกันแต่ CC ผู้เบิก ไม่ใช่บัญชี
+SUMMARY_STYLE_EVENTS = ACCOUNT_CC_EVENTS + (CLEAR_PENDING,)
 
 
 # ---------------------------- switch + sender ----------------------------
@@ -51,11 +60,34 @@ def email_enabled() -> bool:
     return (os.getenv("FINANCE_EMAIL_ENABLED") or "").strip().lower() == "true"
 
 
-def send_finance_email(to, subject: str, html: str) -> None:
-    deliver_finance_email(to, subject, html)
+def account_mailbox() -> str:
+    """กล่องอีเมลฝ่ายบัญชี: FINANCE_ACCOUNT_EMAIL ถ้าไม่ตั้ง = accountbkk"""
+    return (os.getenv("FINANCE_ACCOUNT_EMAIL") or "").strip() or ACCOUNT_MAILBOX_DEFAULT
 
 
-def deliver_finance_email(to, subject: str, html: str) -> int:
+def test_mailbox() -> str:
+    """FINANCE_EMAIL_TEST_TO: ตั้งไว้ = อีเมล Finance ทุกฉบับเข้ากล่องนี้กล่องเดียว (ใช้ช่วง UAT)"""
+    return (os.getenv("FINANCE_EMAIL_TEST_TO") or "").strip()
+
+
+def _test_banner(recipients, cc) -> str:
+    who = escape(", ".join(recipients))
+    cc_line = f" · CC: {escape(', '.join(cc))}" if cc else ""
+    return ('<div style="background:#fff4cc;border:1px solid #f0c64a;padding:10px 16px;margin:12px 24px;'
+            'font-family:Tahoma,Arial,sans-serif;font-size:13px;color:#5b4500">'
+            f"อีเมลทดสอบ · ระบบจริงจะส่งถึง: {who}{cc_line}</div>")
+
+
+def _with_banner(html: str, banner: str) -> str:
+    m = re.search(r"<body[^>]*>", html or "", re.I)
+    return html[:m.end()] + banner + html[m.end():] if m else banner + (html or "")
+
+
+def send_finance_email(to, subject: str, html: str, cc=None) -> None:
+    deliver_finance_email(to, subject, html, cc=cc)
+
+
+def deliver_finance_email(to, subject: str, html: str, cc=None) -> int:
     """Same as send_finance_email but returns how many recipients SMTP accepted (0 when off / failed).
     `to`: one address or a list (deduped, capped at MAX_RECIPIENTS). One message per recipient, each with only
     that recipient in To, over one SMTP connection per batch. A failed recipient is logged and the rest are still
@@ -74,7 +106,17 @@ def deliver_finance_email(to, subject: str, html: str) -> int:
     sent = 0
     try:
         recipients = pick_recipients([to] if isinstance(to, str) else list(to or []))
+        taken = {r.lower() for r in recipients}
+        # CC goes on one message only (the first that is accepted), never once per recipient
+        pending_cc = [c for c in pick_recipients([cc] if isinstance(cc, str) else list(cc or []))
+                      if c.lower() not in taken]
         subject = _one_line(subject)
+        test_to = test_mailbox()
+        if test_to and recipients:
+            # ช่วงทดสอบ: ทุกฉบับเข้ากล่องเดียว บอกในเนื้อหาว่าตัวจริงจะถึงใคร (ผู้ใช้สั่ง 20/10/2026)
+            log.info("finance email redirected to FINANCE_EMAIL_TEST_TO: %s", subject)
+            html = _with_banner(html, _test_banner(recipients, pending_cc))
+            recipients, pending_cc = [test_to], []
         for index, addr in enumerate(recipients):
             if server is None:
                 try:
@@ -84,8 +126,9 @@ def deliver_finance_email(to, subject: str, html: str) -> int:
                                   len(recipients) - index, subject)
                     return sent
             try:
-                server.sendmail(user, [addr], _message(user, addr, subject, html))
+                server.sendmail(user, [addr] + pending_cc, _message(user, addr, subject, html, pending_cc))
                 sent += 1
+                pending_cc = []
             except Exception:  # noqa: BLE001 - one recipient's failure must not stop the others
                 log.exception("finance email to %s failed: %s", addr, subject)
                 _quit(server)
@@ -117,10 +160,12 @@ def _quit(server) -> None:
         pass
 
 
-def _message(sender, recipient, subject, html) -> str:
+def _message(sender, recipient, subject, html, cc=None) -> str:
     msg = MIMEMultipart()
     msg["From"] = sender
     msg["To"] = _one_line(recipient)
+    if cc:
+        msg["Cc"] = _one_line(", ".join(cc))
     msg["Subject"] = subject
     msg.attach(MIMEText(html, "html", "utf-8"))
     return msg.as_string()
@@ -168,24 +213,85 @@ _TITLES = {
     SUBMITTED: ("คำขอใหม่", "รอท่านอนุมัติ", "มีคำขอเบิกเงิน Advance รอท่านพิจารณา", True),
     RESUBMITTED: ("ส่งใหม่", "รอท่านอนุมัติ (ส่งใหม่หลังแก้ไข)", "ผู้เบิกแก้ไขและส่งคำขอเบิกเงิน Advance ใหม่", True),
     STEP_PENDING: ("รออนุมัติขั้นถัดไป", "รอท่านอนุมัติ", "คำขอเบิกเงิน Advance ผ่านการอนุมัติขั้นก่อนหน้าแล้ว", True),
-    APPROVED: ("อนุมัติแล้ว", "คำขอเบิกเงินได้รับการอนุมัติ", "คำขอของท่านผ่านการอนุมัติครบทุกขั้นตอนแล้ว", False),
+    APPROVED: ("เบิกเงิน Advance", "อนุมัติครบทุกขั้นแล้ว", "คำขอผ่านการอนุมัติครบทุกขั้นแล้ว รอฝ่ายบัญชีตั้งเบิก", False),
     REJECTED: ("ไม่อนุมัติ", "คำขอเบิกเงินไม่ได้รับการอนุมัติ", "คำขอของท่านถูกปฏิเสธ", False),
     RETURNED: ("ตีกลับ", "บัญชีตีกลับให้แก้ไข", "กรุณาแก้ไขและส่งคำขอใหม่", False),
     PAID: ("จ่ายเงินแล้ว", "การเงินจ่ายเงินเรียบร้อย", "โปรดเคลียร์เงินภายในกำหนด", False),
     SENT_BACK: ("ตีกลับเคลียร์", "บัญชีตีกลับเอกสารเคลียร์", "กรุณาแก้ไขเอกสารเคลียร์และส่งใหม่", False),
     CLOSED: ("ปิดรายการ", "รายการเบิกเงินปิดเรียบร้อย", "บัญชีตรวจสอบและปิดรายการแล้ว", False),
+    CLEAR_SUBMITTED: ("เบิกเงิน Advance", "ส่งเคลียร์เงินแล้ว", "ผู้เบิกส่งเอกสารเคลียร์เงินแล้ว", False),
+    CLEAR_REJECTED: ("ไม่อนุมัติการเคลียร์", "หัวหน้าไม่อนุมัติการเคลียร์",
+                     "กรุณาแก้ไขเอกสารเคลียร์ตามเหตุผลด้านล่าง แล้วส่งเคลียร์ใหม่", False),
+    CLEAR_PENDING: ("เบิกเงิน Advance", "รอท่านอนุมัติการเคลียร์",
+                    "ผู้เบิกส่งเคลียร์เงินแล้ว ตรวจรายการกับใบเสร็จก่อนส่งต่อให้บัญชี", True),
+    CLEAR_APPROVED: ("เบิกเงิน Advance", "อนุมัติเคลียร์แล้ว",
+                     "หัวหน้าอนุมัติการเคลียร์แล้ว พิมพ์เอกสารแล้วส่งตัวจริงให้บัญชีได้เลย", False),
 }
 
+# เคลียร์ถึงมือบัญชีแล้ว ผู้เบิกต้องพิมพ์เอกสาร 2 ส่วนจากระบบ แล้วส่งตัวจริงให้บัญชี (ผู้ใช้สั่ง 20/10/2026)
+_PRINT_STEPS = (
+    'เปิดรายการ แล้วกดปุ่ม "พิมพ์เอกสาร" ที่มุมขวาบน',
+    "พิมพ์ให้ครบ 2 ส่วน คือ Part 1 : Cash Advance Request ใบคำขอเบิกเงินล่วงหน้า "
+    "และ Part 2 : Expense Claim Form ใบขอเบิกค่าใช้จ่าย/เคลียร์เบิกล่วงหน้า",
+    "นำเอกสารตัวจริงส่งให้ฝ่ายบัญชี บัญชีจะตรวจแล้วปิดรายการให้",
+)
 
-def render_event_email(event: str, ctx: dict):
-    """ctx: form_id, requester_name, amount, remark, step, total_steps, step_label, transfer_date, clear_due_date,
-    fe_base_url. Returns (subject, html). Every interpolated value is HTML-escaped; the link only when
-    FE_BASE_URL is a bare http(s) origin."""
-    badge, headline, sub, for_approver = _TITLES[event]
-    e = lambda v: escape(str(v), quote=True)  # noqa: E731
-    form_id = ctx.get("form_id") or "-"
-    requester = ctx.get("requester_name")
-    subject = _one_line(f"[Finance Advance] {form_id} — {headline}")
+
+def _needs_print_steps(event: str, ctx: dict) -> bool:
+    return event == CLEAR_APPROVED or (event == CLEAR_SUBMITTED and not ctx.get("pending"))
+
+
+def _print_steps_html() -> str:
+    items = "".join(f'<li style="margin:0 0 6px">{escape(t, quote=True)}</li>' for t in _PRINT_STEPS)
+    return ('<div style="margin:24px 0 0;padding:16px 20px;background:#f0f9f3;border:1px solid #cdebd6;'
+            'border-radius:10px"><div style="font-size:14px;font-weight:700;color:#1a7a36;margin-bottom:8px">'
+            'ขั้นต่อไป ส่งเอกสารตัวจริงให้บัญชี</div>'
+            f'<ol style="margin:0;padding-left:20px;font-size:14px;color:#1f2937;line-height:1.6">{items}</ol></div>')
+
+
+def _account_rows(event: str, ctx: dict) -> list:
+    """แถวสรุปในอีเมลที่ CC บัญชี: เลขที่ ผู้เบิก และยอดเงินของขั้นนั้น"""
+    who = ctx.get("requester_name") or "-"
+    if ctx.get("department"):
+        who = f"{who} ({ctx['department']})"
+    rows = [("เลขที่", ctx.get("form_id") or "-"), ("ผู้เบิก", who)]
+    money = lambda key: _fmt_money(ctx.get(key))  # noqa: E731
+    if event in (CLEAR_SUBMITTED, CLEAR_APPROVED, CLEAR_PENDING):
+        for label, key in (("จ่ายไปแล้ว", "amount_paid"), ("ยอดใช้จริง", "amount_actual")):
+            if money(key):
+                rows.append((label, money(key)))
+        try:
+            settle = float(ctx.get("settle_amount") or 0)
+        except (TypeError, ValueError):
+            settle = 0
+        if settle > 0:
+            rows.append(("คืนบริษัท", _fmt_money(settle)))
+        elif settle < 0:
+            rows.append(("บริษัทจ่ายเพิ่ม", _fmt_money(-settle)))
+    elif money("amount"):
+        rows.append(("ยอดเบิก", money("amount")))
+    if ctx.get("purpose"):
+        rows.append(("วัตถุประสงค์", ctx["purpose"]))
+    if event == APPROVED:
+        if _fmt_date(ctx.get("use_date")):
+            rows.append(("วันที่ใช้เงิน", _fmt_date(ctx.get("use_date"))))
+        if ctx.get("approver_name"):
+            rows.append(("ผู้อนุมัติขั้นสุดท้าย", ctx["approver_name"]))
+        rows.append(("สถานะ", "รอตั้งเบิก"))
+    elif event == CLEAR_APPROVED:
+        if ctx.get("approver_name"):
+            rows.append(("ผู้อนุมัติเคลียร์", ctx["approver_name"]))
+        rows.append(("สถานะ", "รอบัญชีตรวจ"))
+    else:
+        pending = event == CLEAR_PENDING or bool(ctx.get("pending"))
+        if pending and ctx.get("total_steps"):
+            tail = f" (TOA ข้อ {ctx['clause']})" if ctx.get("clause") else ""
+            rows.append(("ขั้นอนุมัติ", f"ขั้นที่ {ctx.get('step') or 1} จาก {ctx['total_steps']}{tail}"))
+        rows.append(("สถานะ", "รออนุมัติเคลียร์" if pending else "รอบัญชีตรวจ"))
+    return rows
+
+
+def _legacy_rows(event: str, ctx: dict, form_id, requester) -> list:
     rows = [("เลขที่เอกสาร", form_id)]
     if requester:
         rows.append(("ผู้เบิก", requester))
@@ -201,12 +307,105 @@ def render_event_email(event: str, ctx: dict):
             value = _fmt_money(ctx.get(key)) if key == "amount_paid" else _fmt_date(ctx.get(key))
             if value:
                 rows.append((label, value))
-    if event in (REJECTED, RETURNED, SENT_BACK) and ctx.get("remark"):
+    if event == CLEAR_REJECTED and ctx.get("approver_name"):
+        rows.append(("ผู้ไม่อนุมัติ", ctx["approver_name"]))
+    if event in (REJECTED, RETURNED, SENT_BACK, CLEAR_REJECTED) and ctx.get("remark"):
         rows.append(("เหตุผล", ctx.get("remark")))
+    return rows
+
+
+def _first_name(full) -> str:
+    return (full or "").strip().split(" ")[0] if (full or "").strip() else ""
+
+
+def render_clear_approved_letter(ctx: dict):
+    """อีเมลถึงผู้เบิกหลังอนุมัติเคลียร์ครบทุกขั้น — ถ้อยคำตามที่ฝ่ายบัญชีให้มา (ฉบับ 21/10/2026: แบ่ง 2 ช่วงวันที่
+    + ผู้ติดต่อตามศูนย์ แก้แค่คำผิด)
+    ช่องติดต่อเขียน accountbkk ตายตัว เพราะ FINANCE_ACCOUNT_EMAIL ช่วงทดสอบชี้ไปกล่องคนอื่น"""
+    e = lambda v: escape(str(v), quote=True)  # noqa: E731
+    form_id = ctx.get("form_id") or "-"
+    full = (ctx.get("requester_name") or "").strip()
+    first = _first_name(full) or full or "-"
+    amount = _fmt_money(ctx.get("amount_paid")) or _fmt_money(ctx.get("amount")) or "-"
+    amount = amount.replace(" บาท", "")
+    due = _fmt_date(ctx.get("clear_due_date")) or "-"
+    subject = _one_line(f"การเคลียร์เงิน Advance ผ่านการอนุมัติครบทุกขั้นแล้ว {full}".strip())
+    p = 'margin:0 0 14px;font-size:14px;line-height:1.75;color:#1f2937'
+    indent = p + ';text-indent:2.5em'
+    link = advance_link(ctx.get("fe_base_url"), form_id, False)
+    button = ""
+    if link:
+        button = ('<p style="margin:22px 0 0"><a href="' + escape(link, quote=True) + '" style="display:inline-block;'
+                  'padding:11px 22px;background:#1a7a36;color:#ffffff;text-decoration:none;border-radius:8px;'
+                  'font-size:14px;font-weight:700">เปิดรายการเพื่อพิมพ์เอกสาร</a></p>')
+    ol = 'margin:0 0 6px;font-size:14px;line-height:1.75;color:#1f2937'
+    l1 = ol + ';padding-left:2.5em;text-indent:-1.2em;margin-top:10px;font-weight:700'
+    l2 = ol + ';padding-left:4.2em;text-indent:-1.7em'
+    l3 = ol + ';padding-left:6.4em;text-indent:-2.2em'
+    acc = e(ACCOUNT_MAILBOX_DEFAULT)
+    receipts = ('ใบเสร็จรับเงินและเอกสารประกอบเพื่อเคลียร์ค่าใช้จ่าย '
+                '(หลักฐานการโอนเงินคืนบริษัท <i>ถ้ามีการคืนเงิน</i>)')
+    send_original = 'ส่งเอกสารตัวจริงให้ทางบัญชีทันทีหลังจากที่มีการเคลียร์เงินทดรองในระบบเรียบร้อยแล้ว โดยเอกสารหลัก ๆ คือ'
+    print_form = 'พิมพ์แบบฟอร์มใบสรุปการเคลียร์เงินในระบบขอเบิกจ่ายเงินทดรอง'
+    body = (
+        f'<p style="{p}">เรียน คุณ{e(first)},</p>'
+        f'<p style="{indent}">อีเมลฉบับนี้ส่งมาเพื่อแจ้งการเคลียร์เงินยืมทดรองจ่าย หลังจากผ่านการอนุมัติครบทุกขั้นแล้ว '
+        f'จากใบคำขอเบิกเงิน {e(form_id)} จำนวน {e(amount)} บาท ซึ่งจะครบกำหนดชำระในวันที่ {e(due)}</p>'
+        f'<p style="{indent}">โดยมีขั้นตอนการเคลียร์เงินยืมทดรอง หลังผ่านการอนุมัติครบทุกขั้นแล้ว แบ่งเป็น 2 ช่วงเวลา ดังนี้</p>'
+        f'<p style="{l1}">1. ช่วงการเคลียร์ในระบบ สำหรับวันที่ 1-26 ของทุกเดือน</p>'
+        f'<p style="{l2}">1.1 {send_original}</p>'
+        f'<p style="{l3}">1.1.1 {print_form}</p>'
+        f'<p style="{l3}">1.1.2 {receipts}</p>'
+        f'<p style="{l1}">2. ช่วงการเคลียร์ในระบบ สำหรับวันที่ 25-31 ของทุกเดือน</p>'
+        f'<p style="{l2}">2.1 สแกนเอกสารการเคลียร์ให้ทางบัญชีก่อน โดยผ่านเมล {acc} '
+        'ทันทีที่มีการอนุมัติเคลียร์เงินทดรองครบทุกขั้นในระบบแล้ว</p>'
+        f'<p style="{l2}">2.2 {send_original}</p>'
+        f'<p style="{l3}">2.2.1 {print_form}</p>'
+        f'<p style="{l3};margin-bottom:18px">2.2.2 {receipts}</p>'
+        f'<p style="{indent};margin-bottom:6px">หากคุณ{e(first)} มีข้อติดขัด หรือต้องการสอบถามรายละเอียดเพิ่มเติม '
+        f'สามารถติดต่อฝ่ายบัญชีได้โดยตรงทางอีเมล {acc}</p>'
+        '<ul style="margin:0 0 14px;padding-left:22px;font-size:14px;line-height:1.75;color:#1f2937">'
+        '<li>ศูนย์ลาดกระบัง ขอนแก่น: ติดต่อคุณน้อง</li>'
+        '<li>ศูนย์สระบุรี บางปะกง ระยอง กรุงเทพ: ติดต่อคุณเบล</li></ul>'
+        f'<p style="{p}">ขอขอบคุณสำหรับความร่วมมือค่ะ</p>{button}'
+    )
+    html = (
+        '<!DOCTYPE html><html lang="th"><head><meta charset="UTF-8"></head>'
+        '<body style="margin:0;padding:0;background-color:#eef2f7;font-family:Tahoma,Arial,sans-serif">'
+        '<table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#eef2f7;'
+        'padding:32px 16px 32px 24px"><tr><td align="left">'
+        '<table width="620" cellpadding="0" cellspacing="0" border="0" style="max-width:620px;width:100%;'
+        'background-color:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #e0e6ed">'
+        '<tr><td style="background:#2ea84f;height:6px;line-height:6px;font-size:0">&nbsp;</td></tr>'
+        f'<tr><td style="padding:28px 36px">{body}</td></tr></table></td></tr></table></body></html>'
+    )
+    return subject, html
+
+
+def render_event_email(event: str, ctx: dict):
+    """ctx: form_id, requester_name, amount, remark, step, total_steps, step_label, transfer_date, clear_due_date,
+    fe_base_url. Returns (subject, html). Every interpolated value is HTML-escaped; the link only when
+    FE_BASE_URL is a bare http(s) origin."""
+    if event == CLEAR_APPROVED:
+        return render_clear_approved_letter(ctx)
+    badge, headline, sub, for_approver = _TITLES[event]
+    e = lambda v: escape(str(v), quote=True)  # noqa: E731
+    form_id = ctx.get("form_id") or "-"
+    requester = ctx.get("requester_name")
+    if event in SUMMARY_STYLE_EVENTS:
+        subject = _one_line(f"{badge} · {headline} · {form_id}")
+        rows = _account_rows(event, ctx)
+    else:
+        subject = _one_line(f"[Finance Advance] {form_id} — {headline}")
+        rows = _legacy_rows(event, ctx, form_id, requester)
     table = "".join(
         f'<tr><td style="padding:6px 16px 6px 0;font-size:13px;color:#6b7280;white-space:nowrap">{e(label)}</td>'
         f'<td style="padding:6px 0;font-size:14px;color:#1f2937">{e(value)}</td></tr>' for label, value in rows)
-    link = advance_link(ctx.get("fe_base_url"), form_id, for_approver)
+    if event == CLEAR_PENDING:  # เปิดแท็บรออนุมัติเคลียร์ในหน้าอนุมัติ พร้อมเปิดใบนี้
+        link = build_link(ctx.get("fe_base_url"), f"/finance/approvals?tab=clear&doc={_q(form_id)}")
+    else:
+        link = advance_link(ctx.get("fe_base_url"), form_id, for_approver)
+    steps = _print_steps_html() if _needs_print_steps(event, ctx) else ""
     button = ""
     if link:
         button = ('<p style="margin:24px 0 0"><a href="' + escape(link, quote=True) + '" style="display:inline-block;'
@@ -226,7 +425,7 @@ def render_event_email(event: str, ctx: dict):
         f'<div style="font-size:24px;font-weight:700;color:#ffffff;margin-bottom:6px">{e(headline)}</div>'
         f'<div style="font-size:13px;color:#e8f5ec">{e(sub)}</div></td></tr>'
         f'<tr><td style="padding:28px 36px"><table cellpadding="0" cellspacing="0" border="0">{table}</table>'
-        f'{button}</td></tr></table></td></tr></table></body></html>'
+        f'{steps}{button}</td></tr></table></td></tr></table></body></html>'
     )
     return subject, html
 
@@ -262,7 +461,10 @@ def step_approver_emails(db, submission) -> list:
     if requester is None:
         return []
     eligible = rules.eligible_approvers(ctx.people.values(), requester, state["required_level"], ctx.mappings,
-                                        state["excluded"])
+                                        state["excluded"], state.get("approver"))
+    # อีเมลถึงเฉพาะคนระดับที่ TOA กำหนด คนระดับสูงกว่ายังกดอนุมัติผ่านลิงก์ได้ (ผู้ใช้สั่ง 21/10/2026)
+    # ขั้นพิเศษ (26/10/2026) ส่งถึงคนที่กำหนดคนเดียว
+    eligible = rules.notify_approvers(eligible, state["required_level"], requester, state.get("approver"))
     eligible.sort(key=lambda p: (p["level"], p["employee_id"]))
     ids = [p["id"] for p in eligible if p.get("id") is not None]
     by_id = {u.id: u.email for u in db.query(User).filter(User.id.in_(ids)).all()} if ids else {}
@@ -291,13 +493,16 @@ def queue_event(background_tasks, db, event: str, submission, **extra) -> None:
     """Resolve recipients and content now, send in the background. A no-op while the switch is off."""
     if not email_enabled():
         return
+    approver_emails = extra.pop("approver_emails", None)  # CLEAR_PENDING: route คิดผู้อนุมัติขั้นเคลียร์มาให้
     try:
         sid = submission.id
         values = advance_repo.request_values_by_submission(db, [sid]).get(sid) or {}
         people = advance_repo.people_by_employee_id(db, [submission.created_by])
         ctx = {"form_id": submission.form_id,
                "requester_name": (people.get(submission.created_by) or {}).get("name"),
-               "amount": values.get("amount"), "fe_base_url": os.getenv("FE_BASE_URL"), **extra}
+               "amount": values.get("amount"), "fe_base_url": os.getenv("FE_BASE_URL"),
+               "department": (people.get(submission.created_by) or {}).get("department"),
+               "purpose": values.get("purpose"), "use_date": values.get("use_date"), **extra}
         if event in APPROVER_EVENTS:
             try:
                 actx = approval_repo.ensure_people(db, approval_repo.load_context(db), submission.created_by)
@@ -308,13 +513,26 @@ def queue_event(background_tasks, db, event: str, submission, **extra) -> None:
             except Exception:  # noqa: BLE001 - the step line is optional
                 _rollback(db)
             to = step_approver_emails(db, submission)
+        elif event == CLEAR_PENDING:
+            to = pick_recipients(approver_emails or [])
         else:
             to = requester_email(db, submission)
         if not to:
             log.info("finance email %s for %s: no recipient with an email", event, submission.form_id)
             return
         subject, html = render_event_email(event, ctx)
-        background_tasks.add_task(send_finance_email, to, subject, html)
+        # งานถึงมือบัญชี: CC กล่องบัญชี · อีเมลขออนุมัติ: CC ผู้เบิกให้รู้ว่าใบไปถึงใครแล้ว (ผู้ใช้สั่ง 20/10/2026)
+        if event in ACCOUNT_CC_EVENTS:
+            cc = [account_mailbox()]
+        elif event in APPROVER_EVENTS or event == CLEAR_PENDING:
+            try:
+                cc = requester_email(db, submission)
+            except Exception:  # noqa: BLE001 - the CC is optional, the approvers' email still goes
+                _rollback(db)
+                cc = None
+        else:
+            cc = None
+        background_tasks.add_task(send_finance_email, to, subject, html, cc=cc)
     except Exception:  # noqa: BLE001 - never break the request
         _rollback(db)
         log.exception("finance email %s could not be queued", event)

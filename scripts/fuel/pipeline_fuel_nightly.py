@@ -24,6 +24,7 @@ from pymongo import MongoClient  # noqa: E402
 
 from dates import ddmmyyyy  # noqa: E402
 from pipeline_fuel_events import run_day  # noqa: E402
+from besttech_derived import make_deriver  # noqa: E402
 from series_besttech import make_client, run_days  # noqa: E402
 from series_store import SERIES, count_series, ensure_indexes  # noqa: E402
 from series_terminus import ingest_terminus_day  # noqa: E402
@@ -90,7 +91,7 @@ def main() -> None:
                 result["besttech_catchup_skipped"] = "01:30 run still in progress"
             else:
                 try:
-                    result["besttech_catchup_docs"] = run_days(make_client(), db, [day])
+                    result["besttech_catchup_docs"] = run_days(make_client(), db, [day], derive=make_deriver(client, log))
                 except Exception as e:  # the events step must still run when Besttech is down
                     log.error("besttech catch-up failed: %s", e)
                     result["besttech_error"] = str(e)

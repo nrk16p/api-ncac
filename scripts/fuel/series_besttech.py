@@ -1,4 +1,5 @@
-"""fuel_series_besttech — Besttech per-vehicle /history → analytics.gps_series (spec §3.3, §3.5).
+"""fuel_series_besttech — Besttech per-vehicle /history → analytics.gps_series (spec §3.3, §3.5),
+plus engine-on (summary_engineon) and overspeed from the same raw points (besttech_derived).
 
 Default day = yesterday (Bangkok). START_DATE / END_DATE (dd/mm/YYYY) select a range.
 A day that already has docs for ≥ 90 % of the /track vehicle list is skipped unless FORCE=1,
@@ -14,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "engineon"))
 from common import MONGODB_URI, JobLog, log, yesterday_bkk  # noqa: E402
 from pymongo import MongoClient  # noqa: E402
 
+from besttech_derived import make_deriver  # noqa: E402
 from besttech_client import DEFAULT_BASE_URL, BesttechClient, BesttechError  # noqa: E402
 from dates import parse_days  # noqa: E402
 from plates import split_besttech_vehicle  # noqa: E402
@@ -113,7 +115,9 @@ def fetch_day(client: BesttechClient, day: date, track_vehicles: list[dict]) -> 
     return windows
 
 
-def run_days(client: BesttechClient, db, days: list[date], force: bool = False) -> int:
+def run_days(client: BesttechClient, db, days: list[date], force: bool = False, derive=None) -> int:
+    """derive(day, windows): optional hook that turns the raw points into engine-on + overspeed
+    (besttech_derived.make_deriver) before they are reduced to minute buckets."""
     track = client.track()
     if not track:   # an outage that answers "ok" with no vehicles must not log as success
         raise BesttechError("/track returned no vehicles")
@@ -125,8 +129,11 @@ def run_days(client: BesttechClient, db, days: list[date], force: bool = False) 
         if not force and track and count_series(db, key, SOURCE) >= COMPLETE_SHARE * len(track):
             log.info("besttech %s already complete — skipped", key)
             continue
-        docs = besttech_day_docs(day, track, fetch_day(client, day, track), tanks)
+        windows = fetch_day(client, day, track)
+        docs = besttech_day_docs(day, track, windows, tanks)
         written += upsert_series(db, docs)
+        if derive is not None:
+            derive(day, windows)
         log.info("besttech %s: %d docs", key, len(docs))
     return written
 
@@ -142,8 +149,9 @@ def main() -> None:
     start, end = os.getenv("START_DATE", yesterday), os.getenv("END_DATE", yesterday)
     job = JobLog("fuel_series_besttech", "fuel_series_besttech", {"start_date": start, "end_date": end})
     try:
-        db = MongoClient(MONGODB_URI)["analytics"]
-        written = run_days(make_client(), db, parse_days(start, end), force=os.getenv("FORCE") == "1")
+        mongo = MongoClient(MONGODB_URI)
+        written = run_days(make_client(), mongo["analytics"], parse_days(start, end),
+                           force=os.getenv("FORCE") == "1", derive=make_deriver(mongo, log))
         job.finish("success", records=written)
     except Exception as e:
         job.finish("failed", error=str(e))

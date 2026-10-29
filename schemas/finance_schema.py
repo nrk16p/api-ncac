@@ -62,7 +62,9 @@ class ClearIn(_Body):
     clear_date: date
     # Ignored: the server computes amount_actual = sum of net_amount over items.
     amount_actual: Optional[Decimal] = Field(default=None, max_digits=12, decimal_places=2)
-    items: list[ClearItemIn] = Field(min_length=1)
+    # ไม่ใส่ min_length: ถ้า Pydantic ดักเอง ผู้ใช้จะเห็นข้อความอังกฤษ
+    # ปล่อยให้ check_clear_items เป็นคนบอกด้วยข้อความไทย (UAT 19/10/2026)
+    items: list[ClearItemIn]
     clear_doc_no: Optional[str] = Field(default=None, max_length=100)
     settle_date: Optional[date] = None
     remark: Optional[str] = None
@@ -97,8 +99,28 @@ class ResubmitIn(_Body):
 class ConfirmIn(_Body):
     action_by: str
     clear_doc_no: Optional[str] = Field(default=None, max_length=100)
+    original_received_date: Optional[date] = None  # ติ๊กรับเอกสารตัวจริงแล้ว + วันที่รับ
     settle_date: Optional[date] = None
     expected_clear_submitted_at: Optional[datetime] = None
+
+
+class DocNumbersIn(_Body):
+    """การเงินแก้เลขเอกสารที่กรอกผิด (26/10/2026): ส่งเฉพาะช่องที่จะแก้ · เหตุผลไม่บังคับ"""
+    action_by: str
+    voucher_no: Optional[str] = Field(default=None, max_length=50)
+    payment_doc_no: Optional[str] = Field(default=None, max_length=50)
+    clear_doc_no: Optional[str] = Field(default=None, max_length=100)
+    remark: Optional[str] = Field(default=None, max_length=1000)
+
+
+class ClearApproveIn(_Body):
+    action_by: str
+    remark: Optional[str] = Field(default=None, max_length=500)
+
+
+class ClearRejectIn(_Body):
+    action_by: str
+    review_remark: Optional[str] = Field(default=None, max_length=500)  # ว่าง -> 400 ผ่าน check_reject
 
 
 class PayeeAccountCreate(_Body):

@@ -533,3 +533,39 @@ class TestCheckClearItems:
     def test_wht_equal_to_total_gives_zero_net(self):
         rows, total = L.check_clear_items([self.item(wht_amount="107")])
         assert rows[0]["net_amount"] == Decimal("0.00") and total == Decimal("0.00")
+
+
+class TestCheckDocNumbers:
+    """การเงินแก้เลขที่ตั้งเบิก / เลขที่ทำจ่าย / เลขที่เคลียร์ได้ทุกสถานะหลังตั้งเบิก รวมปิดรายการแล้ว (ผู้ใช้สั่ง 26/10/2026)"""
+    CUR = {"voucher_no": "PV-1", "payment_doc_no": "PAY-1", "clear_doc_no": None}
+
+    def test_returns_only_the_fields_that_change(self):
+        got = L.check_doc_numbers(L.AWAITING_CLEARING, self.CUR, {"voucher_no": " PV-9 ", "payment_doc_no": "PAY-1"}, remark="ผิด")
+        assert got == {"voucher_no": "PV-9"}
+
+    def test_reason_is_optional(self):
+        """ผู้ใช้สั่ง 26/10/2026: การเงินแก้เองได้ เก็บประวัติไว้พอ ไม่ต้องใส่เหตุผล"""
+        for remark in (None, "", "  "):
+            assert L.check_doc_numbers(L.AWAITING_CLEARING, self.CUR, {"voucher_no": "PV-9"}, remark=remark) == {"voucher_no": "PV-9"}
+
+    def test_a_number_not_entered_yet_cannot_be_edited(self):
+        with pytest.raises(L.InvalidTransition, match="ยังไม่มีเลขที่เอกสารเคลียร์เงิน"):
+            L.check_doc_numbers(L.AWAITING_CLEARING, self.CUR, {"clear_doc_no": "CL1"}, remark="x")
+
+    def test_nothing_changed(self):
+        with pytest.raises(L.AdvanceRuleError, match="ไม่มีเลขที่เปลี่ยน"):
+            L.check_doc_numbers(L.AWAITING_CLEARING, self.CUR, {"voucher_no": "PV-1"}, remark="x")
+
+    def test_clear_doc_no_keeps_its_format_rule(self):
+        cur = {**self.CUR, "clear_doc_no": "CL691000000001"}
+        with pytest.raises(L.AdvanceRuleError, match="ตัวเลขกับอักษรอังกฤษ"):
+            L.check_doc_numbers(L.CLOSED, cur, {"clear_doc_no": "CL-2"}, remark="x")
+        with pytest.raises(L.AdvanceRuleError, match="14 หลัก"):
+            L.check_doc_numbers(L.CLOSED, cur, {"clear_doc_no": "CL2"}, remark="x")
+        got = L.check_doc_numbers(L.CLOSED, cur, {"clear_doc_no": "CL691000000002"}, remark="x")
+        assert got == {"clear_doc_no": "CL691000000002"}
+
+    @pytest.mark.parametrize("status", [L.PENDING_APPROVAL, L.AWAITING_VOUCHER, L.RETURNED, L.REJECTED])
+    def test_only_after_the_voucher(self, status):
+        with pytest.raises(L.InvalidTransition):
+            L.check_doc_numbers(status, self.CUR, {"voucher_no": "PV-9"}, remark="x")

@@ -90,6 +90,12 @@ class FakeDB:
     def __init__(self):
         self.added, self.commits = [], 0
 
+    def query(self, _entity):  # สิทธิ์ตามหน้าที่ — ไม่มีแถว = ยังไม่ตั้งค่า ใช้กติกาเดิม
+        return self
+
+    def all(self):
+        return []
+
     def add(self, row):
         self.added.append(row)
 
@@ -133,7 +139,7 @@ def test_job_sends_only_due(monkeypatch):
 def _endpoint(monkeypatch, enabled, items=()):
     if enabled:
         monkeypatch.setenv("FINANCE_EMAIL_ENABLED", "true")
-    monkeypatch.setattr(ar, "require_finance", lambda db, emp: NS(employee_id=emp))
+    monkeypatch.setattr(ar, "require_finance", lambda db, emp: NS(employee_id=emp, department_id=6))
     monkeypatch.setattr(od, "load_overdue", lambda db, ids=None: (
         [i for i in items if ids is None or i["form_id"] in ids], TODAY))
 

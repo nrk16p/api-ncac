@@ -6,9 +6,9 @@ import time
 from dataclasses import dataclass, field
 
 from models.finance_model import FinApprovalTier
-from models.form_approver_department import FormApproverDepartment
+from models.form_approver_division import FormApproverDivision
 from models.master_model import FormApprovalLog, FormMaster, FormSubmission
-from models.user_model import Position, User
+from models.user_model import Department, Position, User
 from services.finance import advance_repo
 from services.finance import approval_logic as rules
 from services.finance.advance_logic import AdvanceRuleError
@@ -35,27 +35,29 @@ def list_tiers(db):
 
 
 def load_people(db):
-    rows = db.query(User, Position.position_level_id).outerjoin(
-        Position, Position.position_id == User.position_id).all()
+    rows = db.query(User, Position.position_level_id, Department.division_id).outerjoin(
+        Position, Position.position_id == User.position_id).outerjoin(
+        Department, Department.department_id == User.department_id).all()
     return {
         user.employee_id: {"employee_id": user.employee_id, "id": user.id, "level": level,
-                           "department_id": user.department_id, "active": user.employee_status == "Active"}
-        for user, level in rows if user.employee_id
+                           "department_id": user.department_id, "division_id": division_id,
+                           "site_id": user.site_id, "active": user.employee_status == "Active"}
+        for user, level, division_id in rows if user.employee_id
     }
 
 
 def load_mappings(db):
     mappings = {}
-    rows = db.query(FormApproverDepartment).filter(FormApproverDepartment.is_active == True).all()  # noqa: E712
+    rows = db.query(FormApproverDivision).filter(FormApproverDivision.is_active == True).all()  # noqa: E712
     for row in rows:
-        mappings.setdefault(row.employee_id, set()).add(row.department_id)
+        mappings.setdefault(row.employee_id, set()).add(row.division_id)
     return mappings
 
 
-# v3 §9: users/tiers/mappings change rarely, so the context is cached in-process for 60 s (level and department
+# v3 §9: users/tiers/mappings change rarely, so the context is cached in-process for 60 s (level, department and division
 # changes apply within a minute). One global entry (no key); the lock guards the swap, loading happens outside it.
 # The cached ApprovalContext is SHARED and READ-ONLY: never mutate tiers/people/mappings (copy first).
-# Authorization decisions (approve/reject) must use load_context(db, fresh=True); writers of approver-department
+# Authorization decisions (approve/reject) must use load_context(db, fresh=True); writers of approver-division
 # mappings / approval tiers must call clear_context_cache(); readers that look up a person use ensure_people().
 CONTEXT_TTL_SECONDS = 60
 _clock = time.monotonic
@@ -154,7 +156,8 @@ def record_approval(db, submission, approver_user_id, decision, remark=None):
         db.add(FormApprovalLog(
             submission_id=submission.id, level_no=skipped, action=rules.ACTION_APPROVED,
             action_by=approver_user_id,
-            remark=rules.skip_remark(skipped, step, decision["approver_level"], by_step[skipped]["required_level"])))
+            remark=rules.skip_note(by_step[skipped], step, decision["approver_level"],
+                                   decision.get("approver_employee_id"))))
     if decision["outcome"] == rules.OUTCOME_APPROVED:
         submission.status_approve = "Approved"
     else:
@@ -201,7 +204,7 @@ def suggested_approvers(db, submission) -> dict:
     state = rules.evaluate_step(info, ctx.people, ctx.mappings, requester_id, submission.current_approval_level,
                                 current_round_logs(db, submission.id))
     direct = rules.direct_approvers(ctx.people.values(), requester, state["required_level"], ctx.mappings,
-                                    state["excluded"])
+                                    state["excluded"], state.get("approver"))
     details = advance_repo.people_by_employee_id(db, [p["employee_id"] for p in direct])
     approvers = []
     for p in direct:
@@ -232,7 +235,8 @@ def pending_for(db, employee_id):
     subs = _in_progress_advances(db)
     ctx = ensure_people(db, load_context(db), employee_id, *[s.created_by for s in subs])
     approver = ctx.people.get(employee_id)
-    if approver is None or approver["level"] is None:
+    superadmin = rules.is_superadmin(employee_id)
+    if approver is None or (approver["level"] is None and not superadmin):
         return []
     ids = [s.id for s in subs]
     requests = advance_repo.request_values_by_submission(db, ids)
@@ -250,8 +254,10 @@ def pending_for(db, employee_id):
             continue
         state = rules.evaluate_step(result, ctx.people, ctx.mappings, sub.created_by, sub.current_approval_level,
                                     rounds.get(sub.id, []))
-        if not rules.can_approve(approver, requester, state["required_level"], ctx.mappings.get(employee_id, ()),
-                                 state["excluded"]):
+        normal = approver["level"] is not None and rules.may_approve(
+            ctx.people.values(), approver, requester, state["required_level"], ctx.mappings, state["excluded"],
+            state.get("approver"), state.get("stand_in_level"))
+        if not normal and not rules.superadmin_may_approve(employee_id, sub.created_by, requester):
             continue
         items.append({
             "form_id": sub.form_id,
@@ -267,6 +273,6 @@ def pending_for(db, employee_id):
             "total_steps": state["total_steps"],
             "step_required_level": state["required_level"],
             "step_label": state["label"],
-            "tab": rules.approval_tab(approver["level"], state["direct_level"]),
+            "tab": (rules.approval_tab(approver["level"], state["direct_level"]) if normal else rules.TAB_MINE),
         })
     return items
