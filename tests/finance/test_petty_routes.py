@@ -457,3 +457,12 @@ class TestCreateClaimRejections:
         assert exc.value.status_code == 422
         assert exc.value.detail["missing"][0]["key"] == "event_date"
         assert exc.value.detail["missing"][0]["line_no"] == 1
+
+
+class TestResubmitKeepsWhatTheScreenCannotSee:
+    """ปุ่ม "ส่งอีกครั้ง" ส่งใบเดิมกลับทั้งก้อน — ค่าที่ไม่ได้ส่งกลับไปให้หน้าจอจะหายตอน PUT"""
+
+    def test_wht_flag_comes_back_with_the_claim(self, db_session, fund, weigh_type, claim_payload, weigh_items,
+                                                 seq_stub, frozen_bkk):
+        claim = repo.create_claim(db_session, claim_payload(wht_applicable=True), weigh_items[:1], actor="55555")
+        assert R.get_claim(claim.form_id, db=db_session)["wht_applicable"] is True
