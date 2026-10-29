@@ -484,11 +484,39 @@ class TestRoundHistory:
         rows = {row["action"]: row for row in body["logs"]}
         assert rows["CLEAR_APPROVE"]["actor"] == "600100"
         assert rows["VOUCHER"]["actor_name"] == "บัญชี ตรวจดี"
-        assert rows["VOUCHER"]["remark"] == "เลขที่ตั้งเบิก PV-2 · วันที่ตั้งเบิก 29/10/2026"
+        # ขั้นตั้งเบิกโชว์เลขที่บันทึกตอนนั้น (PV-1) ค่าที่แก้ทีหลังอยู่ในแถวแก้เลขเอกสาร
+        assert rows["VOUCHER"]["remark"] == "เลขที่ตั้งเบิก PV-1 · วันที่ตั้งเบิก 29/10/2026"
         assert rows["EDIT_DOC_NUMBERS"]["remark"] == "เลขที่ตั้งเบิก: PV-1 → PV-2"
         assert rows["PAY"]["actor"] == "90001"
         assert rows["PAY"]["remark"] == "เลขที่ทำจ่าย PAY-1 · วันที่โอนเงิน 30/10/2026"
         assert rows["CLOSE"]["at"] == body["closed_at"]
+        assert body["voucher_no"] == "PV-2"  # ตัวรอบเองยังเป็นค่าล่าสุด
+
+    def test_steps_keep_the_numbers_saved_at_the_time_after_later_edits(self, db_session, claim,
+                                                                         vouchered_round):
+        R.pay_round(vouchered_round["id"], PayIn(employee_id="90001", pay_date="2026-10-30", pay_doc_no="PAY-1"),
+                    db_session)
+        _edit(vouchered_round["id"], db_session, voucher_no="PV-9", voucher_date="2026-10-31", pay_doc_no="PAY-9")
+        _edit(vouchered_round["id"], db_session, pay_doc_no="PAY-10")
+        body = R.get_round(vouchered_round["id"], employee_id=None, db=db_session)
+        rows = {row["action"]: row for row in body["logs"]}
+        assert rows["VOUCHER"]["remark"] == "เลขที่ตั้งเบิก PV-1 · วันที่ตั้งเบิก 29/10/2026"
+        assert rows["PAY"]["remark"] == "เลขที่ทำจ่าย PAY-1 · วันที่โอนเงิน 30/10/2026"
+        assert [r["action"] for r in body["logs"]].count("EDIT_DOC_NUMBERS") == 2
+        assert body["pay_doc_no"] == "PAY-10" and body["voucher_date"] == "2026-10-31"
+
+    def test_without_claim_logs_the_first_edit_tells_the_saved_number(self):
+        # รอบเก่าที่ไม่มี log ตั้งเบิก/จ่ายในใบ: ค่าตอนนั้น = ค่าเดิมของการแก้ครั้งแรก · ไม่เคยแก้ = ค่าบนรอบ
+        from datetime import date
+        saved = L.saved_doc_values(None, None, [
+            {"voucher_no": ["PV-1", "PV-2"], "voucher_date": ["2026-10-29", "2026-10-30"]},
+            {"voucher_no": ["PV-2", "PV-3"]},
+        ])
+        assert saved == {"voucher_no": "PV-1", "voucher_date": date(2026, 10, 29)}
+        saved = L.saved_doc_values({"voucher_no": None, "voucher_date": "2026-10-29"},
+                                   {"pay_date": "2026-10-30", "pay_doc_no": "PAY-1"}, [])
+        assert saved == {"voucher_no": None, "voucher_date": date(2026, 10, 29),
+                         "pay_date": date(2026, 10, 30), "pay_doc_no": "PAY-1"}
 
     def test_one_edit_shows_once_however_many_claims_the_round_has(self, db_session, fund, weigh_type,
                                                                    claim_payload, weigh_items, line,

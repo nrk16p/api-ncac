@@ -128,18 +128,59 @@ def _joined(*pairs) -> Optional[str]:
     return text or None
 
 
-def round_events(batch) -> list[dict]:
+def _as_date(value):
+    """ค่าวันที่ที่เก็บใน log เป็นสตริง ISO ("2026-10-29") — แปลงกลับเป็น date ให้แสดงแบบ 29/10/2026"""
+    if value in (None, "", "None"):
+        return None
+    if isinstance(value, str):
+        try:
+            return date.fromisoformat(value)
+        except ValueError:
+            return value
+    return value
+
+
+_DATE_KEYS = ("voucher_date", "pay_date")
+
+
+def saved_doc_values(voucher_changes: Optional[Mapping], pay_changes: Optional[Mapping],
+                     edit_changes: Iterable[Mapping]) -> dict:
+    """เลขเอกสารของรอบตามที่บันทึกตอนตั้งเบิก/จ่ายจริง — ปุ่มแก้เลขเอกสารเปลี่ยนค่าบนรอบได้ทีหลัง
+
+    ลำดับที่เชื่อ: log VOUCHER / PAY_CLOSE ของใบ (เก็บค่า ณ ตอนนั้น) → ค่าเดิมของการแก้ครั้งแรกของช่องนั้น
+    ช่องที่ไม่อยู่ในผลลัพธ์ = ใช้ค่าบนรอบได้เลย (ไม่เคยแก้)"""
+    out: dict = {}
+    for changes in edit_changes or ():
+        for key, pair in (changes or {}).items():
+            if key in ROUND_DOC_LABELS and key not in out and isinstance(pair, (list, tuple)) and pair:
+                out[key] = pair[0]
+    for source, keys in ((voucher_changes, ("voucher_no", "voucher_date")),
+                         (pay_changes, ("pay_doc_no", "pay_date"))):
+        for key in keys:
+            if source and key in source:
+                out[key] = source[key]
+    return {k: (_as_date(v) if k in _DATE_KEYS else (v or None)) for k, v in out.items()}
+
+
+def round_events(batch, saved: Optional[Mapping] = None) -> list[dict]:
     """ประวัติรอบจากช่องของรอบเอง {action, actor, at, remark} ตามลำดับขั้น — ช่องเวลาว่าง = ขั้นนั้นยังไม่เกิด
-    รอบมีแต่ละขั้นได้ครั้งเดียว (รอบที่ไม่อนุมัติจบเลย ใบไปเข้ารอบใหม่) จึงไม่ต้องมีตาราง log ของรอบ"""
+    รอบมีแต่ละขั้นได้ครั้งเดียว (รอบที่ไม่อนุมัติจบเลย ใบไปเข้ารอบใหม่) จึงไม่ต้องมีตาราง log ของรอบ
+
+    saved = เลขเอกสารตอนตั้งเบิก/จ่ายจริง (saved_doc_values) — ค่าบนรอบอาจถูกแก้ไปแล้ว"""
+    saved = saved or {}
+
+    def at_the_time(key):
+        return saved[key] if key in saved else getattr(batch, key)
+
     rejected = batch.status == BATCH_CLEAR_REJECTED
     steps = [
         ("SUBMIT_ROUND", batch.submitted_by, batch.submitted_at, batch.remark),
         ("CLEAR_REJECT" if rejected else "CLEAR_APPROVE", batch.clear_approved_by, batch.clear_approved_at,
          batch.clear_reject_reason if rejected else None),
         ("VOUCHER", batch.vouchered_by, batch.vouchered_at,
-         _joined(("เลขที่ตั้งเบิก", batch.voucher_no), ("วันที่ตั้งเบิก", batch.voucher_date))),
+         _joined(("เลขที่ตั้งเบิก", at_the_time("voucher_no")), ("วันที่ตั้งเบิก", at_the_time("voucher_date")))),
         ("PAY", batch.paid_by, batch.paid_at,
-         _joined(("เลขที่ทำจ่าย", batch.pay_doc_no), ("วันที่โอนเงิน", batch.pay_date))),
+         _joined(("เลขที่ทำจ่าย", at_the_time("pay_doc_no")), ("วันที่โอนเงิน", at_the_time("pay_date")))),
         ("CLOSE", batch.closed_by, batch.closed_at, None),
     ]
     return [{"action": action, "actor": actor, "at": at, "remark": remark}

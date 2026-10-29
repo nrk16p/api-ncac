@@ -449,10 +449,17 @@ def _utc(value):
 
 
 def _round_logs(db: Session, b) -> list[dict]:
-    """ประวัติรอบ เก่าสุดก่อน: ขั้นของรอบจากช่องของรอบเอง + การแก้เลขเอกสาร"""
-    events = L.round_events(b)
+    """ประวัติรอบ เก่าสุดก่อน: ขั้นของรอบจากช่องของรอบเอง + การแก้เลขเอกสาร
+    ขั้นตั้งเบิก/จ่ายโชว์เลขที่บันทึกตอนนั้น (จาก log ของใบ) ไม่ใช่ค่าที่แก้ทีหลัง"""
+    claim_logs = repo.round_claim_logs(db, b.id)
+    edits = [row for row in claim_logs if row.action == "EDIT_DOC_NUMBERS"]
+    voucher = next((row for row in claim_logs if row.action == "VOUCHER"), None)
+    pay = next((row for row in claim_logs if row.action == "PAY_CLOSE"), None)
+    saved = L.saved_doc_values(voucher.changes if voucher else None, pay.changes if pay else None,
+                               [row.changes for row in edits])
+    events = L.round_events(b, saved)
     events += [{"action": row.action, "actor": row.action_by, "at": row.created_at, "remark": row.remark}
-               for row in repo.round_doc_edits(db, b.id)]
+               for row in edits]
     events.sort(key=lambda e: _utc(e["at"]))  # sort คงลำดับเดิมเมื่อเวลาเท่ากัน (จ่ายเงินมาก่อนปิดรอบ)
     names = repo.employee_names(db, [e["actor"] for e in events])
     return [{"action": e["action"], "action_label": L.ROUND_LOG_LABELS.get(e["action"], e["action"]),

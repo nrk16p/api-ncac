@@ -474,14 +474,23 @@ def edit_doc_numbers(db: Session, batch: FinPettyBatch, actor: str, wanted: dict
     return batch
 
 
-def round_doc_edits(db: Session, batch_id: int) -> list[FinPettyLog]:
-    """การแก้เลขเอกสารของรอบ — ทุกใบในรอบได้ log ชุดเดียวกัน อ่านจากใบแรกพอ ไม่ต้องตัดตัวซ้ำ"""
+ROUND_LOG_ACTIONS = ("VOUCHER", "PAY_CLOSE", "EDIT_DOC_NUMBERS")
+
+
+def round_claim_logs(db: Session, batch_id: int, actions=ROUND_LOG_ACTIONS) -> list[FinPettyLog]:
+    """log ระดับรอบที่ลงซ้ำทุกใบ (ตั้งเบิก จ่าย แก้เลขเอกสาร) — อ่านจากใบแรกพอ ไม่ต้องตัดตัวซ้ำ
+    (ใบในรอบที่ตั้งเบิกแล้วไม่หลุดออกจากรอบอีก ใบแรกจึงมีครบทุกครั้ง)"""
     first = (db.query(func.min(FinPettyClaim.id)).filter(FinPettyClaim.batch_id == batch_id).scalar())
     if first is None:
         return []
     return (db.query(FinPettyLog)
-            .filter(FinPettyLog.claim_id == first, FinPettyLog.action == "EDIT_DOC_NUMBERS")
+            .filter(FinPettyLog.claim_id == first, FinPettyLog.action.in_(actions))
             .order_by(FinPettyLog.id).all())
+
+
+def round_doc_edits(db: Session, batch_id: int) -> list[FinPettyLog]:
+    """การแก้เลขเอกสารของรอบ เก่าสุดก่อน"""
+    return round_claim_logs(db, batch_id, ("EDIT_DOC_NUMBERS",))
 
 
 def set_dd(db: Session, claim: FinPettyClaim, dd_no: str, actor: str) -> FinPettyClaim:
