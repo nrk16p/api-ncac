@@ -113,6 +113,7 @@ from routes.incident_analytics import router as incident_analytics_router
 from routes.finance.advance_routes import router as finance_router
 from routes.finance.payee_routes import router as finance_payee_router
 from routes.ops.ops_routes import router as ops_router
+from routes.access_review.access_review_routes import router as access_review_router
 
 
 # ------------------------------
@@ -185,6 +186,9 @@ app.include_router(finance_payee_router)
 
 # Group OPS — project requests / issues / tasks
 app.include_router(ops_router)
+
+# Access Review — ทบทวนสิทธิ์ผู้ใช้ (ATMS / Winspeed / Email group)
+app.include_router(access_review_router)
 
 # ------------------------------
 # 🚨 Forms Order (สำคัญ) 
