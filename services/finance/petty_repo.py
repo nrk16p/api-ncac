@@ -332,13 +332,39 @@ def round_claims(db: Session, batch_id: int) -> list[FinPettyClaim]:
 
 
 def list_rounds(db: Session, *, fund_ids: Optional[list[int]] = None, status: Optional[str] = None,
-                limit: int = 50, offset: int = 0) -> list[FinPettyBatch]:
+                cleared_by: Optional[str] = None, limit: int = 50, offset: int = 0) -> list[FinPettyBatch]:
+    """รอบใหม่สุดก่อน · cleared_by = รอบที่คนนั้นอนุมัติ/ไม่อนุมัติเคลียร์ไปแล้ว (เก็บใน clear_approved_by ทั้งคู่)
+    เรียงตามเวลาที่ตัดสิน ล่าสุดก่อน"""
     q = db.query(FinPettyBatch)
     if fund_ids is not None:
         q = q.filter(FinPettyBatch.fund_id.in_(fund_ids or [-1]))
     if status:
         q = q.filter(FinPettyBatch.status.in_([x for x in status.split(",") if x]))
-    return q.order_by(FinPettyBatch.id.desc()).offset(offset).limit(limit).all()
+    if cleared_by:
+        q = q.filter(FinPettyBatch.clear_approved_by == cleared_by,
+                     FinPettyBatch.status != L.BATCH_CLEAR_PENDING)
+        q = q.order_by(FinPettyBatch.clear_approved_at.desc(), FinPettyBatch.id.desc())
+    else:
+        q = q.order_by(FinPettyBatch.id.desc())
+    return q.offset(offset).limit(limit).all()
+
+
+def funds_by_id(db: Session, fund_ids) -> dict[int, FinPettyFund]:
+    """กองทุนของหลายรอบในคำสั่งเดียว (รายการรอบไม่ต้องดึงทีละแถว)"""
+    wanted = {i for i in fund_ids if i is not None}
+    if not wanted:
+        return {}
+    return {f.id: f for f in db.query(FinPettyFund).filter(FinPettyFund.id.in_(wanted)).all()}
+
+
+def round_claim_counts(db: Session, batch_ids) -> dict[int, int]:
+    """จำนวนใบของหลายรอบด้วย count เดียว ไม่ต้องโหลดใบทั้งรอบมานับ · รอบที่ไม่มีใบ = ไม่มีคีย์"""
+    wanted = {i for i in batch_ids if i is not None}
+    if not wanted:
+        return {}
+    rows = (db.query(FinPettyClaim.batch_id, func.count(FinPettyClaim.id))
+            .filter(FinPettyClaim.batch_id.in_(wanted)).group_by(FinPettyClaim.batch_id).all())
+    return {batch_id: count for batch_id, count in rows}
 
 
 def rounds_with_doc_no(db: Session, field: str, value: str, exclude_id: Optional[int] = None) -> list[str]:

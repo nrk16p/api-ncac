@@ -420,7 +420,8 @@ def _iso(value):
     return value.isoformat() if value is not None else None
 
 
-def _round_dict(db: Session, b, fund=None, claims=None, names: dict | None = None) -> dict:
+def _round_dict(db: Session, b, fund=None, claims=None, names: dict | None = None,
+                claim_count: Optional[int] = None) -> dict:
     fund = fund or repo.get_fund(db, b.fund_id)
     holder = fund.holder_employee_id if fund else None
     names = names if names is not None else repo.employee_names(
@@ -443,7 +444,20 @@ def _round_dict(db: Session, b, fund=None, claims=None, names: dict | None = Non
     }
     if claims is not None:
         body["claim_count"] = len(claims)
+    elif claim_count is not None:
+        body["claim_count"] = claim_count
     return body
+
+
+def _round_rows(db: Session, batches) -> list[dict]:
+    """แถวของรายการรอบ — กองทุน ชื่อ และจำนวนใบดึงทีเดียวทั้งหน้า (เดิมดึงทีละแถว)"""
+    funds = repo.funds_by_id(db, {b.fund_id for b in batches})
+    counts = repo.round_claim_counts(db, [b.id for b in batches])
+    holders = [funds[b.fund_id].holder_employee_id for b in batches if b.fund_id in funds]
+    names = repo.employee_names(db, holders + [x for b in batches for x in (
+        b.submitted_by, b.clear_approved_by, b.vouchered_by, b.paid_by)])
+    return [_round_dict(db, b, fund=funds.get(b.fund_id), names=names, claim_count=counts.get(b.id, 0))
+            for b in batches]
 
 
 def _utc(value):
@@ -521,10 +535,16 @@ def _clear_roles(db: Session, batch, employee_id: str, fresh: bool = True) -> tu
     if fund is None:
         return False, False
     people, mappings = repo.line_context(db, fresh=fresh)
-    required = batch.clear_required_level or _required_level(people, fund.holder_employee_id)
-    if not clear.can_clear(people, mappings, fund.holder_employee_id, required, employee_id):
+    return _clear_roles_in(people, mappings, fund.holder_employee_id, batch.clear_required_level, employee_id)
+
+
+def _clear_roles_in(people: dict, mappings: dict, holder_id: Optional[str], required_level: Optional[int],
+                    employee_id: str) -> tuple[bool, bool]:
+    """แกนของ _clear_roles ที่ไม่แตะ DB — คิวหัวหน้าเรียกซ้ำได้ทุกรอบโดยโหลดสายงานครั้งเดียว"""
+    required = required_level or _required_level(people, holder_id)
+    if not clear.can_clear(people, mappings, holder_id, required, employee_id):
         return False, False
-    heads = clear.clear_notify(people, mappings, fund.holder_employee_id, required)
+    heads = clear.clear_notify(people, mappings, holder_id, required)
     return True, any(str(p.get("employee_id")) == str(employee_id) for p in heads)
 
 
@@ -575,30 +595,50 @@ def create_round(payload: RoundIn, db: Session = Depends(get_db), background: Ba
     return _round_out(db, batch)
 
 
+# ขอบเขตกันหลุดของคิวรออนุมัติเคลียร์ (กรองสิทธิ์ใน Python ก่อนตัดหน้า) — ปกติค้างพร้อมกันไม่กี่สิบรอบ
+CLEAR_QUEUE_CAP = 2000
+
+
 @router.get("/batches")
 def list_rounds(fund_id: Optional[int] = None, status: Optional[str] = None, holder: Optional[str] = None,
-                clear_approver: Optional[str] = None, limit: int = Query(default=50, le=200), offset: int = 0,
+                clear_approver: Optional[str] = None, cleared_by: Optional[str] = None,
+                limit: int = Query(default=50, le=200), offset: int = 0,
                 db: Session = Depends(get_db)):
-    """holder = รอบของกองทุนที่คนนั้นถือ · clear_approver = รอบที่คนนั้นอนุมัติเคลียร์ได้ · status คั่นด้วย ,"""
+    """holder = รอบของกองทุนที่คนนั้นถือ · clear_approver = รอบที่คนนั้นอนุมัติเคลียร์ได้ · status คั่นด้วย ,
+    cleared_by = รอบที่คนนั้นอนุมัติ/ไม่อนุมัติเคลียร์ไปแล้ว ตัดสินล่าสุดก่อน (แถบ อนุมัติ/ไม่อนุมัติแล้ว ของหัวหน้า)"""
     fund_ids = None
     if holder:
         fund_ids = [f.id for f in repo.list_funds(db, holder=holder, active_only=False)]
     if fund_id:
         fund_ids = [fund_id] if fund_ids is None else [x for x in fund_ids if x == fund_id]
-    if clear_approver:
-        status = L.BATCH_CLEAR_PENDING
-    rows = repo.list_rounds(db, fund_ids=fund_ids, status=status, limit=limit, offset=offset)
-    out = []
-    for b in rows:
-        if clear_approver:
-            may, primary = _clear_roles(db, b, clear_approver, fresh=False)
-            if not may:
-                continue
-        body = _round_dict(db, b, claims=repo.round_claims(db, b.id))
-        if clear_approver:
-            body["is_primary"] = primary  # แถบรอฉันอนุมัติ / อนุมัติแทนได้
-        out.append(body)
+    if not clear_approver:
+        rows = repo.list_rounds(db, fund_ids=fund_ids, status=status, cleared_by=cleared_by,
+                                limit=limit, offset=offset)
+        return _round_rows(db, rows)
+
+    # คิวหัวหน้า: กรองสิทธิ์ก่อนแล้วค่อยตัดหน้า ไม่งั้นหน้าแรกว่างได้ทั้งที่มีรอบรอคนนี้อยู่
+    pending = repo.list_rounds(db, fund_ids=fund_ids, status=L.BATCH_CLEAR_PENDING, cleared_by=cleared_by,
+                               limit=CLEAR_QUEUE_CAP, offset=0)
+    funds = repo.funds_by_id(db, {b.fund_id for b in pending})
+    people, mappings = repo.line_context(db, fresh=False)
+    roles: dict = {}  # สิทธิ์ขึ้นกับเจ้าของเงินสดกับระดับที่ต้องใช้ ไม่ใช่ตัวรอบ คิดครั้งเดียวต่อคู่
+    mine = []
+    for b in pending:
+        fund = funds.get(b.fund_id)
+        if fund is None:
+            continue
+        key = (fund.holder_employee_id, b.clear_required_level)
+        if key not in roles:
+            roles[key] = _clear_roles_in(people, mappings, fund.holder_employee_id, b.clear_required_level,
+                                         clear_approver)
+        if roles[key][0]:
+            mine.append((b, roles[key][1]))
+    page = mine[offset:offset + limit]
+    out = _round_rows(db, [b for b, _ in page])
+    for body, (_, primary) in zip(out, page):
+        body["is_primary"] = primary  # แถบรอฉันอนุมัติ / อนุมัติแทนได้
     return out
+
 
 
 @router.get("/batches/duplicate-doc-no")

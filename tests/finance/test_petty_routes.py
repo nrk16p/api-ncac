@@ -274,6 +274,135 @@ class TestHeadClearing:
         assert exc.value.status_code == 404
 
 
+class TestRoundListPagingAndCost:
+    """รายการรอบ: คิวหัวหน้ากรองสิทธิ์ก่อนตัดหน้า (ไม่งั้นหน้าแรกว่างทั้งที่มีรอบรออยู่)
+    และจำนวน query ไม่โตตามจำนวนแถว (เดิมดึงกองทุน ชื่อ และใบทั้งรอบทีละแถว)"""
+
+    @pytest.fixture
+    def two_funds(self, db_session, fund, line):
+        """กองทุน 12345 (600100 อนุมัติเคลียร์ได้) กับกองทุน 70000 แผนกอื่น (600100 กดไม่ได้)
+        รอบ A1 A2 ของกองแรก แล้วตามด้วยรอบ B1 B2 ของกองที่สอง — รอบใหม่สุดจึงเป็นของกองที่ 600100 กดไม่ได้"""
+        from models.finance_petty_model import FinPettyBatch, FinPettyFund
+        line["70000"] = _person("70000", 9, HOLDER_LEVEL, dept=99, division=99)
+        other = FinPettyFund(branch_code="02", division_code="C01", holder_employee_id="70000")
+        db_session.add(other)
+        db_session.commit()
+        rows = {}
+        for name, f in (("A1", fund), ("A2", fund), ("B1", other), ("B2", other)):
+            rows[name] = FinPettyBatch(fund_id=f.id, batch_no=f"X-{name}", status="CLEAR_PENDING",
+                                       clear_required_level=5)
+            db_session.add(rows[name])
+            db_session.commit()
+        return rows
+
+    def _queue(self, db_session, emp, limit, offset):
+        return R.list_rounds(fund_id=None, status=None, holder=None, clear_approver=emp,
+                             limit=limit, offset=offset, db=db_session)
+
+    def test_head_queue_pages_over_the_rounds_they_may_clear(self, db_session, two_funds):
+        assert [r["batch_no"] for r in self._queue(db_session, "600100", 1, 0)] == ["X-A2"]
+        assert [r["batch_no"] for r in self._queue(db_session, "600100", 1, 1)] == ["X-A1"]
+        assert self._queue(db_session, "600100", 1, 2) == []
+        assert [r["batch_no"] for r in self._queue(db_session, "600100", 50, 0)] == ["X-A2", "X-A1"]
+
+    def test_claim_count_comes_from_a_count(self, db_session, claim, sent_round):
+        [row] = R.list_rounds(fund_id=None, status=None, holder=None, clear_approver=None,
+                              limit=50, offset=0, db=db_session)
+        assert row["claim_count"] == 1 and row["id"] == sent_round["id"]
+
+    def test_row_shape_is_unchanged(self, db_session, claim, sent_round):
+        [row] = R.list_rounds(fund_id=None, status=None, holder=None, clear_approver=None,
+                              limit=50, offset=0, db=db_session)
+        detail = R.get_round(sent_round["id"], employee_id=None, db=db_session)
+        assert set(row) == set(detail) - {"logs", "claims"}
+        assert row == {k: detail[k] for k in row}
+
+    def _count_queries(self, db_session, call):
+        from sqlalchemy import event
+        seen = []
+
+        def count(*args, **kwargs):
+            seen.append(1)
+
+        engine = db_session.get_bind()
+        event.listen(engine, "before_cursor_execute", count)
+        try:
+            call()
+        finally:
+            event.remove(engine, "before_cursor_execute", count)
+        return len(seen)
+
+    def test_query_count_does_not_grow_with_the_rows(self, db_session, two_funds):
+        from models.finance_petty_model import FinPettyBatch
+
+        def plain():
+            return R.list_rounds(fund_id=None, status=None, holder=None, clear_approver=None,
+                                 limit=50, offset=0, db=db_session)
+
+        def queue():
+            return self._queue(db_session, "600100", 50, 0)
+
+        before = (self._count_queries(db_session, plain), self._count_queries(db_session, queue))
+        fund_id = two_funds["A1"].fund_id
+        for n in range(6):
+            db_session.add(FinPettyBatch(fund_id=fund_id, batch_no=f"X-M{n}", status="CLEAR_PENDING",
+                                         clear_required_level=5, submitted_by="12345"))
+        db_session.commit()
+        after = (self._count_queries(db_session, plain), self._count_queries(db_session, queue))
+        assert len(plain()) == 10 and len(queue()) == 8
+        assert after == before
+
+
+class TestRoundsTheHeadAlreadyDecided:
+    """แถบ "อนุมัติ/ไม่อนุมัติแล้ว" ของหัวหน้า: cleared_by = รอบที่คนนั้นตัดสินไปแล้ว
+    (คนไม่อนุมัติก็เก็บใน clear_approved_by) · ตัดสินล่าสุดก่อน · หน้าตาแถวเดียวกับรายการรอบ"""
+
+    @pytest.fixture
+    def decided(self, db_session, fund):
+        from datetime import datetime, timezone
+        from models.finance_petty_model import FinPettyBatch
+
+        def at(day):
+            return datetime(2026, 10, day, 9, 0, tzinfo=timezone.utc)
+
+        specs = [
+            ("D-OLD", "CLOSED", "600100", at(1)),
+            ("D-APPROVED", "AWAITING_REVIEW", "600100", at(5)),
+            ("D-REJECTED", "CLEAR_REJECTED", "600100", at(9)),
+            ("D-PENDING", "CLEAR_PENDING", None, None),
+            ("D-ODD", "CLEAR_PENDING", "600100", at(10)),  # ยังรออยู่ ไม่นับว่าตัดสินแล้ว
+            ("D-OTHER", "REVIEWED", "590100", at(7)),
+        ]
+        for no, status, by, when in specs:
+            db_session.add(FinPettyBatch(fund_id=fund.id, batch_no=no, status=status, clear_required_level=5,
+                                         clear_approved_by=by, clear_approved_at=when))
+            db_session.commit()
+
+    def _list(self, db_session, limit=50, offset=0, **kw):
+        return R.list_rounds(fund_id=kw.get("fund_id"), status=kw.get("status"), holder=None,
+                             clear_approver=None, cleared_by=kw.get("cleared_by", "600100"),
+                             limit=limit, offset=offset, db=db_session)
+
+    def test_approved_and_rejected_rounds_latest_decision_first(self, db_session, decided):
+        assert [r["batch_no"] for r in self._list(db_session)] == ["D-REJECTED", "D-APPROVED", "D-OLD"]
+
+    def test_pages_with_limit_and_offset(self, db_session, decided):
+        assert [r["batch_no"] for r in self._list(db_session, limit=2)] == ["D-REJECTED", "D-APPROVED"]
+        assert [r["batch_no"] for r in self._list(db_session, limit=2, offset=2)] == ["D-OLD"]
+
+    def test_status_filter_still_applies(self, db_session, decided):
+        assert [r["batch_no"] for r in self._list(db_session, status="CLEAR_REJECTED")] == ["D-REJECTED"]
+
+    def test_someone_who_decided_nothing_gets_nothing(self, db_session, decided):
+        assert self._list(db_session, cleared_by="600200") == []
+
+    def test_same_row_shape_as_the_plain_list(self, db_session, decided):
+        plain = R.list_rounds(fund_id=None, status=None, holder=None, clear_approver=None,
+                              limit=50, offset=0, db=db_session)
+        mine = self._list(db_session)
+        assert set(mine[0]) == set(plain[0]) and "is_primary" not in mine[0]
+
+
 class TestHolderBankAccountForThePayBox:
     """กล่องจ่ายเงินของรอบต้องเห็นบัญชีของเจ้าของเงินสด · BE ไม่มี auth จึงส่งเฉพาะ GET รายละเอียดรอบ
     และเฉพาะคนดูที่เป็นฝ่ายการเงิน/บัญชี (FINANCE_DEPARTMENT_IDS ค่าเริ่มต้น 4,6) เจ้าของเงินสดเอง หรือ superadmin
