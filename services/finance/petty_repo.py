@@ -326,6 +326,16 @@ def _set_round_status(db: Session, batch: FinPettyBatch, target: str) -> None:
     batch.status = target
 
 
+def _last_round_number(db: Session, branch: str, division: str, yymm: int) -> int:
+    """เลขรอบสูงสุดของ สาขา-แผนก-เดือน นี้ ทุกกองทุนรวมกัน
+    เลขรอบ unique ทั้งตาราง แต่กองทุนซ้ำสาขา+แผนกได้เมื่อกองเก่าปิดแล้ว จึงนับต่อกองทุนไม่ได้"""
+    prefix = L.batch_no(branch, division, yymm, 0)[:-1]  # "LB-B02-2610-B"
+    rows = db.query(FinPettyBatch.batch_no).filter(FinPettyBatch.batch_no.like(f"{prefix}%")).all()
+    numbers = [int(no[len(prefix):]) for (no,) in rows
+               if no.startswith(prefix) and no[len(prefix):].isdigit()]
+    return max(numbers, default=0)
+
+
 def create_round(db: Session, fund_id: int, claim_ids: list[int], actor: str, remark: Optional[str],
                  required_level: int) -> FinPettyBatch:
     """เจ้าของเงินสดรวมใบที่อนุมัติจ่ายแล้วของกองทุนตัวเองเป็นรอบ ส่งให้หัวหน้าอนุมัติเคลียร์"""
@@ -344,13 +354,10 @@ def create_round(db: Session, fund_id: int, claim_ids: list[int], actor: str, re
                 f"ยังส่งเคลียร์ไม่ได้", 409)
 
     yymm = _yymm_bkk()
-    used = (db.query(func.count(FinPettyBatch.id))
-            .filter(FinPettyBatch.fund_id == fund_id,
-                    FinPettyBatch.batch_no.like(f"%-{yymm:04d}-B%"))
-            .scalar() or 0)
     batch = FinPettyBatch(
         fund_id=fund_id, remark=remark, status=L.BATCH_CLEAR_PENDING,
-        batch_no=L.batch_no(fund.branch_code, fund.division_code, yymm, used + 1),
+        batch_no=L.batch_no(fund.branch_code, fund.division_code, yymm,
+                            _last_round_number(db, fund.branch_code, fund.division_code, yymm) + 1),
         total_amount=sum((c.amount for c in claims), _ZERO),
         submitted_by=actor, submitted_at=datetime.now(timezone.utc), clear_required_level=required_level,
     )

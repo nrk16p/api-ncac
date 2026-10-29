@@ -48,6 +48,28 @@ class TestCreateRound:
         second = _round(db_session, fund, [approved()])
         assert first.batch_no == "LB-B02-2610-B1" and second.batch_no == "LB-B02-2610-B2"
 
+    def test_round_number_runs_per_branch_division_not_per_fund(self, db_session, fund, approved,
+                                                                claim_payload, weigh_items):
+        # เลขรอบ unique ทั้งตาราง แต่กองทุนซ้ำสาขา+แผนกได้เมื่อกองเก่าปิดไปแล้ว (เปลี่ยนเจ้าของเงินสด)
+        # เดิมนับรอบต่อกองทุน กองใหม่จึงได้ B1 ชนกับรอบของกองเก่า
+        _round(db_session, fund, [approved()])
+        fund.is_active = False
+        newer = FinPettyFund(branch_code="03", division_code="B02", holder_employee_id="22222")
+        db_session.add(newer)
+        db_session.commit()
+        claim = repo.create_claim(db_session, claim_payload(fund_id=newer.id), weigh_items, actor="55555")
+        repo.set_status(db_session, claim, L.APPROVED, "22222", "APPROVE")
+        batch = repo.create_round(db_session, newer.id, [claim.id], actor="22222", remark=None, required_level=5)
+        assert batch.batch_no == "LB-B02-2610-B2"
+
+    def test_round_number_follows_the_highest_not_the_count(self, db_session, fund, approved):
+        from models.finance_petty_model import FinPettyBatch
+        db_session.add(FinPettyBatch(fund_id=fund.id, batch_no="LB-B02-2610-B7", status="CLOSED"))
+        db_session.add(FinPettyBatch(fund_id=fund.id, batch_no="LB-B02-2609-B9", status="CLOSED"))
+        db_session.add(FinPettyBatch(fund_id=fund.id, batch_no="LB-B021-2610-B5", status="CLOSED"))
+        db_session.commit()
+        assert _round(db_session, fund, [approved()]).batch_no == "LB-B02-2610-B8"
+
     def test_claim_not_yet_approved_is_rejected(self, db_session, fund, claim_payload, weigh_items,
                                                 seq_stub, frozen_bkk):
         claim = repo.create_claim(db_session, claim_payload(), weigh_items, actor="55555")
