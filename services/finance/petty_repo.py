@@ -325,6 +325,15 @@ def list_rounds(db: Session, *, fund_ids: Optional[list[int]] = None, status: Op
     return q.order_by(FinPettyBatch.id.desc()).offset(offset).limit(limit).all()
 
 
+def rounds_with_doc_no(db: Session, field: str, value: str, exclude_id: Optional[int] = None) -> list[str]:
+    """เลขรอบอื่นที่ใช้เลขเอกสารนี้ (ไม่สนตัวพิมพ์ใหญ่เล็ก ตัดช่องว่างหัวท้าย) · field ต้องผ่านการกรองมาแล้ว"""
+    column = getattr(FinPettyBatch, field)
+    q = db.query(FinPettyBatch.batch_no).filter(func.upper(func.trim(column)) == value.strip().upper())
+    if exclude_id:
+        q = q.filter(FinPettyBatch.id != exclude_id)
+    return [no for (no,) in q.order_by(FinPettyBatch.batch_no).limit(10).all()]
+
+
 def _set_round_status(db: Session, batch: FinPettyBatch, target: str) -> None:
     L.assert_batch_transition(batch.status, target)
     batch.status = target

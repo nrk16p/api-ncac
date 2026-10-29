@@ -385,6 +385,50 @@ class TestDuplicateCheckEndpoint:
         assert exc.value.status_code == 400
 
 
+class TestRoundDocNumberDuplicates:
+    """เตือนเลขที่ตั้งเบิก / เลขที่ทำจ่ายซ้ำกับรอบอื่นแบบ Advance — เตือนอย่างเดียว ไม่บล็อก"""
+
+    @pytest.fixture
+    def rounds(self, db_session, fund):
+        from models.finance_petty_model import FinPettyBatch
+        rows = [FinPettyBatch(fund_id=fund.id, batch_no="LB-B02-2610-B1", status="CLOSED",
+                              voucher_no="pv-6910-001", pay_doc_no="PAY-1"),
+                FinPettyBatch(fund_id=fund.id, batch_no="LB-B02-2610-B2", status="VOUCHERED",
+                              voucher_no=" PV-6910-001 "),
+                FinPettyBatch(fund_id=fund.id, batch_no="LB-B02-2610-B3", status="VOUCHERED",
+                              voucher_no="PV-6910-002")]
+        db_session.add_all(rows)
+        db_session.commit()
+        return rows
+
+    def test_route_is_matched_before_the_batch_id_route(self):
+        paths = [r.path for r in R.router.routes]
+        assert paths.index("/finance/petty/batches/duplicate-doc-no") < \
+               paths.index("/finance/petty/batches/{batch_id}")
+
+    def test_finds_other_rounds_ignoring_case_and_spaces(self, db_session, rounds):
+        out = R.round_duplicate_doc_no(field="voucher_no", value="  Pv-6910-001", exclude_id=rounds[2].id,
+                                       db=db_session)
+        assert out["batch_nos"] == ["LB-B02-2610-B1", "LB-B02-2610-B2"]
+
+    def test_the_round_being_edited_is_left_out(self, db_session, rounds):
+        out = R.round_duplicate_doc_no(field="voucher_no", value="PV-6910-001", exclude_id=rounds[1].id,
+                                       db=db_session)
+        assert out["batch_nos"] == ["LB-B02-2610-B1"]
+
+    def test_pay_doc_no_is_checked_too(self, db_session, rounds):
+        out = R.round_duplicate_doc_no(field="pay_doc_no", value="pay-1", exclude_id=None, db=db_session)
+        assert out["batch_nos"] == ["LB-B02-2610-B1"]
+
+    def test_blank_value_finds_nothing(self):
+        assert R.round_duplicate_doc_no(field="voucher_no", value="  ", exclude_id=None, db=None)["batch_nos"] == []
+
+    def test_other_fields_are_refused(self):
+        with pytest.raises(HTTPException) as exc:
+            R.round_duplicate_doc_no(field="batch_no", value="x", exclude_id=None, db=None)
+        assert exc.value.status_code == 400
+
+
 class TestReviewGate:
     def test_accounting_cannot_pass_a_claim_that_is_not_awaiting_review(self, db_session, claim):
         with pytest.raises(HTTPException) as exc:

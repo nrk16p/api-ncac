@@ -81,6 +81,9 @@ BATCH_ALLOWED = {
     BATCH_CLOSED: (),
 }
 
+# เลขเอกสารของรอบที่เช็กซ้ำได้ (เตือนอย่างเดียว เหมือน Advance)
+ROUND_DOC_NO_FIELDS = ("voucher_no", "pay_doc_no")
+
 MANAGER_LEVEL = 5
 TOP_LEVEL = 9
 

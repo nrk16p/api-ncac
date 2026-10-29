@@ -556,6 +556,19 @@ def list_rounds(fund_id: Optional[int] = None, status: Optional[str] = None, hol
     return out
 
 
+@router.get("/batches/duplicate-doc-no")
+def round_duplicate_doc_no(field: str, value: str, exclude_id: Optional[int] = None,
+                           db: Session = Depends(get_db)):
+    """รอบอื่นที่ใช้เลขที่ตั้งเบิก / เลขที่ทำจ่ายเดียวกัน — หน้าเว็บถามก่อนบันทึกแบบ Advance
+    เตือนอย่างเดียว ไม่บล็อก · ต้องประกาศก่อน /batches/{batch_id} ไม่งั้นโดนจับไปเป็นเลขรอบ"""
+    if field not in L.ROUND_DOC_NO_FIELDS:
+        raise HTTPException(status_code=400, detail="ช่องนี้เช็กเลขซ้ำไม่ได้")
+    text = (value or "").strip()
+    if not text:
+        return {"field": field, "value": text, "batch_nos": []}
+    return {"field": field, "value": text, "batch_nos": repo.rounds_with_doc_no(db, field, text, exclude_id)}
+
+
 @router.get("/batches/{batch_id}")
 def get_round(batch_id: int, employee_id: Optional[str] = None, db: Session = Depends(get_db)):
     """รอบ + ใบทั้งหมดในรอบ · ส่ง employee_id มาเพื่อรู้ว่าคนนั้นกดอนุมัติเคลียร์ได้ไหม (can_clear)"""
