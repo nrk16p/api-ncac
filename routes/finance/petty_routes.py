@@ -398,7 +398,9 @@ def review_claim(form_id: str, payload: ReviewIn, db: Session = Depends(get_db))
 from decimal import Decimal  # noqa: E402
 
 from models.finance_petty_model import FinPettyBatch  # noqa: E402
-from schemas.finance_petty_schema import PayIn, RoundActionIn, RoundIn, RoundRejectIn, VoucherIn  # noqa: E402
+from schemas.finance_petty_schema import (  # noqa: E402
+    DocNumbersIn, PayIn, RoundActionIn, RoundIn, RoundRejectIn, VoucherIn,
+)
 from services.finance import petty_clear as clear  # noqa: E402
 
 
@@ -632,6 +634,24 @@ def pay_round(batch_id: int, payload: PayIn, db: Session = Depends(get_db)):
     batch = _round_or_404(db, batch_id)
     try:
         out = repo.pay_round(db, batch, payload.employee_id, payload.pay_date, _doc_no(payload.pay_doc_no))
+    except L.PettyRuleError as exc:
+        raise _rule_error(exc)
+    return _round_out(db, out)
+
+
+@router.post("/batches/{batch_id}/doc-numbers")
+def edit_round_doc_numbers(batch_id: int, payload: DocNumbersIn, db: Session = Depends(get_db)):
+    """แก้เลขที่ตั้งเบิก / วันที่ตั้งเบิก / เลขที่ทำจ่ายที่พิมพ์ผิด แบบปุ่มแก้ไขเลขเอกสารของ Advance
+    ตั้งเบิกแล้วแก้ได้แค่ของตั้งเบิก · จ่ายแล้วแก้เลขที่ทำจ่ายได้ด้วย · สถานะรอบไม่เปลี่ยน"""
+    batch = _round_or_404(db, batch_id)
+    sent = payload.model_fields_set
+    wanted = {key: _doc_no(getattr(payload, key)) for key in ("voucher_no", "pay_doc_no") if key in sent}
+    if "voucher_date" in sent:
+        if payload.voucher_date is None:
+            raise HTTPException(status_code=422, detail="วันที่ตั้งเบิกต้องมี ลบออกไม่ได้")
+        wanted["voucher_date"] = payload.voucher_date
+    try:
+        out = repo.edit_doc_numbers(db, batch, payload.employee_id, wanted)
     except L.PettyRuleError as exc:
         raise _rule_error(exc)
     return _round_out(db, out)

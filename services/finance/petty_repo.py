@@ -452,6 +452,28 @@ def pay_round(db: Session, batch: FinPettyBatch, actor: str, pay_date,
     return batch
 
 
+def edit_doc_numbers(db: Session, batch: FinPettyBatch, actor: str, wanted: dict) -> FinPettyBatch:
+    """แก้เลขเอกสารที่พิมพ์ผิดหลังตั้งเบิก/ทำจ่าย (สถานะไม่เปลี่ยน) · wanted = เฉพาะช่องที่หน้าเว็บส่งมา
+
+    ลง log EDIT_DOC_NUMBERS ทุกใบในรอบด้วยเวลาเดียวกัน ประวัติของใบเห็นการแก้ และประวัติรอบอ่านจากใบแรก
+    (ใบในรอบที่ตั้งเบิกแล้วไม่หลุดออกจากรอบอีก)"""
+    current = {k: getattr(batch, k) for k in L.ROUND_DOC_LABELS}
+    diffs = L.doc_number_changes(batch.status, current, wanted)
+    if not diffs:
+        return batch
+    for key, (_, new) in diffs.items():
+        setattr(batch, key, new)
+    remark = L.doc_changes_text(diffs)
+    changes = {k: [None if v is None else str(v) for v in pair] for k, pair in diffs.items()}
+    now = datetime.now(timezone.utc)
+    for claim in round_claims(db, batch.id):
+        db.add(FinPettyLog(claim_id=claim.id, action="EDIT_DOC_NUMBERS", action_by=actor,
+                           changes=changes, remark=remark, created_at=now))
+    db.commit()
+    db.refresh(batch)
+    return batch
+
+
 def set_dd(db: Session, claim: FinPettyClaim, dd_no: str, actor: str) -> FinPettyClaim:
     """เจ้าของเงินสดใส่เลข DD ก่อนรวมเป็นรอบ (ด่านส่งบัญชีบังคับ DD เมื่อยอดถึงเกณฑ์)"""
     if claim.status != L.APPROVED:

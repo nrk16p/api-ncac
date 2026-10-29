@@ -161,3 +161,11 @@ class PayIn(BaseModel):
     employee_id: str = Field(min_length=1, max_length=50)
     pay_date: date  # วันที่โอนเงิน
     pay_doc_no: Optional[str] = Field(default=None, max_length=50)
+
+
+class DocNumbersIn(BaseModel):
+    """แก้เลขเอกสารของรอบที่พิมพ์ผิด · ช่องที่ไม่ส่งมา = ไม่แก้ · เลขที่ส่ง null/ว่าง = ลบเลขออก"""
+    employee_id: str = Field(min_length=1, max_length=50)
+    voucher_no: Optional[str] = Field(default=None, max_length=50)
+    voucher_date: Optional[date] = None
+    pay_doc_no: Optional[str] = Field(default=None, max_length=50)

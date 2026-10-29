@@ -6,7 +6,7 @@ from routes.finance import petty_routes as R
 from services.finance import petty_logic as L
 from services.finance import petty_repo as repo
 from schemas.finance_petty_schema import (
-    ApproveIn, DdIn, PayIn, ReviewIn, RoundActionIn, RoundIn, RoundRejectIn, VoucherIn,
+    ApproveIn, DdIn, DocNumbersIn, PayIn, ReviewIn, RoundActionIn, RoundIn, RoundRejectIn, VoucherIn,
 )
 
 WEIGH_SPEC = {
@@ -383,6 +383,79 @@ class TestDuplicateCheckEndpoint:
         with pytest.raises(HTTPException) as exc:
             R.duplicate_check(expense_type="WEIGH", event_date="17/09/2026", db=db_session)
         assert exc.value.status_code == 400
+
+
+@pytest.fixture
+def vouchered_round(db_session, claim, sent_round):
+    R.clear_approve_round(sent_round["id"], RoundActionIn(employee_id="600100"), db_session)
+    R.review_claim(claim.form_id, ReviewIn(employee_id="80001", action="PASS"), db_session)
+    return R.voucher_round(sent_round["id"], VoucherIn(employee_id="80001", voucher_no="PV-1",
+                                                       voucher_date="2026-10-29"), db_session)
+
+
+def _edit(round_id, db_session, **body):
+    return R.edit_round_doc_numbers(round_id, DocNumbersIn(employee_id="80001", **body), db_session)
+
+
+def _claim_logs(db_session, claim, action):
+    from models.finance_petty_model import FinPettyLog
+    return (db_session.query(FinPettyLog)
+            .filter(FinPettyLog.claim_id == claim.id, FinPettyLog.action == action).all())
+
+
+class TestEditRoundDocNumbers:
+    """แก้เลขที่พิมพ์ผิดหลังตั้งเบิก/ทำจ่าย แบบปุ่มแก้ไขเลขเอกสารของ Advance — ไม่เปลี่ยนสถานะ"""
+
+    def test_fix_the_voucher_number_and_date(self, db_session, claim, vouchered_round):
+        out = _edit(vouchered_round["id"], db_session, voucher_no=" PV-2 ", voucher_date="2026-10-30")
+        assert out["status"] == "VOUCHERED"
+        assert out["voucher_no"] == "PV-2" and out["voucher_date"] == "2026-10-30"
+        [row] = _claim_logs(db_session, claim, "EDIT_DOC_NUMBERS")
+        assert row.action_by == "80001"
+        assert row.remark == "เลขที่ตั้งเบิก: PV-1 → PV-2 · วันที่ตั้งเบิก: 29/10/2026 → 30/10/2026"
+        assert row.changes["voucher_no"] == ["PV-1", "PV-2"]
+
+    def test_pay_number_cannot_be_set_before_paying(self, db_session, vouchered_round):
+        with pytest.raises(HTTPException) as exc:
+            _edit(vouchered_round["id"], db_session, pay_doc_no="PAY-1")
+        assert exc.value.status_code == 409 and "จ่าย" in exc.value.detail
+
+    def test_an_empty_pay_number_before_paying_is_fine(self, db_session, vouchered_round):
+        # หน้าเว็บอาจส่งทุกช่องมาทุกครั้ง: ช่องว่างที่ไม่ได้เปลี่ยนอะไรต้องไม่ถูกปัดตก
+        out = _edit(vouchered_round["id"], db_session, voucher_no="PV-2", pay_doc_no=None)
+        assert out["voucher_no"] == "PV-2" and out["pay_doc_no"] is None
+
+    def test_after_paying_every_number_can_be_fixed(self, db_session, claim, vouchered_round):
+        R.pay_round(vouchered_round["id"], PayIn(employee_id="90001", pay_date="2026-10-30", pay_doc_no="PAY-1"),
+                    db_session)
+        out = _edit(vouchered_round["id"], db_session, voucher_no="", pay_doc_no="PAY-2")
+        assert out["status"] == "CLOSED" and out["voucher_no"] is None and out["pay_doc_no"] == "PAY-2"
+        [row] = _claim_logs(db_session, claim, "EDIT_DOC_NUMBERS")
+        assert row.remark == "เลขที่ตั้งเบิก: PV-1 → - · เลขที่ทำจ่าย: PAY-1 → PAY-2"
+
+    def test_not_before_the_voucher(self, db_session, sent_round):
+        with pytest.raises(HTTPException) as exc:
+            _edit(sent_round["id"], db_session, voucher_no="PV-2")
+        assert exc.value.status_code == 409 and "ตั้งเบิก" in exc.value.detail
+
+    def test_voucher_date_cannot_be_removed(self, db_session, vouchered_round):
+        with pytest.raises(HTTPException) as exc:
+            _edit(vouchered_round["id"], db_session, voucher_date=None)
+        assert exc.value.status_code == 422
+
+    def test_nothing_changed_writes_no_log(self, db_session, claim, vouchered_round):
+        out = _edit(vouchered_round["id"], db_session, voucher_no="PV-1", voucher_date="2026-10-29")
+        assert out["voucher_no"] == "PV-1" and _claim_logs(db_session, claim, "EDIT_DOC_NUMBERS") == []
+
+    def test_unknown_round_is_404(self, db_session):
+        with pytest.raises(HTTPException) as exc:
+            _edit(9999, db_session, voucher_no="PV-2")
+        assert exc.value.status_code == 404
+
+    def test_numbers_are_capped_at_50(self):
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError):
+            DocNumbersIn(employee_id="80001", pay_doc_no="X" * 51)
 
 
 class TestRoundDocNumberDuplicates:

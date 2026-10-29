@@ -84,6 +84,40 @@ BATCH_ALLOWED = {
 # เลขเอกสารของรอบที่เช็กซ้ำได้ (เตือนอย่างเดียว เหมือน Advance)
 ROUND_DOC_NO_FIELDS = ("voucher_no", "pay_doc_no")
 
+# แก้เลขเอกสารที่พิมพ์ผิดได้หลังตั้งเบิก (แบบปุ่มแก้ไขเลขเอกสารของ Advance) · เลขที่ทำจ่ายแก้ได้เมื่อจ่ายแล้ว
+ROUND_DOC_LABELS = {"voucher_no": "เลขที่ตั้งเบิก", "voucher_date": "วันที่ตั้งเบิก", "pay_doc_no": "เลขที่ทำจ่าย"}
+EDITABLE_DOC_FIELDS = {
+    BATCH_VOUCHERED: ("voucher_no", "voucher_date"),
+    BATCH_CLOSED: ("voucher_no", "voucher_date", "pay_doc_no"),
+}
+
+
+def doc_number_changes(status: str, current: Mapping, wanted: Mapping) -> dict:
+    """{ช่อง: (ค่าเดิม, ค่าใหม่)} เฉพาะช่องที่เปลี่ยนจริง · ช่องว่างที่ส่งมาซ้ำค่าเดิมไม่นับ (หน้าเว็บส่งทุกช่องได้)"""
+    allowed = EDITABLE_DOC_FIELDS.get(status)
+    if allowed is None:
+        label = BATCH_STATUS_LABELS.get(status, status)
+        raise PettyRuleError(f"แก้เลขเอกสารได้หลังตั้งเบิกแล้วเท่านั้น รอบนี้สถานะ {label}", 409)
+    diffs = {k: (current.get(k), v) for k, v in wanted.items() if current.get(k) != v}
+    if any(k not in allowed for k in diffs):
+        raise PettyRuleError("รอบนี้ยังไม่ได้จ่ายเงิน ยังไม่มีเลขที่ทำจ่ายให้แก้", 409)
+    return diffs
+
+
+def _doc_text(value) -> str:
+    if value is None or value == "":
+        return "-"
+    if isinstance(value, date):
+        return value.strftime("%d/%m/%Y")
+    return str(value)
+
+
+def doc_changes_text(diffs: Mapping) -> str:
+    """"เลขที่ตั้งเบิก: A → B · วันที่ตั้งเบิก: 29/10/2026 → 30/10/2026" สำหรับประวัติรอบ"""
+    order = [k for k in ROUND_DOC_LABELS if k in diffs]
+    return " · ".join(f"{ROUND_DOC_LABELS[k]}: {_doc_text(diffs[k][0])} → {_doc_text(diffs[k][1])}"
+                      for k in order)
+
 MANAGER_LEVEL = 5
 TOP_LEVEL = 9
 
