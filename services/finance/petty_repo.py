@@ -474,6 +474,16 @@ def edit_doc_numbers(db: Session, batch: FinPettyBatch, actor: str, wanted: dict
     return batch
 
 
+def round_doc_edits(db: Session, batch_id: int) -> list[FinPettyLog]:
+    """การแก้เลขเอกสารของรอบ — ทุกใบในรอบได้ log ชุดเดียวกัน อ่านจากใบแรกพอ ไม่ต้องตัดตัวซ้ำ"""
+    first = (db.query(func.min(FinPettyClaim.id)).filter(FinPettyClaim.batch_id == batch_id).scalar())
+    if first is None:
+        return []
+    return (db.query(FinPettyLog)
+            .filter(FinPettyLog.claim_id == first, FinPettyLog.action == "EDIT_DOC_NUMBERS")
+            .order_by(FinPettyLog.id).all())
+
+
 def set_dd(db: Session, claim: FinPettyClaim, dd_no: str, actor: str) -> FinPettyClaim:
     """เจ้าของเงินสดใส่เลข DD ก่อนรวมเป็นรอบ (ด่านส่งบัญชีบังคับ DD เมื่อยอดถึงเกณฑ์)"""
     if claim.status != L.APPROVED:

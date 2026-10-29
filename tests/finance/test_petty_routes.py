@@ -458,6 +458,74 @@ class TestEditRoundDocNumbers:
             DocNumbersIn(employee_id="80001", pay_doc_no="X" * 51)
 
 
+class TestRoundHistory:
+    """ประวัติรอบ (เก่าสุดก่อน) สร้างจากช่องของรอบเอง + การแก้เลขเอกสาร — ไม่ต้องมีตาราง log ของรอบ"""
+
+    def _actions(self, body):
+        return [row["action"] for row in body["logs"]]
+
+    def test_a_new_round_starts_with_the_submission(self, db_session, claim, line):
+        _approve(db_session, claim)
+        R.set_claim_dd(claim.form_id, DdIn(employee_id="12345", dd_no="LBDD26090931"), db_session)
+        out = R.create_round(_round_in(claim, remark="รอบปลายเดือน"), db_session)
+        [row] = out["logs"]
+        assert set(row) >= {"action", "actor", "actor_name", "at", "remark"}
+        assert row["action"] == "SUBMIT_ROUND" and row["actor"] == "12345" and row["remark"] == "รอบปลายเดือน"
+        assert row["at"] == out["submitted_at"]
+
+    def test_the_whole_path_in_order_with_names(self, db_session, claim, vouchered_round):
+        _user(db_session, "80001", "บัญชี", "ตรวจดี")
+        _edit(vouchered_round["id"], db_session, voucher_no="PV-2")
+        R.pay_round(vouchered_round["id"], PayIn(employee_id="90001", pay_date="2026-10-30", pay_doc_no="PAY-1"),
+                    db_session)
+        body = R.get_round(vouchered_round["id"], employee_id=None, db=db_session)
+        assert self._actions(body) == ["SUBMIT_ROUND", "CLEAR_APPROVE", "VOUCHER", "EDIT_DOC_NUMBERS",
+                                       "PAY", "CLOSE"]
+        rows = {row["action"]: row for row in body["logs"]}
+        assert rows["CLEAR_APPROVE"]["actor"] == "600100"
+        assert rows["VOUCHER"]["actor_name"] == "บัญชี ตรวจดี"
+        assert rows["VOUCHER"]["remark"] == "เลขที่ตั้งเบิก PV-2 · วันที่ตั้งเบิก 29/10/2026"
+        assert rows["EDIT_DOC_NUMBERS"]["remark"] == "เลขที่ตั้งเบิก: PV-1 → PV-2"
+        assert rows["PAY"]["actor"] == "90001"
+        assert rows["PAY"]["remark"] == "เลขที่ทำจ่าย PAY-1 · วันที่โอนเงิน 30/10/2026"
+        assert rows["CLOSE"]["at"] == body["closed_at"]
+
+    def test_one_edit_shows_once_however_many_claims_the_round_has(self, db_session, fund, weigh_type,
+                                                                   claim_payload, weigh_items, line,
+                                                                   seq_stub, frozen_bkk):
+        claims = [repo.create_claim(db_session, claim_payload(), weigh_items[:1], actor="55555") for _ in range(2)]
+        for c in claims:
+            repo.set_status(db_session, c, L.APPROVED, "12345", "APPROVE")
+        batch = repo.create_round(db_session, fund.id, [c.id for c in claims], actor="12345", remark=None,
+                                  required_level=5)
+        repo.clear_approve_round(db_session, batch, actor="600100")
+        for c in claims:
+            repo.review_pass(db_session, c, actor="80001", remark=None)
+        db_session.refresh(batch)
+        repo.voucher_round(db_session, batch, actor="80001", voucher_no="PV-1", voucher_date=L.bkk_today())
+        _edit(batch.id, db_session, voucher_no="PV-2")
+        body = R.get_round(batch.id, employee_id=None, db=db_session)
+        assert self._actions(body).count("EDIT_DOC_NUMBERS") == 1
+
+    def test_a_rejected_round_ends_with_the_reason(self, db_session, sent_round):
+        out = R.clear_reject_round(sent_round["id"], RoundRejectIn(employee_id="600100", reason="บิลไม่ครบ"),
+                                   db_session)
+        assert self._actions(out) == ["SUBMIT_ROUND", "CLEAR_REJECT"]
+        assert out["logs"][-1]["remark"] == "บิลไม่ครบ" and out["logs"][-1]["actor"] == "600100"
+
+    def test_voucher_without_a_number_still_shows_the_date(self, db_session, claim, sent_round):
+        R.clear_approve_round(sent_round["id"], RoundActionIn(employee_id="600100"), db_session)
+        R.review_claim(claim.form_id, ReviewIn(employee_id="80001", action="PASS"), db_session)
+        out = R.voucher_round(sent_round["id"], VoucherIn(employee_id="80001", voucher_date="2026-10-29"),
+                              db_session)
+        assert out["logs"][-1]["remark"] == "วันที่ตั้งเบิก 29/10/2026"
+
+    def test_list_rows_do_not_carry_history(self, db_session, sent_round):
+        rows = R.list_rounds(fund_id=None, status=None, holder=None, clear_approver=None,
+                             limit=50, offset=0, db=db_session)
+        assert "logs" not in rows[0]
+
+
 class TestRoundDocNumberDuplicates:
     """เตือนเลขที่ตั้งเบิก / เลขที่ทำจ่ายซ้ำกับรอบอื่นแบบ Advance — เตือนอย่างเดียว ไม่บล็อก"""
 

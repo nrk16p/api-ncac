@@ -112,6 +112,40 @@ def _doc_text(value) -> str:
     return str(value)
 
 
+ROUND_LOG_LABELS = {
+    "SUBMIT_ROUND": "ส่งเคลียร์",
+    "CLEAR_APPROVE": "อนุมัติเคลียร์",
+    "CLEAR_REJECT": "ไม่อนุมัติรอบ",
+    "VOUCHER": "ตั้งเบิก",
+    "EDIT_DOC_NUMBERS": "แก้เลขเอกสาร",
+    "PAY": "จ่ายเงิน",
+    "CLOSE": "ปิดรอบ",
+}
+
+
+def _joined(*pairs) -> Optional[str]:
+    text = " · ".join(f"{label} {_doc_text(value)}" for label, value in pairs if value not in (None, ""))
+    return text or None
+
+
+def round_events(batch) -> list[dict]:
+    """ประวัติรอบจากช่องของรอบเอง {action, actor, at, remark} ตามลำดับขั้น — ช่องเวลาว่าง = ขั้นนั้นยังไม่เกิด
+    รอบมีแต่ละขั้นได้ครั้งเดียว (รอบที่ไม่อนุมัติจบเลย ใบไปเข้ารอบใหม่) จึงไม่ต้องมีตาราง log ของรอบ"""
+    rejected = batch.status == BATCH_CLEAR_REJECTED
+    steps = [
+        ("SUBMIT_ROUND", batch.submitted_by, batch.submitted_at, batch.remark),
+        ("CLEAR_REJECT" if rejected else "CLEAR_APPROVE", batch.clear_approved_by, batch.clear_approved_at,
+         batch.clear_reject_reason if rejected else None),
+        ("VOUCHER", batch.vouchered_by, batch.vouchered_at,
+         _joined(("เลขที่ตั้งเบิก", batch.voucher_no), ("วันที่ตั้งเบิก", batch.voucher_date))),
+        ("PAY", batch.paid_by, batch.paid_at,
+         _joined(("เลขที่ทำจ่าย", batch.pay_doc_no), ("วันที่โอนเงิน", batch.pay_date))),
+        ("CLOSE", batch.closed_by, batch.closed_at, None),
+    ]
+    return [{"action": action, "actor": actor, "at": at, "remark": remark}
+            for action, actor, at, remark in steps if at is not None]
+
+
 def doc_changes_text(diffs: Mapping) -> str:
     """"เลขที่ตั้งเบิก: A → B · วันที่ตั้งเบิก: 29/10/2026 → 30/10/2026" สำหรับประวัติรอบ"""
     order = [k for k in ROUND_DOC_LABELS if k in diffs]

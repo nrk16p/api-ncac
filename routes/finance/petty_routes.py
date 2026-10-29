@@ -443,11 +443,29 @@ def _round_dict(db: Session, b, fund=None, claims=None, names: dict | None = Non
     return body
 
 
+def _utc(value):
+    """เทียบเวลาได้ทั้งค่าที่มีและไม่มี timezone (sqlite คืนแบบไม่มี) — ถือว่าเป็น UTC ตามที่บันทึก"""
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
+def _round_logs(db: Session, b) -> list[dict]:
+    """ประวัติรอบ เก่าสุดก่อน: ขั้นของรอบจากช่องของรอบเอง + การแก้เลขเอกสาร"""
+    events = L.round_events(b)
+    events += [{"action": row.action, "actor": row.action_by, "at": row.created_at, "remark": row.remark}
+               for row in repo.round_doc_edits(db, b.id)]
+    events.sort(key=lambda e: _utc(e["at"]))  # sort คงลำดับเดิมเมื่อเวลาเท่ากัน (จ่ายเงินมาก่อนปิดรอบ)
+    names = repo.employee_names(db, [e["actor"] for e in events])
+    return [{"action": e["action"], "action_label": L.ROUND_LOG_LABELS.get(e["action"], e["action"]),
+             "actor": e["actor"], "actor_name": names.get(e["actor"]), "at": _iso(e["at"]),
+             "remark": e["remark"]} for e in events]
+
+
 def _round_out(db: Session, b, employee_id: Optional[str] = None) -> dict:
     """รายละเอียดรอบ — ส่งเลขบัญชีของเจ้าของเงินสดได้ที่นี่ที่เดียว (BE ไม่มี auth ห้ามใส่ในรายการ)"""
     claims = repo.round_claims(db, b.id)
     body = _round_dict(db, b, claims=claims)
     body["holder_payee"] = repo.payee_account(db, body["holder_employee_id"])
+    body["logs"] = _round_logs(db, b)
     claim_names = repo.employee_names(db, [x for c in claims for x in (c.created_by, c.approved_by)])
     body["claims"] = [_claim_dict(c, repo.claim_items(db, c.id), claim_names) for c in claims]
     if employee_id:
