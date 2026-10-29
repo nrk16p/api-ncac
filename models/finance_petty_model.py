@@ -119,6 +119,7 @@ class FinPettyClaim(Base):
     reviewed_by = Column(String(50))
     reviewed_at = Column(DateTime(timezone=True))
     batch_id = Column(Integer, ForeignKey("fin_petty_batches.id"))
+    cost_center = Column(String(8))  # ศูนย์และแผนกของผู้เบิก เช่น 3B02 (services/finance/petty_cost_centers.py) — ใบเก่าว่าง
     debt_doc_no = Column(String(50))  # เลขที่ใบรับสภาพหนี้ — มี พจร. ต้องมีก่อนส่งเคลียร์ ใส่หลังโอนได้ (อ้างอิงเลขเอกสารอย่างเดียว)
     status = Column(String(30), nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())

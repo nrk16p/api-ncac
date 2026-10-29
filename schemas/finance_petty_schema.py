@@ -100,8 +100,21 @@ class ClaimIn(BaseModel):
     dd_no: Optional[str] = Field(default=None, max_length=50)
     receipt_no: Optional[str] = Field(default=None, max_length=50)
     wht_applicable: bool = False
+    # ศูนย์และแผนกของผู้เบิก (ผู้ใช้สั่ง 29/10/2026) — FE บังคับเลือก · ช่องทางเก่าที่ไม่ส่งมา = ว่าง
+    cost_center: Optional[str] = Field(default=None, max_length=8)
     items: list[ClaimItemIn] = Field(min_length=1)
     created_by: str = Field(min_length=1, max_length=50)
+
+    @field_validator("cost_center", mode="before")
+    @classmethod
+    def _known_cost_center(cls, value):
+        from services.finance.petty_cost_centers import COST_CENTERS
+        code = str(value).strip() if value is not None else ""
+        if not code:
+            return None
+        if code not in COST_CENTERS:
+            raise ValueError(f"รหัสศูนย์และแผนก {code} ไม่อยู่ในรายการ")
+        return code
 
 
 class ApproveIn(BaseModel):

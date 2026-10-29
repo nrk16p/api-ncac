@@ -105,6 +105,7 @@ def _claim_dict(c, items, names: dict | None = None) -> dict:
         "receipt_no": c.receipt_no, "wht_applicable": bool(c.wht_applicable),
         "detail": c.detail or {}, "status": c.status, "created_by": c.created_by,
         "created_at": c.created_at.isoformat() if c.created_at else None,
+        "cost_center": c.cost_center,
         "created_by_name": names.get(c.created_by), "approved_by_name": names.get(c.approved_by),
         "approved_by": c.approved_by, "approved_at": c.approved_at.isoformat() if c.approved_at else None,
         "transfer_date": str(c.transfer_date) if c.transfer_date else None,
@@ -272,6 +273,8 @@ def update_claim(form_id: str, payload: ClaimIn, db: Session = Depends(get_db)):
         raise HTTPException(status_code=403, detail="แก้ได้เฉพาะใบที่ตัวเองเปิด")
     body = payload.model_dump(exclude={"created_by", "fund_id", "expense_type"})
     items = body.pop("items")
+    if body.get("cost_center") is None:
+        body.pop("cost_center", None)  # FE เก่าไม่ส่งมา — คงรหัสเดิมไว้ ไม่ล้างทิ้ง
     _reject_incomplete_rows(db, claim.expense_type, items)
     try:
         out = repo.update_draft(db, claim, body, items, actor=payload.created_by)
