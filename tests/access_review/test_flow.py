@@ -223,6 +223,17 @@ def test_admin_reviews_summary(client, world):
     assert other_div["summary"]["total_people"] == 0
 
 
+def test_admin_preview_shows_employee_view_read_only(client, world):
+    assert client.get("/access-review/admin/preview/R", headers=h("R")).status_code == 403
+    assert client.get("/access-review/admin/preview/NOBODY", headers=h("IT")).status_code == 404
+    preview = client.get("/access-review/admin/preview/R", headers=h("IT")).json()
+    own = client.get("/access-review/me", headers=h("R")).json()
+    assert preview["systems"] == own["systems"]
+    assert preview["review"] is None  # previewing never creates a draft
+    assert client.get("/access-review/admin/preview/R/items", headers=h("IT")).json() == \
+        client.get("/access-review/me/items", headers=h("R")).json()
+
+
 def test_admin_crud_and_soft_delete(client, world, db):
     H = h("IT")
     sys_id = client.get("/access-review/admin/systems", headers=H).json()[0]["id"]

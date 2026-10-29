@@ -239,6 +239,24 @@ def admin_removals(cycle_id: Optional[int] = None, caller: Caller = Depends(requ
     return admin.removals_report(db, cycle_id)
 
 
+def _preview_caller(db: Session, employee_id: str) -> Caller:
+    """Read-only stand-in for an employee, so IT can see exactly what that person's dialog shows."""
+    user = repo.get_user(db, employee_id.strip())
+    if user is None:
+        raise HTTPException(status_code=404, detail="ไม่พบพนักงาน")
+    return Caller(user=user, employee_id=user.employee_id, is_admin=False)
+
+
+@router.get("/admin/preview/{employee_id}")
+def admin_preview_me(employee_id: str, caller: Caller = Depends(require_admin), db: Session = Depends(get_db)):
+    return logic.build_me(db, _preview_caller(db, employee_id))
+
+
+@router.get("/admin/preview/{employee_id}/items")
+def admin_preview_items(employee_id: str, caller: Caller = Depends(require_admin), db: Session = Depends(get_db)):
+    return logic.my_items(db, _preview_caller(db, employee_id))
+
+
 # ---------------------------- review by id (keep last: /{id}) ----------------------------
 
 @router.get("/{review_id:int}")
