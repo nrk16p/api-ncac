@@ -24,11 +24,14 @@ MSG_SYSTEM_EXISTS = "มีรหัสระบบนี้อยู่แล�
 MSG_ROLE_NOT_FOUND = "ไม่พบกลุ่มสิทธิ์"
 MSG_ROLE_EXISTS = "มีกลุ่มสิทธิ์ชื่อนี้ในระบบนี้อยู่แล้ว"
 MSG_ITEM_NOT_FOUND = "ไม่พบรายการสิทธิ์"
+MSG_COPY_SAME_ROLE = "เลือกกลุ่มสิทธิ์ต้นทางเป็นกลุ่มเดียวกันไม่ได้"
+MSG_COPY_OTHER_SYSTEM = "คัดลอกได้เฉพาะกลุ่มสิทธิ์ในระบบเดียวกัน"
 MSG_EMPLOYEE_NOT_FOUND = "ไม่พบรหัสพนักงานในระบบ"
 MSG_USER_ROLE_NOT_FOUND = "ไม่พบสิทธิ์ของผู้ใช้รายการนี้"
 MSG_USER_ROLE_EXISTS = "พนักงานคนนี้มีกลุ่มสิทธิ์นี้อยู่แล้ว"
 MSG_CYCLE_NOT_FOUND = "ไม่พบรอบการทบทวน"
 MSG_CYCLE_DATES = "วันสิ้นสุดต้องไม่ก่อนวันเริ่มต้น"
+MSG_CYCLE_HAS_REVIEWS = "รอบนี้มีการทบทวนสิทธิ์แล้ว {n} รายการ ลบไม่ได้ — ให้ปิดรอบแทน"
 
 
 def _get(db: Session, model, obj_id: int, message: str):
@@ -150,6 +153,27 @@ def create_item(db: Session, role_id: int, data: dict) -> dict:
     return item_dict(item)
 
 
+def copy_items(db: Session, role_id: int, source_role_id: int) -> dict:
+    """Copies the source role's active items into role_id in one commit; items already there are skipped."""
+    role = _get(db, ArRole, role_id, MSG_ROLE_NOT_FOUND)
+    source = _get(db, ArRole, source_role_id, MSG_ROLE_NOT_FOUND)
+    if source.id == role.id:
+        raise ArError(MSG_COPY_SAME_ROLE)
+    if source.system_id != role.system_id:
+        raise ArError(MSG_COPY_OTHER_SYSTEM)
+    have = {(i.category, i.item, i.permission) for i in repo.role_items(db, role.id)}
+    added = 0
+    for i in repo.role_items(db, source.id):
+        key = (i.category, i.item, i.permission)
+        if key in have:
+            continue
+        have.add(key)
+        db.add(ArRoleItem(role_id=role.id, category=i.category, item=i.item, permission=i.permission))
+        added += 1
+    db.commit()
+    return {"added": added, "role": _role_out(db, role)}
+
+
 def update_item(db: Session, item_id: int, changes: dict) -> dict:
     item = _get(db, ArRoleItem, item_id, MSG_ITEM_NOT_FOUND)
     for key in ("category", "item", "permission"):
@@ -187,6 +211,7 @@ def _user_role_dicts(db: Session, rows: List[tuple]) -> List[dict]:
             "account_name": ur.account_name, "is_active": bool(ur.is_active), "updated_at": iso(ur.updated_at),
             # additive
             "role_is_active": bool(role.is_active),
+            "position": p["position"],
         })
     return out
 
@@ -288,6 +313,18 @@ def update_cycle(db: Session, cycle_id: int, changes: dict) -> dict:
         raise ArError(MSG_CYCLE_DATES)
     db.commit()
     return cycle_dict(c)
+
+
+def delete_cycle(db: Session, cycle_id: int) -> dict:
+    """Hard delete, only while no one has reviewed in the cycle — reviews are the audit trail, so close it instead."""
+    c = _get(db, ArCycle, cycle_id, MSG_CYCLE_NOT_FOUND)
+    n = db.query(ArReview).filter(ArReview.cycle_id == cycle_id).count()
+    if n:
+        raise ArConflict(MSG_CYCLE_HAS_REVIEWS.format(n=n))
+    out = cycle_dict(c)
+    db.delete(c)
+    db.commit()
+    return out
 
 
 # ---------------------------- reports ----------------------------

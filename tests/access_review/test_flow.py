@@ -301,6 +301,16 @@ def test_admin_crud_and_soft_delete(client, world, db):
     assert c.status_code == 201
     assert client.put(f"/access-review/admin/cycles/{c.json()['id']}", headers=H,
                       json={"is_open": False}).json()["is_open"] is False
+    assert client.delete(f"/access-review/admin/cycles/{c.json()['id']}", headers=H).status_code == 200
+    assert c.json()["id"] not in [x["id"] for x in client.get("/access-review/admin/cycles", headers=H).json()]
+
+
+def test_cycle_with_reviews_cannot_be_deleted(world, client):
+    H = h("IT")
+    client.put("/access-review/me/lines", headers=h("R"), json={"lines": all_lines(world)})
+    r = client.delete(f"/access-review/admin/cycles/{world['cycle'].id}", headers=H)
+    assert r.status_code == 409
+    assert client.delete("/access-review/admin/cycles/99999", headers=H).status_code == 404
 
 
 def test_review_row_is_unique_per_cycle(world, client, db):

@@ -69,6 +69,10 @@ class RoleUpdate(BaseModel):
     _s = field_validator("name", mode="before")(_strip)
 
 
+class CopyItemsIn(BaseModel):
+    source_role_id: int
+
+
 class RoleItemIn(BaseModel):
     category: str = Field(min_length=1, max_length=500)
     item: Optional[str] = Field(default=None, max_length=500)

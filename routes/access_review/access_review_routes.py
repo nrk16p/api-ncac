@@ -155,6 +155,12 @@ def admin_create_item(role_id: int, body: s.RoleItemIn, caller: Caller = Depends
     return admin.create_item(db, role_id, body.model_dump())
 
 
+@router.post("/admin/roles/{role_id}/copy-items")
+def admin_copy_items(role_id: int, body: s.CopyItemsIn, caller: Caller = Depends(require_admin),
+                     db: Session = Depends(get_db)):
+    return admin.copy_items(db, role_id, body.source_role_id)
+
+
 @router.put("/admin/role-items/{item_id}")
 def admin_update_item(item_id: int, body: s.RoleItemUpdate, caller: Caller = Depends(require_admin),
                       db: Session = Depends(get_db)):
@@ -207,6 +213,11 @@ def admin_create_cycle(body: s.CycleIn, caller: Caller = Depends(require_admin),
 def admin_update_cycle(cycle_id: int, body: s.CycleUpdate, caller: Caller = Depends(require_admin),
                        db: Session = Depends(get_db)):
     return admin.update_cycle(db, cycle_id, body.model_dump(exclude_unset=True))
+
+
+@router.delete("/admin/cycles/{cycle_id}")
+def admin_delete_cycle(cycle_id: int, caller: Caller = Depends(require_admin), db: Session = Depends(get_db)):
+    return admin.delete_cycle(db, cycle_id)
 
 
 @router.post("/admin/import")

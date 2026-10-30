@@ -202,3 +202,23 @@ def test_admin_item_delete_is_soft_when_referenced(client, w, db):
     # submitting drops the now-hidden item from the draft's unticked set
     d = client.post("/access-review/me/submit", headers=h("R"), json={}).json()
     assert {l["role_name"]: l["unchecked_item_ids"] for l in d["lines"]}["ACC-Officer"] == []
+
+
+def test_admin_copy_items_adds_only_missing_items(client, org, w):
+    target = org.role("ATMS", "ACC-Officer copy", [("คลังสินค้า", "คลัง IT", None)])
+    res = client.post(f"/access-review/admin/roles/{target.id}/copy-items", json={"source_role_id": w["acc_role"]},
+                      headers=h("IT"))
+    assert res.status_code == 200, res.text
+    assert res.json()["added"] == 2 and res.json()["role"]["item_count"] == 3
+    again = client.post(f"/access-review/admin/roles/{target.id}/copy-items", json={"source_role_id": w["acc_role"]},
+                        headers=h("IT"))
+    assert again.json()["added"] == 0
+
+
+def test_admin_copy_items_rejects_other_system_same_role_and_non_admin(client, org, w):
+    target = org.role("ATMS", "Empty", [])
+    gl = next(r for r in client.get("/access-review/admin/roles", headers=h("IT")).json() if r["name"] == "GL ACC")
+    url = f"/access-review/admin/roles/{target.id}/copy-items"
+    assert client.post(url, json={"source_role_id": gl["id"]}, headers=h("IT")).status_code == 400
+    assert client.post(url, json={"source_role_id": target.id}, headers=h("IT")).status_code == 400
+    assert client.post(url, json={"source_role_id": w["acc_role"]}, headers=h("R")).status_code == 403
