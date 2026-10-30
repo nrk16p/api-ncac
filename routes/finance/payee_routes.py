@@ -4,7 +4,6 @@
 ตรวจ action_by ด้วย require_finance เหมือน advance_routes
 """
 import logging
-import os
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -163,12 +162,15 @@ def payee_account_logs(account_id: int, db: Session = Depends(get_db)):
 
 # ---------------------------- requests ----------------------------
 
+# คำขอบัญชีรับเงิน (K-Bank) ส่งเข้ากล่องนี้ ไม่ใช่กล่องบัญชีของ Advance (ผู้ใช้สั่ง 30/10/2026)
+PAYEE_REQUEST_MAILBOX = "finacemt@menatransport.co.th"
+
+
 def _send_request_email(ctx: dict):
     """Background task: must never raise."""
     try:
         subject, html = render_payee_request_email(ctx)
-        to = os.getenv("FINANCE_ACCOUNT_EMAIL") or "accountbkk@menatransport.co.th"
-        send_finance_email(to, subject, html)
+        send_finance_email(PAYEE_REQUEST_MAILBOX, subject, html)
     except Exception:  # noqa: BLE001 - email failure must not affect the saved request
         log.exception("payee request email failed (request %s)", ctx.get("request_id"))
 

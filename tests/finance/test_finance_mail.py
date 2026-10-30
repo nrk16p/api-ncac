@@ -228,6 +228,17 @@ def test_payee_request_task_flag_on_uses_finance_sender(monkeypatch, smtp):
     assert ("login", "fin@x.com", "pw") in smtp
 
 
+def test_payee_request_goes_to_its_own_mailbox_not_the_advance_one(monkeypatch, smtp):
+    monkeypatch.setenv("FINANCE_EMAIL_ENABLED", "true")
+    monkeypatch.setenv("FINANCE_SMTP_USER", "fin@x.com")
+    monkeypatch.setenv("FINANCE_SMTP_PASSWORD", "pw")
+    monkeypatch.setenv("FINANCE_ACCOUNT_EMAIL", "advance-box@x.com")
+    pr._send_request_email({"request_id": 1, "employee_id": "E1", "employee_name": "ก",
+                            "account_no": "1234567890", "account_name": "ก", "app_origin": "https://a.com"})
+    sent = [c[2] for c in smtp if c[0] == "sendmail"]
+    assert sent and all(to in ("finacemt@menatransport.co.th", ["finacemt@menatransport.co.th"]) for to in sent)
+
+
 def test_submit_and_approve_paths_flag_off_never_construct_smtp(smtp):
     """Every route event goes through queue_event, which is inert while off; the tasks list stays empty."""
     bg = BackgroundTasks()
