@@ -42,6 +42,8 @@ def test_observed_tank_rounds_up():
 
 def test_resolve_priority():
     good = (183.0, 0.95, 400)
+    assert resolve_tank(master_l=75.0, atms_l=370.0, fit=good)["tank_l"] == 75.0
+    assert resolve_tank(master_l=75.0, atms_l=370.0)["tank_from"] == "master"
     assert resolve_tank(atms_l=200.0, fit=good)["tank_from"] == "atms"
     assert resolve_tank(fit=good) == {"tank_l": 183.0, "tank_from": "calibrated", "fit_r2": 0.95, "n_pairs": 400}
     assert resolve_tank(fit=(183.0, 0.7, 400), observed_l=200.0)["tank_from"] == "observed"

@@ -71,8 +71,10 @@ def observed_tank(max_litres: float | None) -> float | None:
 
 
 def resolve_tank(atms_l: float | None = None, fit: tuple[float, float, int] | None = None,
-                 observed_l: float | None = None) -> dict:
+                 observed_l: float | None = None, master_l: float | None = None) -> dict:
     fit_info = {"fit_r2": round(fit[1], 4), "n_pairs": fit[2]} if fit else {}
+    if master_l:
+        return {"tank_l": float(master_l), "tank_from": "master", **fit_info}
     if atms_l:
         return {"tank_l": float(atms_l), "tank_from": "atms", **fit_info}
     if fit and fit[1] >= CALIB_MIN_R2 and fit[2] >= CALIB_MIN_PAIRS and MIN_TANK_L <= fit[0] <= MAX_TANK_L:
