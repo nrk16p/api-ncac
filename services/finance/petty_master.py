@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from functools import lru_cache
 from typing import Optional
 
@@ -48,6 +49,39 @@ def _month_key(month_year) -> tuple[int, int]:
         return (0, 0)
 
 
+# ตัวคั่นในเบอร์รถ/ทะเบียนที่คนพิมพ์บ้างไม่พิมพ์บ้าง ("สบ.71-1325" · "71 1325" · "711325")
+SEPARATORS = r"[\s.\-]*"
+_SEP_CHARS = re.compile(r"[\s.\-]+")
+
+
+def _squash(text) -> str:
+    return _SEP_CHARS.sub("", str(text or "")).upper()
+
+
+def search_pattern(query: str) -> str:
+    """regex ค้นส่วนไหนของเบอร์รถ/ทะเบียนก็ได้ โดยไม่สนตัวคั่น · ทุกตัวอักษร escape ไว้ (พิมพ์ .* ก็เป็นตัวอักษร)"""
+    return SEPARATORS.join(re.escape(ch) for ch in _squash(query))
+
+
+def match_rank(query: str, code, plate) -> Optional[int]:
+    """ยิ่งน้อยยิ่งตรง: 0 เบอร์รถตรงเป๊ะ · 1 เบอร์รถขึ้นต้น/ลงท้ายด้วยคำค้น · 2 อยู่กลางเบอร์รถ ·
+    3 ทะเบียนลงท้ายด้วยคำค้น · 4 อยู่ในทะเบียน · None = ไม่ตรง"""
+    q, c, pl = _squash(query), _squash(code), _squash(plate)
+    if not q:
+        return None
+    if c == q:
+        return 0
+    if c.startswith(q) or c.endswith(q):
+        return 1
+    if q in c:
+        return 2
+    if pl.endswith(q):
+        return 3
+    if q in pl:
+        return 4
+    return None
+
+
 def search_trucks(query: str, limit: int = 20) -> list[dict]:
     """ค้นได้ทั้งเบอร์รถ (พิมพ์ 1093 เจอ TH1093) และทะเบียน · รถหนึ่งคันมีแถวรายเดือน คืนแถวล่าสุดคันละหนึ่ง
 
@@ -56,7 +90,7 @@ def search_trucks(query: str, limit: int = 20) -> list[dict]:
     q = (query or "").strip()
     if len(q) < _MIN_QUERY:
         return []
-    pattern = {"$regex": q, "$options": "i"}
+    pattern = {"$regex": search_pattern(q), "$options": "i"}
     try:
         rows = list(_collection()
                     .find({"$or": [{"truck_no": pattern}, {"plate": pattern}]}, PROJECTION)
@@ -77,6 +111,12 @@ def search_trucks(query: str, limit: int = 20) -> list[dict]:
             "truck_plate": str(row.get("plate") or "").strip(),
             "truck_type": _truck_type(row.get("customer"))}
            for code, row in newest.items()]
+    # ตรงที่สุดขึ้นก่อน (เบอร์รถตรงเป๊ะ → ขึ้นต้น/ลงท้าย → อยู่ในทะเบียน) แล้วเรียงตามเบอร์รถ
+    def _order(t: dict) -> tuple[int, str]:
+        rank = match_rank(q, t["truck_code"], t["truck_plate"])
+        return (9 if rank is None else rank, t["truck_code"])
+
+    out.sort(key=_order)
     return out[:limit]
 
 
