@@ -168,6 +168,7 @@ def list_claims(employee_id: Optional[str] = None, holder: Optional[str] = None,
 @router.get("/claims/duplicate-check")
 def duplicate_check(expense_type: str, event_date: str, truck_code: Optional[str] = None,
                     truck_plate: Optional[str] = None, ref_no: Optional[str] = None,
+                    payee_name: Optional[str] = None,
                     exclude_claim_id: Optional[int] = None, db: Session = Depends(get_db)):
     """เตือนทันทีขณะกรอก — รับแถวเดียว คืน {hard, soft} ของแถวนั้น"""
     from datetime import date as _d
@@ -178,7 +179,7 @@ def duplicate_check(expense_type: str, event_date: str, truck_code: Optional[str
     type_row = repo.get_expense_type(db, expense_type)
     spec = (type_row.spec if type_row else None) or {}
     row = {"event_date": parsed, "truck_code": truck_code, "truck_plate": truck_plate,
-           "ref_no": ref_no}
+           "ref_no": ref_no, "payee_name": payee_name}
     hard_days = int(((spec.get("duplicate_check") or {}).get("hard") or {}).get("days", 365))
     prior = repo.find_prior_items(db, expense_type=expense_type, keys=[row], days=hard_days,
                                   exclude_claim_id=exclude_claim_id)
@@ -211,7 +212,8 @@ def _gate(db: Session, claim, items, stage: str, attachments: dict) -> dict:
                    "truck_plate": i.truck_plate, "truck_type": i.truck_type,
                    "ref_no": i.ref_no, "rate": i.rate, "qty": i.qty,
                    "remark": i.remark, "driver_name": i.driver_name or claim.driver_name,
-                   "driver_role": i.driver_role, "tire_position": i.tire_position} for i in items]
+                   "driver_role": i.driver_role, "tire_position": i.tire_position,
+                   "payee_name": claim.payee_name} for i in items]
     result = validate.validate_claim(
         {"amount": claim.amount, "dd_no": claim.dd_no, "receipt_no": claim.receipt_no,
          "expense_type": claim.expense_type, "detail": claim.detail or {},

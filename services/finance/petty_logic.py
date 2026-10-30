@@ -308,9 +308,17 @@ def batch_no(branch: str, division: str, yymm: int, number: int) -> str:
     return f"{branch_letters(branch)}-{division}-{yymm:04d}-B{number}"
 
 
-def hard_dup_key(item: Mapping) -> tuple[str, str, str] | None:
-    """คีย์ด่านซ้ำเข้ม: เลขที่บัตรชั่ง + เบอร์รถ + ทะเบียนรถ · ไม่มีเลขบัตร = ไม่มีคีย์ (ใช้ด่านอ่อนแทน)"""
+def hard_keys_by_payee(keys) -> bool:
+    """spec ตั้ง duplicate_check.hard.keys มี payee_name = เทียบ เลขที่บิล + จ่ายให้ (ค่าใช้จ่ายทั่วไป ไม่มีรถ)"""
+    return "payee_name" in (keys or [])
+
+
+def hard_dup_key(item: Mapping, keys=None) -> tuple[str, ...] | None:
+    """คีย์ด่านซ้ำเข้ม: เลขที่บัตรชั่ง + เบอร์รถ + ทะเบียนรถ · ไม่มีเลขบัตร = ไม่มีคีย์ (ใช้ด่านอ่อนแทน)
+    ประเภทที่ spec ใช้ payee_name: เลขที่บิล + ชื่อผู้รับเงิน (ช่องว่าง/ตัวพิมพ์ไม่นับ)"""
     ref = (item.get("ref_no") or "").strip()
     if not ref:
         return None
+    if hard_keys_by_payee(keys):
+        return (ref, " ".join(str(item.get("payee_name") or "").split()).lower())
     return (ref, normalize_code(item.get("truck_code")), normalize_plate(item.get("truck_plate")))

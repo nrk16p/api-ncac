@@ -159,22 +159,32 @@ def split_duplicates(items: Iterable[Mapping], prior: Iterable[Mapping], spec: M
     cfg = spec.get("duplicate_check") or {}
     soft_days = int((cfg.get("soft") or {}).get("days", 7))
     keys = soft_keys_of(spec)
+    hard_keys = (cfg.get("hard") or {}).get("keys")
+    by_payee = L.hard_keys_by_payee(hard_keys)
     hard: list[dict] = []
     soft: list[dict] = []
-    pool = list(prior)
+    others = list(prior)
+    pool = list(others)
 
     for index, item in enumerate(items, start=1):
-        key = L.hard_dup_key(item)
+        key = L.hard_dup_key(item, hard_keys)
         matched_hard = None
         if key is not None:
-            matched_hard = next((o for o in pool if L.hard_dup_key(o) == key), None)
+            # เลขบิล + จ่ายให้ เทียบกับใบอื่นเท่านั้น — บิลใบเดียวมีหลายรายการ กรอกหลายแถวในใบเดียวได้
+            candidates = others if by_payee else pool
+            matched_hard = next((o for o in candidates if L.hard_dup_key(o, hard_keys) == key), None)
         if matched_hard is not None:
+            if by_payee:
+                message = "เลขที่บิลนี้ของผู้รับเงินรายนี้เบิกไปแล้ว"
+            elif item.get("truck_code") or item.get("truck_plate"):
+                message = "เลขอ้างอิงนี้ของรถคันนี้เบิกไปแล้ว"
+            else:
+                message = "เลขอ้างอิงนี้เบิกไปแล้ว"
             hard.append({"line_no": index, "form_id": matched_hard.get("form_id"),
                          "ref_no": item.get("ref_no"), "truck_code": item.get("truck_code"),
                          "event_date": str(matched_hard.get("event_date") or ""),
                          "payee_name": matched_hard.get("payee_name"), "amount": matched_hard.get("amount"),
-                         "message": ("เลขอ้างอิงนี้ของรถคันนี้เบิกไปแล้ว"
-                                     if (item.get("truck_code") or item.get("truck_plate")) else "เลขอ้างอิงนี้เบิกไปแล้ว")})
+                         "message": message})
         elif (mine := _soft_key(item, keys)) is not None:
             for other in pool:
                 if _soft_key(other, keys) != mine:
