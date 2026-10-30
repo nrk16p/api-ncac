@@ -1,6 +1,6 @@
 """กฎล้วนของเบิกเงินสดย่อย — ไม่มี DB ไม่มี FastAPI (เทสต์ได้โดยไม่ต้องต่อฐาน)
 
-อนุมัติขั้นเดียวจบ ไม่ใช้ TOA/approval engine — spec §4.1
+หัวหน้าของผู้ขอเบิกอนุมัติ → เจ้าของเงินสดอนุมัติพร้อมโอน (flow v3 30/10/2026)
 """
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Iterable, Mapping, Optional
 
+PENDING_HEAD = "PENDING_HEAD"  # หัวหน้าของผู้ขอเบิกอนุมัติก่อนโอน (ผู้ใช้สั่ง 30/10/2026)
 PENDING_APPROVAL = "PENDING_APPROVAL"
 RETURNED = "RETURNED"
 APPROVED = "APPROVED"
@@ -26,10 +27,12 @@ def bkk_today() -> date:
 
 
 # flow v2 (ผู้ใช้สั่ง 29/10/2026): เจ้าของเงินสดอนุมัติพร้อมจ่าย → ส่งเคลียร์เป็นรอบ → หัวหน้าอนุมัติเคลียร์
+# flow v3 (ผู้ใช้สั่ง 30/10/2026): เพิ่มหัวหน้าของผู้ขอเบิกอนุมัติก่อน เจ้าของเงินสดถึงโอนได้
 # → บัญชีตรวจ (ผ่าน → ตั้งเบิก/ทำจ่ายทั้งรอบ → ปิด · ไม่ผ่าน → ตีกลับเจ้าหน้าที่ แก้แล้วส่งตรงกลับบัญชี)
-STATUSES = (PENDING_APPROVAL, RETURNED, APPROVED, CLEAR_PENDING, AWAITING_REVIEW, SENT_BACK, REVIEWED, CLOSED)
+STATUSES = (PENDING_HEAD, PENDING_APPROVAL, RETURNED, APPROVED, CLEAR_PENDING, AWAITING_REVIEW, SENT_BACK, REVIEWED, CLOSED)
 
 STATUS_LABELS = {
+    PENDING_HEAD: "รอหัวหน้าอนุมัติ",
     PENDING_APPROVAL: "รอเจ้าของเงินสดอนุมัติ",
     RETURNED: "ตีกลับผู้เบิก",
     APPROVED: "อนุมัติจ่ายแล้ว รอส่งเคลียร์",
@@ -42,8 +45,9 @@ STATUS_LABELS = {
 }
 
 ALLOWED = {
+    PENDING_HEAD: (PENDING_APPROVAL, RETURNED),
     PENDING_APPROVAL: (APPROVED, RETURNED),
-    RETURNED: (PENDING_APPROVAL,),
+    RETURNED: (PENDING_HEAD,),
     APPROVED: (CLEAR_PENDING,),
     CLEAR_PENDING: (AWAITING_REVIEW, APPROVED),  # หัวหน้าไม่อนุมัติ → กลับไปให้เจ้าของเงินสดจัดรอบใหม่
     AWAITING_REVIEW: (REVIEWED, SENT_BACK),
@@ -219,6 +223,14 @@ def missing_debt_doc_text(form_ids: list[str]) -> str:
 
 MANAGER_LEVEL = 5
 TOP_LEVEL = 9
+
+
+HEAD_MIN_LEVEL = 3  # Supervisor = หัวหน้าแผนก (position_levels)
+
+
+def head_required_level(requester_level: Optional[int]) -> int:
+    """หัวหน้าที่อนุมัติใบก่อนโอน: อย่างน้อยหัวหน้าแผนก และต้องสูงกว่าผู้ขอเบิก (ผู้ใช้สั่ง 30/10/2026)"""
+    return min(max(HEAD_MIN_LEVEL, (requester_level or 0) + 1), TOP_LEVEL)
 
 
 def clear_required_level(holder_level: Optional[int]) -> int:

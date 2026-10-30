@@ -27,6 +27,7 @@ def test_claim_columns_match_migration():
         "id", "form_id", "fund_id", "expense_type", "expense_date", "period_from", "period_to",
         "driver_employee_id", "driver_name", "payee_name", "amount", "detail", "dd_no", "dd_snapshot",
         "receipt_no", "wht_applicable", "created_by", "source", "dup_override_reason", "return_reason",
+        "head_approved_by", "head_approved_at",
         "approved_by", "approved_at", "transfer_date", "transfer_slip_at", "submitted_to_acc_at",
         "review_remark", "reviewed_by", "reviewed_at", "batch_id", "debt_doc_no", "cost_center", "status", "created_at", "updated_at",
     }

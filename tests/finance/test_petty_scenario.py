@@ -22,6 +22,8 @@ from schemas.finance_petty_schema import (
 from services.finance import petty_logic as L
 from services.finance import petty_repo as repo
 
+pytestmark = pytest.mark.usefixtures("head_approved_claims")  # เริ่มที่ขั้นเจ้าของเงินสด (flow v3)
+
 MIGRATIONS = pathlib.Path(__file__).resolve().parents[2] / "scripts/migrations"
 HOLDER = "670108"          # ผู้ถือเงิน = ผู้อนุมัติ
 CLERK = "kittaboon"        # ผู้เปิดใบ

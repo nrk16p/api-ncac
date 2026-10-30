@@ -73,3 +73,23 @@ def no_real_mongo(monkeypatch):
 
     monkeypatch.setattr(petty_atms, "_collection", _blocked)
     monkeypatch.setattr(petty_master, "_collection", _blocked)
+
+
+@pytest.fixture
+def head_approved_claims(monkeypatch):
+    """เทสต์ชุดเดิม (flow v2) เริ่มที่ขั้นเจ้าของเงินสด — ใบที่เปิดให้ถือว่าหัวหน้าอนุมัติแล้ว
+    ขั้นหัวหน้า (flow v3 30/10/2026) มีเทสต์ของตัวเองใน test_petty_head_*.py
+    ไฟล์ที่ใช้: pytestmark = pytest.mark.usefixtures("head_approved_claims")"""
+    from services.finance import petty_logic as L
+    from services.finance import petty_repo as repo
+    real = repo.create_claim
+
+    def _create(db, *args, **kwargs):
+        claim = real(db, *args, **kwargs)
+        return repo.set_status(db, claim, L.PENDING_APPROVAL, "600050", "HEAD_APPROVE",
+                               fields={"head_approved_by": "600050"})
+
+    monkeypatch.setattr(repo, "create_claim", _create)
+    # อีเมลหาหัวหน้าตอนเปิดใบต้องอ่านสายงาน (sqlite ในเทสต์ไม่มีตาราง TOA) — ไม่เกี่ยวกับเทสต์ชุดนี้
+    from routes.finance import petty_routes
+    monkeypatch.setattr(petty_routes, "_notify_heads", lambda db, claim, background: None)

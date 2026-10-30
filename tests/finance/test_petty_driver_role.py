@@ -19,6 +19,8 @@ from schemas.finance_petty_schema import ApproveIn, ClaimItemIn, DebtDocIn, Roun
 from services.finance import petty_repo as repo
 from services.finance import petty_validate as V
 
+pytestmark = pytest.mark.usefixtures("head_approved_claims")  # เริ่มที่ขั้นเจ้าของเงินสด (flow v3)
+
 TIRE_SPEC = {
     "item_based": True,
     "item_fields": [

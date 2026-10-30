@@ -13,7 +13,7 @@ class TestTransitions:
         assert L.assert_transition("PENDING_APPROVAL", "APPROVED") is None
 
     def test_returned_can_be_resubmitted(self):
-        assert L.assert_transition("RETURNED", "PENDING_APPROVAL") is None
+        assert L.assert_transition("RETURNED", "PENDING_HEAD") is None  # flow v3: กลับไปให้หัวหน้าก่อน
 
     def test_approved_goes_into_a_round(self):
         assert L.assert_transition("APPROVED", "CLEAR_PENDING") is None
@@ -62,8 +62,8 @@ class TestTransitions:
 
 
 class TestLabels:
-    def test_eight_statuses(self):
-        assert L.STATUSES == ("PENDING_APPROVAL", "RETURNED", "APPROVED", "CLEAR_PENDING",
+    def test_nine_statuses(self):
+        assert L.STATUSES == ("PENDING_HEAD", "PENDING_APPROVAL", "RETURNED", "APPROVED", "CLEAR_PENDING",
                               "AWAITING_REVIEW", "SENT_BACK", "REVIEWED", "CLOSED")
 
     def test_labels_cover_every_status_and_the_old_one(self):

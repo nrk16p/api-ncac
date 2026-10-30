@@ -130,6 +130,11 @@ class ApproveIn(BaseModel):
     attachments: dict[str, int] = Field(default_factory=dict)
 
 
+class HeadApproveIn(BaseModel):
+    """หัวหน้าของผู้ขอเบิกอนุมัติใบก่อนโอน (flow v3 30/10/2026)"""
+    employee_id: str = Field(min_length=1, max_length=50)
+
+
 class ReturnIn(BaseModel):
     employee_id: str = Field(min_length=1, max_length=50)
     reason: str = Field(min_length=1)

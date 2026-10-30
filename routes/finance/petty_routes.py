@@ -107,6 +107,8 @@ def _claim_dict(c, items, names: dict | None = None) -> dict:
         "created_at": c.created_at.isoformat() if c.created_at else None,
         "cost_center": c.cost_center,
         "created_by_name": names.get(c.created_by), "approved_by_name": names.get(c.approved_by),
+        "head_approved_by": c.head_approved_by, "head_approved_by_name": names.get(c.head_approved_by),
+        "head_approved_at": c.head_approved_at.isoformat() if c.head_approved_at else None,
         "approved_by": c.approved_by, "approved_at": c.approved_at.isoformat() if c.approved_at else None,
         "transfer_date": str(c.transfer_date) if c.transfer_date else None,
         "review_remark": c.review_remark, "return_reason": c.return_reason,
@@ -131,7 +133,7 @@ def _reject_incomplete_rows(db: Session, expense_type: str, items: list[dict]) -
 
 
 @router.post("/claims", status_code=201)
-def create_claim(payload: ClaimIn, db: Session = Depends(get_db)):
+def create_claim(payload: ClaimIn, db: Session = Depends(get_db), background: BackgroundTasks = None):
     body = payload.model_dump()
     items = body.pop("items")
     _reject_incomplete_rows(db, payload.expense_type, items)
@@ -145,11 +147,12 @@ def create_claim(payload: ClaimIn, db: Session = Depends(get_db)):
         claim = repo.create_claim(db, body, items, actor=payload.created_by)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    _notify_heads(db, claim, background)
     return _out(db, claim)
 
 
 def _out(db: Session, claim) -> dict:
-    names = repo.employee_names(db, [claim.created_by, claim.approved_by])
+    names = repo.employee_names(db, [claim.created_by, claim.approved_by, claim.head_approved_by])
     items = repo.claim_items(db, claim.id)
     body = _claim_dict(claim, items, names)
     seq = repo.month_sequence(db, claim, items)  # ใบที่เท่าไรของรถคันนั้นในเดือน (เฉพาะรายละเอียดใบ)
@@ -158,16 +161,45 @@ def _out(db: Session, claim) -> dict:
     return body
 
 
+# ขอบเขตกันหลุดของคิวหัวหน้า (กรองสิทธิ์ใน Python ก่อนตัดหน้า) — ปกติใบรอหัวหน้าค้างพร้อมกันไม่กี่ร้อย
+HEAD_QUEUE_CAP = 2000
+
+
 @router.get("/claims")
 def list_claims(employee_id: Optional[str] = None, holder: Optional[str] = None,
                 status: Optional[str] = None, month: Optional[str] = None,
+                head_approver: Optional[str] = None, head_approved_by: Optional[str] = None,
                 limit: int = Query(default=50, le=200), offset: int = 0,
                 db: Session = Depends(get_db)):
-    """employee_id = ใบที่คนนั้นเปิด · holder = ทุกใบของกองทุนที่คนนั้นถือ · ไม่ส่งทั้งคู่ = ทุกใบ (บัญชี/การเงิน)"""
+    """employee_id = ใบที่คนนั้นเปิด · holder = ทุกใบของกองทุนที่คนนั้นถือ · ไม่ส่งทั้งคู่ = ทุกใบ (บัญชี/การเงิน)
+    head_approver = ใบรอหัวหน้าที่คนนั้นอนุมัติได้ (คิวหัวหน้า มี is_primary) · head_approved_by = ใบที่คนนั้นอนุมัติไปแล้ว"""
+    def _names(rows):
+        return repo.employee_names(db, [x for c in rows for x in (c.created_by, c.approved_by, c.head_approved_by)])
+
+    if head_approver:
+        pending, _ = repo.list_claims(db, fund_ids=None, created_by=None, status=L.PENDING_HEAD, month=month,
+                                      limit=HEAD_QUEUE_CAP, offset=0, exclude_created_by=head_approver)
+        people, mappings = repo.line_context(db, fresh=False)
+        roles: dict = {}  # สิทธิ์ขึ้นกับผู้ขอเบิก ไม่ใช่ตัวใบ คิดครั้งเดียวต่อคน
+        mine = []
+        for c in pending:
+            if c.created_by not in roles:
+                roles[c.created_by] = _head_roles_in(people, mappings, c.created_by, head_approver)
+            if roles[c.created_by][0]:
+                mine.append((c, roles[c.created_by][1]))
+        page = mine[offset:offset + limit]
+        names = _names([c for c, _ in page])
+        items = []
+        for c, primary in page:
+            body = _claim_dict(c, repo.claim_items(db, c.id), names)
+            body["is_primary"] = primary  # รอฉันอนุมัติ (ได้อีเมล) / อนุมัติแทนได้
+            items.append(body)
+        return {"total": len(mine), "items": items}
+
     fund_ids = [f.id for f in repo.list_funds(db, holder=holder)] if holder else None
     rows, total = repo.list_claims(db, fund_ids=fund_ids, created_by=employee_id, status=status,
-                                   month=month, limit=limit, offset=offset)
-    names = repo.employee_names(db, [x for c in rows for x in (c.created_by, c.approved_by)])
+                                   month=month, limit=limit, offset=offset, head_approved_by=head_approved_by)
+    names = _names(rows)
     return {"total": total, "items": [_claim_dict(c, repo.claim_items(db, c.id), names) for c in rows]}
 
 
@@ -204,7 +236,8 @@ def get_claim(form_id: str, db: Session = Depends(get_db)):
 
 from datetime import datetime, timezone  # noqa: E402
 
-from schemas.finance_petty_schema import ApproveIn, DdIn, DebtDocIn, ReturnIn, ReviewIn  # noqa: E402
+from schemas.finance_petty_schema import ApproveIn, DdIn, DebtDocIn, HeadApproveIn, ReturnIn, ReviewIn  # noqa: E402
+from services.finance import petty_clear as clear  # noqa: E402
 from services.finance import petty_mail as mail  # noqa: E402
 from services.finance import petty_validate as validate  # noqa: E402
 
@@ -276,8 +309,74 @@ def _rule_error(exc: L.PettyRuleError) -> HTTPException:
     return HTTPException(status_code=exc.http_status, detail=str(exc))
 
 
+def _head_roles_in(people: dict, mappings: dict, requester_id: Optional[str], employee_id: str) -> tuple[bool, bool]:
+    """(อนุมัติใบนี้ได้ไหม, เป็นคนที่ระบบส่งอีเมลหาไหม) — หัวหน้าของผู้ขอเบิก ใช้ engine เดียวกับ Advance
+    แผนกเดียวกันก่อน · ระดับอย่างน้อยหัวหน้าแผนกและสูงกว่าผู้ขอเบิก · ผู้ขอเบิกกดเองไม่ได้ (flow v3 30/10/2026)"""
+    if not requester_id:
+        return False, False
+    required = L.head_required_level((people.get(requester_id) or {}).get("level"))
+    if not clear.can_clear(people, mappings, requester_id, required, employee_id):
+        return False, False
+    heads = clear.clear_notify(people, mappings, requester_id, required)
+    return True, any(str(p.get("employee_id")) == str(employee_id) for p in heads)
+
+
+def _may_head_approve(db: Session, claim, employee_id: str) -> bool:
+    people, mappings = repo.line_context(db, fresh=True)  # ตัดสินสิทธิ์ต้องใช้สายงานล่าสุด
+    return _head_roles_in(people, mappings, claim.created_by, employee_id)[0]
+
+
+def _require_head(db: Session, claim, employee_id: str) -> None:
+    if not _may_head_approve(db, claim, employee_id):
+        raise HTTPException(status_code=403, detail="เฉพาะหัวหน้าของผู้ขอเบิกเท่านั้น")
+
+
+def _notify_heads(db: Session, claim, background) -> None:
+    """อีเมลหาหัวหน้าชั้นที่ต้องอนุมัติ (สาขาเดียวกันก่อน) — ไม่มีใครก็ข้าม ไม่ทำให้การเปิดใบล้ม"""
+    try:
+        people, mappings = repo.line_context(db, fresh=False)
+        required = L.head_required_level((people.get(claim.created_by) or {}).get("level"))
+        heads = clear.clear_notify(people, mappings, claim.created_by, required)
+        emails = [repo.employee_email(db, p["employee_id"]) for p in heads]
+        name = repo.employee_names(db, [claim.created_by]).get(claim.created_by)
+    except Exception:  # noqa: BLE001 — อีเมลแจ้งเตือนห้ามทำให้ใบเปิดไม่ได้ (ใบ commit ไปแล้ว)
+        logger.exception("petty head notify failed: %s", claim.form_id)
+        db.rollback()
+        return
+    args = (claim.form_id, name, claim.amount, emails)
+    if background is not None:
+        background.add_task(mail.notify_head_pending, *args)
+    else:
+        mail.notify_head_pending(*args)
+
+
+@router.post("/claims/{form_id}/head-approve")
+def head_approve_claim(form_id: str, payload: HeadApproveIn, db: Session = Depends(get_db),
+                       background: BackgroundTasks = None):
+    """หัวหน้าของผู้ขอเบิกอนุมัติ → ใบไปรอเจ้าของเงินสดอนุมัติพร้อมโอน (ยังไม่ตัดวงเงิน)"""
+    claim = _claim_or_404(db, form_id)
+    if claim.status != L.PENDING_HEAD:
+        raise _rule_error(L.PettyRuleError(
+            f"ทำรายการนี้ไม่ได้ ใบนี้สถานะ {L.STATUS_LABELS.get(claim.status, claim.status)} อยู่แล้ว", 409))
+    _require_head(db, claim, payload.employee_id)
+    try:
+        out = repo.set_status(db, claim, L.PENDING_APPROVAL, payload.employee_id, "HEAD_APPROVE",
+                              fields={"head_approved_by": payload.employee_id})
+    except L.PettyRuleError as exc:
+        raise _rule_error(exc)
+    fund = repo.get_fund(db, out.fund_id)
+    holder_email = repo.employee_email(db, fund.holder_employee_id) if fund else None
+    head_name = repo.employee_names(db, [payload.employee_id]).get(payload.employee_id)
+    args = (out.form_id, head_name, out.amount, holder_email)
+    if background is not None:
+        background.add_task(mail.notify_head_approved, *args)
+    else:
+        mail.notify_head_approved(*args)
+    return _out(db, out)
+
+
 @router.put("/claims/{form_id}")
-def update_claim(form_id: str, payload: ClaimIn, db: Session = Depends(get_db)):
+def update_claim(form_id: str, payload: ClaimIn, db: Session = Depends(get_db), background: BackgroundTasks = None):
     claim = _claim_or_404(db, form_id)
     if claim.created_by != payload.created_by:
         raise HTTPException(status_code=403, detail="แก้ได้เฉพาะใบที่ตัวเองเปิด")
@@ -286,10 +385,13 @@ def update_claim(form_id: str, payload: ClaimIn, db: Session = Depends(get_db)):
     if body.get("cost_center") is None:
         body.pop("cost_center", None)  # FE เก่าไม่ส่งมา — คงรหัสเดิมไว้ ไม่ล้างทิ้ง
     _reject_incomplete_rows(db, claim.expense_type, items)
+    before = claim.status
     try:
         out = repo.update_draft(db, claim, body, items, actor=payload.created_by)
     except L.PettyRuleError as exc:
         raise _rule_error(exc)
+    if out.status == L.PENDING_HEAD and before != L.PENDING_HEAD:
+        _notify_heads(db, out, background)  # ส่งใหม่หลังถูกตีกลับ หรือแก้หลังหัวหน้าอนุมัติแล้ว
     return _out(db, out)
 
 
@@ -298,6 +400,12 @@ def approve_claim(form_id: str, payload: ApproveIn, db: Session = Depends(get_db
                   background: BackgroundTasks = None):
     claim = _claim_or_404(db, form_id)
     _require_holder(db, claim, payload.employee_id)
+    # flow v3: หัวหน้าต้องอนุมัติก่อน · เจ้าของเงินสดที่เป็นหัวหน้าของผู้ขอเบิกด้วย กดครั้งเดียวได้ทั้งสองขั้น
+    also_head = False
+    if claim.status == L.PENDING_HEAD:
+        if not _may_head_approve(db, claim, payload.employee_id):
+            raise HTTPException(status_code=409, detail="ใบนี้รอหัวหน้าอนุมัติก่อน เจ้าของเงินสดถึงโอนได้")
+        also_head = True
     items = repo.claim_items(db, claim.id)
     gate = _gate(db, claim, items, validate.STAGE_APPROVE, payload.attachments)
 
@@ -325,8 +433,13 @@ def approve_claim(form_id: str, payload: ApproveIn, db: Session = Depends(get_db
     if payload.dup_override_reason:
         fields["dup_override_reason"] = payload.dup_override_reason
     try:
+        if also_head:
+            repo.set_status(db, claim, L.PENDING_APPROVAL, payload.employee_id, "HEAD_APPROVE",
+                            fields={"head_approved_by": payload.employee_id},
+                            remark="เจ้าของเงินสดเป็นหัวหน้าของผู้ขอเบิก อนุมัติสองขั้นในครั้งเดียว", commit=False)
         out = repo.set_status(db, claim, L.APPROVED, payload.employee_id, "APPROVE", fields=fields)
     except L.PettyRuleError as exc:
+        db.rollback()
         raise _rule_error(exc)
     return _out(db, out)
 
@@ -335,10 +448,15 @@ def approve_claim(form_id: str, payload: ApproveIn, db: Session = Depends(get_db
 def return_claim(form_id: str, payload: ReturnIn, db: Session = Depends(get_db),
                  background: BackgroundTasks = None):
     claim = _claim_or_404(db, form_id)
-    _require_holder(db, claim, payload.employee_id)
+    action = "RETURN"
+    if claim.status == L.PENDING_HEAD:  # ขั้นหัวหน้า: หัวหน้าตีกลับ (เจ้าของเงินสดยังไม่ถึงคิว)
+        _require_head(db, claim, payload.employee_id)
+        action = "HEAD_RETURN"
+    else:
+        _require_holder(db, claim, payload.employee_id)
     clerk_email = repo.employee_email(db, claim.created_by)
     try:
-        out = repo.set_status(db, claim, L.RETURNED, payload.employee_id, "RETURN",
+        out = repo.set_status(db, claim, L.RETURNED, payload.employee_id, action,
                               fields={"return_reason": payload.reason}, remark=payload.reason)
     except L.PettyRuleError as exc:
         raise _rule_error(exc)

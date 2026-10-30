@@ -12,6 +12,8 @@ from models.finance_petty_model import FinPettyFund, FinPettyLog
 from services.finance import petty_logic as L
 from services.finance import petty_repo as repo
 
+pytestmark = pytest.mark.usefixtures("head_approved_claims")  # เริ่มที่ขั้นเจ้าของเงินสด (flow v3)
+
 
 @pytest.fixture
 def approved(db_session, fund, claim_payload, weigh_items, seq_stub, frozen_bkk):

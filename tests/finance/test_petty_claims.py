@@ -15,9 +15,9 @@ class TestCreateClaim:
         claim = repo.create_claim(db_session, claim_payload(), weigh_items, actor="55555")
         assert (claim.period_from, claim.period_to) == (date(2026, 9, 17), date(2026, 9, 24))
 
-    def test_starts_pending_approval(self, db_session, fund, claim_payload, weigh_items, seq_stub, frozen_bkk):
+    def test_starts_waiting_for_the_head(self, db_session, fund, claim_payload, weigh_items, seq_stub, frozen_bkk):
         claim = repo.create_claim(db_session, claim_payload(), weigh_items, actor="55555")
-        assert claim.status == "PENDING_APPROVAL"
+        assert claim.status == "PENDING_HEAD"  # flow v3: หัวหน้าอนุมัติก่อนโอน
 
     def test_form_id_shape(self, db_session, fund, claim_payload, weigh_items, seq_stub, frozen_bkk):
         claim = repo.create_claim(db_session, claim_payload(), weigh_items, actor="55555")

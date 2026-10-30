@@ -5,6 +5,8 @@ import pytest
 from services.finance import petty_logic as L
 from services.finance import petty_repo as repo
 
+pytestmark = pytest.mark.usefixtures("head_approved_claims")  # เริ่มที่ขั้นเจ้าของเงินสด (flow v3)
+
 
 @pytest.fixture
 def claim(db_session, fund, claim_payload, weigh_items, seq_stub, frozen_bkk):
@@ -28,7 +30,7 @@ class TestApprove:
         from models.finance_petty_model import FinPettyLog
         actions = [l.action for l in db_session.query(FinPettyLog)
                    .filter(FinPettyLog.claim_id == claim.id).order_by(FinPettyLog.id).all()]
-        assert actions == ["CREATE", "APPROVE"]
+        assert actions == ["CREATE", "HEAD_APPROVE", "APPROVE"]
 
 
 class TestReturnAndResubmit:
@@ -41,7 +43,8 @@ class TestReturnAndResubmit:
         repo.set_status(db_session, claim, L.RETURNED, actor="12345", action="RETURN")
         out = repo.update_draft(db_session, claim, {"payee_name": "อัญชัญ น่วมมี"}, weigh_items[:2],
                                 actor="55555")
-        assert out.amount == 200 and out.status == "PENDING_APPROVAL"
+        assert out.amount == 200 and out.status == "PENDING_HEAD"  # flow v3: ส่งใหม่ต้องผ่านหัวหน้าอีกรอบ
+        assert out.head_approved_by is None
 
     def test_cannot_edit_after_approval(self, db_session, claim, weigh_items):
         repo.set_status(db_session, claim, L.APPROVED, actor="12345", action="APPROVE")
@@ -55,7 +58,7 @@ class TestReturnAndResubmit:
         from models.finance_petty_model import FinPettyLog
         actions = [l.action for l in db_session.query(FinPettyLog)
                    .filter(FinPettyLog.claim_id == claim.id).order_by(FinPettyLog.id).all()]
-        assert actions == ["CREATE", "RETURN", "RESUBMIT"]
+        assert actions == ["CREATE", "HEAD_APPROVE", "RETURN", "RESUBMIT"]
 
 
 class TestFullPath:

@@ -15,8 +15,9 @@ JSONish = JSON().with_variant(JSONB(), "postgresql")
 from database import Base
 
 # flow v2 (29/10/2026) · TRANSFERRED เลิกใช้แต่ยังอยู่ใน CHECK ให้แถวเก่าไม่ผิดกติกา
+# flow v3 (30/10/2026) เพิ่ม PENDING_HEAD = รอหัวหน้าของผู้ขอเบิกอนุมัติก่อนโอน
 PETTY_STATUSES = (
-    "PENDING_APPROVAL", "RETURNED", "APPROVED", "CLEAR_PENDING", "AWAITING_REVIEW", "SENT_BACK", "REVIEWED",
+    "PENDING_HEAD", "PENDING_APPROVAL", "RETURNED", "APPROVED", "CLEAR_PENDING", "AWAITING_REVIEW", "SENT_BACK", "REVIEWED",
     "CLOSED", "TRANSFERRED",
 )
 PETTY_BATCH_STATUSES = ("CLEAR_PENDING", "CLEAR_REJECTED", "AWAITING_REVIEW", "REVIEWED", "VOUCHERED", "CLOSED")
@@ -110,6 +111,8 @@ class FinPettyClaim(Base):
     source = Column(String(10), nullable=False, default="WEB", server_default="'WEB'")
     dup_override_reason = Column(Text)
     return_reason = Column(Text)
+    head_approved_by = Column(String(50))  # หัวหน้าของผู้ขอเบิกที่อนุมัติก่อนโอน (flow v3)
+    head_approved_at = Column(DateTime(timezone=True))
     approved_by = Column(String(50))
     approved_at = Column(DateTime(timezone=True))
     transfer_date = Column(Date)

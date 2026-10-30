@@ -88,6 +88,43 @@ def notify_duplicate(form_id: str, duplicates, clerk_email=None, approver_email=
                             render_duplicate(form_id, duplicates))
 
 
+def _claim_link(form_id: str) -> str:
+    import os
+    url = mail.build_link(os.getenv("FE_BASE_URL"), f"/finance/petty/{form_id}")
+    return (f"<p style='margin:8px 0 0'><a href='{escape(url, quote=True)}'>เปิดดูใบนี้</a></p>"
+            if url else "")
+
+
+def render_head_pending(form_id: str, requester_name: Optional[str], amount) -> str:
+    who = escape(requester_name) if requester_name else "ผู้ขอเบิก"
+    return _frame("มีใบเบิกเงินสดย่อยรอคุณอนุมัติ", form_id,
+                  f"<p style='margin:0'>{who} ขอเบิก {float(amount):,.2f} บาท "
+                  "อนุมัติแล้วใบจะไปที่เจ้าของเงินสดเพื่อโอนเงิน</p>" + _claim_link(form_id))
+
+
+def render_head_approved(form_id: str, head_name: Optional[str], amount) -> str:
+    who = escape(head_name) if head_name else "หัวหน้า"
+    return _frame("หัวหน้าอนุมัติแล้ว รอคุณอนุมัติจ่าย", form_id,
+                  f"<p style='margin:0'>{who} อนุมัติใบนี้แล้ว ยอด {float(amount):,.2f} บาท</p>"
+                  + _claim_link(form_id))
+
+
+def notify_head_pending(form_id: str, requester_name, amount, to: list) -> None:
+    to = [a for a in dict.fromkeys(to or []) if a]
+    if not to:
+        log.info("petty head email skipped (no head email): %s", form_id)
+        return
+    mail.send_finance_email(to, f"[เงินสดย่อย] รอหัวหน้าอนุมัติ {form_id}",
+                            render_head_pending(form_id, requester_name, amount))
+
+
+def notify_head_approved(form_id: str, head_name, amount, holder_email=None) -> None:
+    if not holder_email:
+        return
+    mail.send_finance_email([holder_email], f"[เงินสดย่อย] รออนุมัติจ่าย {form_id}",
+                            render_head_approved(form_id, head_name, amount))
+
+
 def _round_frame(title: str, batch_no: str, body: str) -> str:
     return (
         f"<div style='font-family:sans-serif;font-size:14px;line-height:1.6'>"

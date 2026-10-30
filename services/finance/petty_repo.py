@@ -110,7 +110,7 @@ def create_claim(db: Session, payload: dict, items: list[dict], actor: str) -> F
     form_id = generate_form_id(db, L.petty_form_code(fund.branch_code, fund.division_code))
     period_from, period_to = L.period_of(items)
     claim = FinPettyClaim(
-        form_id=form_id, status=L.PENDING_APPROVAL,
+        form_id=form_id, status=L.PENDING_HEAD,
         amount=L.claim_total(items), period_from=period_from, period_to=period_to,
         **payload,
     )
@@ -147,14 +147,20 @@ def replace_items(db: Session, claim_id: int, items: list[dict]) -> Decimal:
 
 
 def list_claims(db: Session, *, fund_ids: Optional[list[int]], created_by: Optional[str],
-                status: Optional[str], month: Optional[str], limit: int, offset: int):
+                status: Optional[str], month: Optional[str], limit: int, offset: int,
+                head_approved_by: Optional[str] = None, exclude_created_by: Optional[str] = None):
+    """status คั่นด้วย , ได้ · head_approved_by = ใบที่หัวหน้าคนนั้นอนุมัติไปแล้ว (แถบอนุมัติแล้วของหัวหน้า)"""
     q = db.query(FinPettyClaim)
+    if head_approved_by:
+        q = q.filter(FinPettyClaim.head_approved_by == head_approved_by)
+    if exclude_created_by:
+        q = q.filter(FinPettyClaim.created_by != exclude_created_by)
     if fund_ids is not None:
         q = q.filter(FinPettyClaim.fund_id.in_(fund_ids or [-1]))
     if created_by:
         q = q.filter(FinPettyClaim.created_by == created_by)
     if status:
-        q = q.filter(FinPettyClaim.status == status)
+        q = q.filter(FinPettyClaim.status.in_([x for x in status.split(",") if x]))
     if month:
         year, mon = (int(x) for x in month.split("-"))
         start = _date(year, mon, 1)
@@ -172,6 +178,7 @@ from datetime import datetime, timezone  # noqa: E402
 
 # flow v2: อนุมัติ = จ่ายพร้อมกัน จึงประทับทั้งเวลาอนุมัติและเวลาแนบสลิปในจังหวะเดียว
 _NOW_FIELDS = {
+    "PENDING_APPROVAL": ("head_approved_at",),
     "APPROVED": ("approved_at", "transfer_slip_at"),
     "AWAITING_REVIEW": ("submitted_to_acc_at",),
 }
@@ -216,14 +223,15 @@ def _all_or_nothing(db: Session):
         raise
 
 
-_EDITABLE = ("PENDING_APPROVAL", "RETURNED", "SENT_BACK")
+_EDITABLE = ("PENDING_HEAD", "PENDING_APPROVAL", "RETURNED", "SENT_BACK")
 
 
 def update_draft(db: Session, claim: FinPettyClaim, payload: dict, items: list[dict],
                  actor: str) -> FinPettyClaim:
-    """แก้ได้ตอนรออนุมัติ ถูกเจ้าของเงินสดตีกลับ หรือถูกบัญชีตีกลับ
+    """แก้ได้ตอนรออนุมัติ ถูกตีกลับ หรือถูกบัญชีตีกลับ
 
-    ใบที่บัญชีตีกลับ แก้แล้วส่งตรงกลับบัญชี ไม่ต้องอนุมัติใหม่ (ผู้ใช้สั่ง 29/10/2026) · ที่เหลือกลับเข้าคิวอนุมัติ
+    ใบที่บัญชีตีกลับ แก้แล้วส่งตรงกลับบัญชี ไม่ต้องอนุมัติใหม่ (ผู้ใช้สั่ง 29/10/2026)
+    ที่เหลือกลับไปให้หัวหน้าอนุมัติใหม่ แม้หัวหน้าอนุมัติไปแล้ว เพราะยอด/รายการอาจเปลี่ยน (flow v3)
     """
     if claim.status not in _EDITABLE:
         raise L.PettyRuleError(
@@ -245,9 +253,13 @@ def update_draft(db: Session, claim: FinPettyClaim, payload: dict, items: list[d
     if items:
         replace_items(db, claim.id, items)
         db.refresh(claim)
-    claim.status = L.PENDING_APPROVAL
-    log(db, claim.id, "RESUBMIT" if was_returned else "UPDATE", actor,
-        changes={"amount": str(claim.amount)})
+    before = claim.status
+    claim.status = L.PENDING_HEAD
+    claim.head_approved_by = claim.head_approved_at = None
+    changes = {"amount": str(claim.amount)}
+    if before != L.PENDING_HEAD:
+        changes.update({"from": before, "to": L.PENDING_HEAD})
+    log(db, claim.id, "RESUBMIT" if was_returned else "UPDATE", actor, changes=changes)
     db.commit()
     db.refresh(claim)
     return claim

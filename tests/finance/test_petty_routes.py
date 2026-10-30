@@ -10,6 +10,8 @@ from schemas.finance_petty_schema import (
     ApproveIn, DdIn, DocNumbersIn, PayIn, ReviewIn, RoundActionIn, RoundIn, RoundRejectIn, VoucherIn,
 )
 
+pytestmark = pytest.mark.usefixtures("head_approved_claims")  # เริ่มที่ขั้นเจ้าของเงินสด (flow v3)
+
 WEIGH_SPEC = {
     "item_based": True,
     "item_fields": [{"key": "ref_no", "label": "เลขที่บัตรชั่ง", "required": True}],

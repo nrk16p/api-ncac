@@ -7,6 +7,8 @@ from models.finance_model import FinAdvance
 from services.finance import petty_logic as L
 from services.finance import petty_repo as repo
 
+pytestmark = pytest.mark.usefixtures("head_approved_claims")  # เริ่มที่ขั้นเจ้าของเงินสด (flow v3)
+
 
 def _paid_advance(db_session, form_id: str, amount: str, fin_status: str = "PAID",
                   employee_id: str = "12345"):
