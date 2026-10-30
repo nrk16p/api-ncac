@@ -119,18 +119,26 @@ class TestCashOwnerWaitsForTheHead:
         out = _owner_approve(db_session, claim)
         assert out["status"] == "APPROVED" and out["head_approved_by"] == "600050"
 
-    def test_owner_who_is_also_the_head_does_both_in_one_click(self, db_session, claim, monkeypatch, mails):
-        _line(monkeypatch, holder_dept=30)
-        out = _owner_approve(db_session, claim)
-        assert out["status"] == "APPROVED" and out["head_approved_by"] == "12345"
-        assert _actions(db_session, claim)[-2:] == ["HEAD_APPROVE", "APPROVE"]
-
-    def test_one_click_still_respects_the_document_gate(self, db_session, claim, monkeypatch, mails):
+    def test_owner_who_is_the_head_cannot_approve_or_pay_before_the_next_level(self, db_session, claim, monkeypatch, mails):
+        """คนอนุมัติกับคนโอนต้องเป็นคนละคน (ผู้ใช้สั่ง 30/10/2026) — เจ้าของเงินสด (ระดับ 4 แผนกเดียวกัน) ไม่ใช่หัวหน้า
+        ข้ามไปอีกระดับ: ต้องระดับ 5 ขึ้นไป หัวหน้าแผนกระดับ 3 ก็กดไม่ได้"""
         _line(monkeypatch, holder_dept=30)
         with pytest.raises(HTTPException) as exc:
-            R.approve_claim(claim.form_id, ApproveIn(employee_id="12345", attachments={"transfer": 1}), db_session)
-        assert exc.value.status_code == 403
-        assert repo.get_claim(db_session, claim.form_id).status == "PENDING_HEAD"
+            _owner_approve(db_session, claim)
+        assert exc.value.status_code == 409
+        for who in ("12345", "600050"):
+            with pytest.raises(HTTPException) as exc:
+                R.head_approve_claim(claim.form_id, HeadApproveIn(employee_id=who), db_session)
+            assert exc.value.status_code == 403
+        R.head_approve_claim(claim.form_id, HeadApproveIn(employee_id="600090"), db_session)
+        out = _owner_approve(db_session, claim)
+        assert out["status"] == "APPROVED" and out["head_approved_by"] == "600090" and out["approved_by"] == "12345"
+
+    def test_email_skips_the_owner_and_goes_one_level_up(self, db_session, fund, weigh_type, claim_payload,
+                                                         weigh_items, seq_stub, frozen_bkk, monkeypatch, mails):
+        _line(monkeypatch, holder_dept=30)
+        R.create_claim(ClaimIn(**{**claim_payload(), "expense_date": "2026-09-25", "items": weigh_items}), db_session)
+        assert mails and mails[0][0] == ["600090@x"]
 
 
 class TestHeadReturn:
@@ -196,12 +204,8 @@ class TestViewerFlags:
         R.head_approve_claim(claim.form_id, HeadApproveIn(employee_id="600050"), db_session)
         assert R.get_claim(claim.form_id, employee_id="600050", db=db_session)["can_head_approve"] is False
 
-    def test_owner_list_marks_claims_the_owner_may_also_head_approve(self, db_session, claim, monkeypatch, mails):
-        _line(monkeypatch, holder_dept=30)
-        rows = R.list_claims(holder="12345", limit=50, offset=0, db=db_session)["items"]
-        assert rows[0]["status"] == "PENDING_HEAD" and rows[0]["can_head_approve"] is True
-
-    def test_owner_from_another_department_waits_for_the_head(self, db_session, claim, monkeypatch, mails):
-        _line(monkeypatch)
-        rows = R.list_claims(holder="12345", limit=50, offset=0, db=db_session)["items"]
-        assert rows[0]["can_head_approve"] is False
+    def test_owner_list_never_offers_the_head_step(self, db_session, claim, monkeypatch, mails):
+        for dept in (30, 99):
+            _line(monkeypatch, holder_dept=dept)
+            rows = R.list_claims(holder="12345", limit=50, offset=0, db=db_session)["items"]
+            assert rows[0]["status"] == "PENDING_HEAD" and not rows[0].get("can_head_approve")

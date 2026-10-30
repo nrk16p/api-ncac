@@ -180,13 +180,15 @@ def list_claims(employee_id: Optional[str] = None, holder: Optional[str] = None,
         pending, _ = repo.list_claims(db, fund_ids=None, created_by=None, status=L.PENDING_HEAD, month=month,
                                       limit=HEAD_QUEUE_CAP, offset=0, exclude_created_by=head_approver)
         people, mappings = repo.line_context(db, fresh=False)
-        roles: dict = {}  # สิทธิ์ขึ้นกับผู้ขอเบิก ไม่ใช่ตัวใบ คิดครั้งเดียวต่อคน
+        holders = {f.id: f.holder_employee_id for f in repo.list_funds(db, active_only=False)}
+        roles: dict = {}  # สิทธิ์ขึ้นกับผู้ขอเบิก + เจ้าของเงินสดของวงเงิน ไม่ใช่ตัวใบ คิดครั้งเดียวต่อคู่
         mine = []
         for c in pending:
-            if c.created_by not in roles:
-                roles[c.created_by] = _head_roles_in(people, mappings, c.created_by, head_approver)
-            if roles[c.created_by][0]:
-                mine.append((c, roles[c.created_by][1]))
+            key = (c.created_by, holders.get(c.fund_id))
+            if key not in roles:
+                roles[key] = _head_roles_in(people, mappings, c.created_by, key[1], head_approver)
+            if roles[key][0]:
+                mine.append((c, roles[key][1]))
         page = mine[offset:offset + limit]
         names = _names([c for c, _ in page])
         items = []
@@ -201,12 +203,6 @@ def list_claims(employee_id: Optional[str] = None, holder: Optional[str] = None,
                                    month=month, limit=limit, offset=offset, head_approved_by=head_approved_by)
     names = _names(rows)
     items = [_claim_dict(c, repo.claim_items(db, c.id), names) for c in rows]
-    if holder and any(c.status == L.PENDING_HEAD for c in rows):
-        # เจ้าของเงินสดที่เป็นหัวหน้าของผู้ขอเบิกด้วย กดอนุมัติจ่ายได้เลย (นับสองขั้น) — หน้าเว็บใช้ธงนี้โชว์ปุ่ม
-        people, mappings = repo.line_context(db, fresh=False)
-        for body, c in zip(items, rows):
-            if c.status == L.PENDING_HEAD:
-                body["can_head_approve"] = _head_roles_in(people, mappings, c.created_by, holder)[0]
     return {"total": total, "items": items}
 
 
@@ -320,21 +316,27 @@ def _rule_error(exc: L.PettyRuleError) -> HTTPException:
     return HTTPException(status_code=exc.http_status, detail=str(exc))
 
 
-def _head_roles_in(people: dict, mappings: dict, requester_id: Optional[str], employee_id: str) -> tuple[bool, bool]:
+def _head_roles_in(people: dict, mappings: dict, requester_id: Optional[str], holder_id: Optional[str],
+                   employee_id: str) -> tuple[bool, bool]:
     """(อนุมัติใบนี้ได้ไหม, เป็นคนที่ระบบส่งอีเมลหาไหม) — หัวหน้าของผู้ขอเบิก ใช้ engine เดียวกับ Advance
-    แผนกเดียวกันก่อน · ระดับอย่างน้อยหัวหน้าแผนกและสูงกว่าผู้ขอเบิก · ผู้ขอเบิกกดเองไม่ได้ (flow v3 30/10/2026)"""
+    แผนกเดียวกันก่อน · ระดับอย่างน้อยหัวหน้าแผนกและสูงกว่าผู้ขอเบิก · ผู้ขอเบิกกดเองไม่ได้ (flow v3 30/10/2026)
+    · เจ้าของเงินสดของวงเงินไม่ใช่หัวหน้า ถ้าเขาเป็นหัวหน้าของผู้ขอเบิก ข้ามไปอีกระดับ (คนอนุมัติ ≠ คนโอน)"""
     if not requester_id:
         return False, False
-    required = L.head_required_level((people.get(requester_id) or {}).get("level"))
-    if not clear.can_clear(people, mappings, requester_id, required, employee_id):
+    if not clear.can_head(people, mappings, requester_id, holder_id, employee_id):
         return False, False
-    heads = clear.clear_notify(people, mappings, requester_id, required)
+    heads = clear.head_notify(people, mappings, requester_id, holder_id)
     return True, any(str(p.get("employee_id")) == str(employee_id) for p in heads)
+
+
+def _holder_of(db: Session, claim) -> Optional[str]:
+    fund = repo.get_fund(db, claim.fund_id)
+    return fund.holder_employee_id if fund else None
 
 
 def _may_head_approve(db: Session, claim, employee_id: str) -> bool:
     people, mappings = repo.line_context(db, fresh=True)  # ตัดสินสิทธิ์ต้องใช้สายงานล่าสุด
-    return _head_roles_in(people, mappings, claim.created_by, employee_id)[0]
+    return _head_roles_in(people, mappings, claim.created_by, _holder_of(db, claim), employee_id)[0]
 
 
 def _require_head(db: Session, claim, employee_id: str) -> None:
@@ -346,8 +348,7 @@ def _notify_heads(db: Session, claim, background) -> None:
     """อีเมลหาหัวหน้าชั้นที่ต้องอนุมัติ (สาขาเดียวกันก่อน) — ไม่มีใครก็ข้าม ไม่ทำให้การเปิดใบล้ม"""
     try:
         people, mappings = repo.line_context(db, fresh=False)
-        required = L.head_required_level((people.get(claim.created_by) or {}).get("level"))
-        heads = clear.clear_notify(people, mappings, claim.created_by, required)
+        heads = clear.head_notify(people, mappings, claim.created_by, _holder_of(db, claim))
         emails = [repo.employee_email(db, p["employee_id"]) for p in heads]
         name = repo.employee_names(db, [claim.created_by]).get(claim.created_by)
     except Exception:  # noqa: BLE001 — อีเมลแจ้งเตือนห้ามทำให้ใบเปิดไม่ได้ (ใบ commit ไปแล้ว)
@@ -411,12 +412,9 @@ def approve_claim(form_id: str, payload: ApproveIn, db: Session = Depends(get_db
                   background: BackgroundTasks = None):
     claim = _claim_or_404(db, form_id)
     _require_holder(db, claim, payload.employee_id)
-    # flow v3: หัวหน้าต้องอนุมัติก่อน · เจ้าของเงินสดที่เป็นหัวหน้าของผู้ขอเบิกด้วย กดครั้งเดียวได้ทั้งสองขั้น
-    also_head = False
+    # flow v3: หัวหน้าต้องอนุมัติก่อนเสมอ · คนอนุมัติกับคนโอนเป็นคนละคน (ไม่มีกดครั้งเดียวสองขั้น)
     if claim.status == L.PENDING_HEAD:
-        if not _may_head_approve(db, claim, payload.employee_id):
-            raise HTTPException(status_code=409, detail="ใบนี้รอหัวหน้าอนุมัติก่อน เจ้าของเงินสดถึงโอนได้")
-        also_head = True
+        raise HTTPException(status_code=409, detail="ใบนี้รอหัวหน้าอนุมัติก่อน เจ้าของเงินสดถึงโอนได้")
     items = repo.claim_items(db, claim.id)
     gate = _gate(db, claim, items, validate.STAGE_APPROVE, payload.attachments)
 
@@ -444,10 +442,6 @@ def approve_claim(form_id: str, payload: ApproveIn, db: Session = Depends(get_db
     if payload.dup_override_reason:
         fields["dup_override_reason"] = payload.dup_override_reason
     try:
-        if also_head:
-            repo.set_status(db, claim, L.PENDING_APPROVAL, payload.employee_id, "HEAD_APPROVE",
-                            fields={"head_approved_by": payload.employee_id},
-                            remark="เจ้าของเงินสดเป็นหัวหน้าของผู้ขอเบิก อนุมัติสองขั้นในครั้งเดียว", commit=False)
         out = repo.set_status(db, claim, L.APPROVED, payload.employee_id, "APPROVE", fields=fields)
     except L.PettyRuleError as exc:
         db.rollback()
