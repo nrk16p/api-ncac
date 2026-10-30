@@ -7,8 +7,9 @@
 --
 -- employee_id columns hold users.employee_id (string, no FK) like form_approver_divisions.
 -- Roles / user_roles are soft-deleted (is_active=false) so review history stays intact.
--- 9 tables: ar_systems, ar_roles, ar_role_items, ar_user_roles, ar_cycles, ar_reviews, ar_review_lines,
--- ar_review_line_items, ar_review_approvers. Includes 2026-10-30_access_review_item_review.sql. (A DB built from the earlier draft with ar_accounts/ar_account_roles: run 2026-10-29b.)
+-- 10 tables: ar_systems, ar_roles, ar_role_items, ar_user_roles, ar_cycles, ar_reviews, ar_review_lines,
+-- ar_review_line_items, ar_review_line_snapshot, ar_review_approvers. Includes 2026-10-30_access_review_item_review.sql
+-- and 2026-10-30b_access_review_snapshot.sql. (A DB built from the earlier draft with ar_accounts/ar_account_roles: run 2026-10-29b.)
 BEGIN;
 
 CREATE TABLE IF NOT EXISTS ar_systems (
@@ -92,6 +93,13 @@ CREATE TABLE IF NOT EXISTS ar_review_line_items (
     PRIMARY KEY (review_line_id, role_item_id)
 );
 CREATE INDEX IF NOT EXISTS ix_ar_review_line_items_role_item_id ON ar_review_line_items (role_item_id);
+
+CREATE TABLE IF NOT EXISTS ar_review_line_snapshot (
+    review_line_id INTEGER NOT NULL REFERENCES ar_review_lines (id) ON DELETE CASCADE,
+    role_item_id   INTEGER NOT NULL REFERENCES ar_role_items (id),
+    PRIMARY KEY (review_line_id, role_item_id)
+);
+CREATE INDEX IF NOT EXISTS ix_ar_review_line_snapshot_role_item_id ON ar_review_line_snapshot (role_item_id);
 
 CREATE TABLE IF NOT EXISTS ar_review_approvers (
     review_id   INTEGER     NOT NULL REFERENCES ar_reviews (id),

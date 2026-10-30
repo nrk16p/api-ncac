@@ -15,8 +15,8 @@ from models.access_review_model import (
 )
 from services.access_review import repo
 from services.access_review.logic import (
-    APPROVED, REMOVE, ArConflict, ArError, ArNotFound, cycle_dict, full_name, iso, next_approver_names, person,
-    user_division_id,
+    APPROVED, DRAFT, MSG_NOT_FOUND, PENDING, REMOVE, ArConflict, ArError, ArNotFound, account_name, cycle_dict,
+    full_name, iso, item_dict, item_sort_key, next_approver_names, person, user_division_id,
 )
 
 MSG_SYSTEM_NOT_FOUND = "ไม่พบระบบ"
@@ -380,9 +380,9 @@ def reviews_report(db: Session, cycle_id: Optional[int], status: Optional[str], 
     return {"cycle": cycle_dict(cycle), "summary": summary, "items": items}
 
 
-def removals_report(db: Session, cycle_id: Optional[int]) -> List[dict]:
+def removals_report(db: Session, cycle_id: Optional[int], include_pending: bool = False) -> List[dict]:
     """IT to-do list of an approved cycle: one row per whole-role removal (category/item/permission null) and one
-    row per unticked item of a kept role."""
+    row per unticked item of a kept role. include_pending adds reviews still waiting for approval."""
     cycle = _resolve_cycle(db, cycle_id)
     if cycle is None:
         return []
@@ -392,7 +392,8 @@ def removals_report(db: Session, cycle_id: Optional[int]) -> List[dict]:
         .join(ArUserRole, ArUserRole.id == ArReviewLine.user_role_id)
         .join(ArRole, ArRole.id == ArUserRole.role_id)
         .join(ArSystem, ArSystem.id == ArRole.system_id)
-        .filter(ArReview.cycle_id == cycle.id, ArReview.status == APPROVED)
+        .filter(ArReview.cycle_id == cycle.id,
+                ArReview.status.in_((APPROVED, PENDING) if include_pending else (APPROVED,)))
         .order_by(ArReview.decided_at, ArReview.employee_id, ArSystem.id, ArRole.name)
         .all()
     )
@@ -420,6 +421,7 @@ def removals_report(db: Session, cycle_id: Optional[int]) -> List[dict]:
             "decided_by_name": full_name(decider) if decider else review.decided_by,
             # additive
             "review_id": review.id, "user_role_id": line.user_role_id, "user_role_active": bool(user_role.is_active),
+            "status": review.status,
         }
         for it in targets:
             out.append({**base,
@@ -429,3 +431,60 @@ def removals_report(db: Session, cycle_id: Optional[int]) -> List[dict]:
                         "item": it.item if it is not None else None,
                         "permission": it.permission if it is not None else None})
     return out
+
+
+def review_changes(db: Session, review_id: int) -> dict:
+    """Before → after of one review, per role: "before" = the items the role had at submit (snapshot), falling back
+    to the live items for drafts and for reviews submitted before snapshots existed; "after" = before − unticked.
+    added_since / retired_since show how the role changed in the source system after submit."""
+    review = _get(db, ArReview, review_id, MSG_NOT_FOUND)
+    lines = repo.review_lines(db, review.id)
+    rows = {ur.id: (ur, role, system) for ur, role, system in
+            repo.assignments_by_ids(db, [line.user_role_id for line in lines])}
+    unchecked = repo.unchecked_by_line(db, [line.id for line in lines])
+    snapshots = repo.snapshot_by_line(db, [line.id for line in lines]) if review.status != DRAFT else {}
+    live = repo.items_for_roles(db, [role.id for _, role, _ in rows.values()])
+    items = repo.items_by_ids(db, [i for ids in list(snapshots.values()) + list(unchecked.values()) for i in ids])
+    for role_items in live.values():
+        items.update({i.id: i for i in role_items})
+    users = repo.users_by_employee_ids(db, [review.employee_id, review.decided_by])
+    owner = users.get(review.employee_id)
+
+    def dicts(ids):
+        return [item_dict(i) for i in sorted((items[i] for i in ids if i in items), key=item_sort_key)]
+
+    out_lines = []
+    for line in lines:
+        row = rows.get(line.user_role_id)
+        if row is None:
+            continue
+        user_role, role, system = row
+        live_ids = [i.id for i in live.get(role.id, [])]
+        removed = unchecked.get(line.id, [])
+        has_snapshot = line.id in snapshots
+        before = snapshots[line.id] if has_snapshot else sorted(set(live_ids) | set(removed))
+        whole_role = line.decision == REMOVE
+        out_lines.append({
+            "user_role_id": line.user_role_id, "system_code": system.code, "system_name": system.name,
+            "role_id": role.id, "role_name": role.name, "account_name": account_name(user_role, owner),
+            "decision": line.decision or "keep",
+            "change": "role" if whole_role else ("items" if removed else None),
+            "has_snapshot": has_snapshot or not before,
+            "before_count": len(before),
+            "after_count": 0 if whole_role else len(before) - len(removed),
+            "removed": dicts(removed),
+            "added_since": dicts([i for i in live_ids if i not in set(before)]) if has_snapshot else [],
+            "retired_since": dicts([i for i in before if i in items and not items[i].is_active]),
+            "note": line.note,
+            "user_role_active": bool(user_role.is_active),
+        })
+    out_lines.sort(key=lambda x: (x["system_code"], x["role_name"]))
+    decider = users.get(review.decided_by) if review.decided_by else None
+    return {
+        "review_id": review.id, "status": review.status, "requester": person(owner, review.employee_id),
+        "submitted_at": iso(review.submitted_at), "decided_at": iso(review.decided_at),
+        "decided_by_name": (full_name(decider) or review.decided_by) if review.decided_by else None,
+        "requester_note": review.requester_note, "comment": review.comment,
+        "has_snapshot": all(line["has_snapshot"] for line in out_lines),
+        "lines": out_lines,
+    }
