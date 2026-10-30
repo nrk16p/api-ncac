@@ -95,9 +95,94 @@ def load_workbook(data: bytes):
 
 # ---------------------------- parsers ----------------------------
 
+ATMS_LIST_SHEETS = ("สรุปกลุ่ม", "สิทธิ์แต่ละกลุ่ม", "ผู้ใช้งาน", "คลังสินค้า")
+ATMS_MAIN_MENU = "(เมนูหลัก)"
+
+
+def _rows(ws):
+    """Data rows of a list sheet (row 1 = headers), fully blank rows dropped."""
+    return [row for idx, row in enumerate(ws.iter_rows(values_only=True), start=1)
+            if idx > 1 and any(c is not None for c in row)]
+
+
+def parse_atms_lists(wb) -> Parsed:
+    """The flat ATMS export: 'สรุปกลุ่ม' [ลำดับ, Group ID, ชื่อกลุ่ม, บริษัท, จำนวนผู้ใช้, ผู้ใช้งาน, จำนวนคลัง, จำนวนสิทธิ์],
+    'สิทธิ์แต่ละกลุ่ม' [ชื่อกลุ่ม, เมนู, สิทธิ์, Permission ID], 'ผู้ใช้งาน' [ชื่อกลุ่ม, ผู้ใช้งาน], 'คลังสินค้า' [ชื่อกลุ่ม, คลังสินค้า].
+    '(เมนูหลัก)' = the menu itself (permission None, as in the per-sheet export). ATMS has a few distinct permissions
+    sharing one เมนู + สิทธิ์ label; the lowest Permission ID keeps the plain label, the others get "(ID n)"."""
+    parsed = Parsed("ATMS")
+    groups: List[str] = []
+    expected: Dict[str, Tuple[int, int, int]] = {}  # name → (users, warehouses, permissions) from the summary
+    for row in _rows(wb["สรุปกลุ่ม"]):
+        name = _text(_cell(row, 2))
+        if not name:
+            continue
+        groups.append(name)
+        expected[name] = tuple(int(_cell(row, i) or 0) for i in (4, 6, 7))
+
+    perm_rows = []  # (group, menu, permission, permission id)
+    for row in _rows(wb["สิทธิ์แต่ละกลุ่ม"]):
+        group, menu = _text(_cell(row, 0)), _text(_cell(row, 1))
+        if group and menu:
+            perm_rows.append((group, menu, _text(_cell(row, 2)), _cell(row, 3)))
+
+    ids_by_label: Dict[Tuple[str, Optional[str]], Set] = {}
+    for _, menu, perm, pid in perm_rows:
+        ids_by_label.setdefault((menu, perm), set()).add(pid)
+    label_of: Dict[Tuple[str, Optional[str], object], Item] = {}
+    for (menu, perm), pids in ids_by_label.items():
+        for rank, pid in enumerate(sorted(pids, key=lambda p: (p is None, p))):
+            name = None if perm in (None, "-", ATMS_MAIN_MENU) else perm
+            if rank:
+                name = f"{name or ATMS_MAIN_MENU} (ID {pid})"
+            label_of[(menu, perm, pid)] = (menu, None, name)
+
+    items: Dict[str, List[Item]] = {g: [] for g in groups}
+    users: Dict[str, List[str]] = {g: [] for g in groups}
+    counts: Dict[str, List[int]] = {g: [0, 0, 0] for g in groups}
+    unknown: Set[str] = set()
+
+    def bucket(group: str) -> Optional[List[Item]]:
+        if group not in items:
+            unknown.add(group)
+            return None
+        return items[group]
+
+    for row in _rows(wb["คลังสินค้า"]):
+        group, warehouse = _text(_cell(row, 0)), _text(_cell(row, 1))
+        if group and warehouse and bucket(group) is not None:
+            items[group].append((WAREHOUSE_CATEGORY, warehouse, None))
+            counts[group][1] += 1
+    for group, menu, perm, pid in perm_rows:
+        if bucket(group) is not None:
+            items[group].append(label_of[(menu, perm, pid)])
+            counts[group][2] += 1
+    for row in _rows(wb["ผู้ใช้งาน"]):
+        group, username = _text(_cell(row, 0)), _text(_cell(row, 1))
+        if group and username and bucket(group) is not None:
+            users[group].append(username)
+            counts[group][0] += 1
+
+    for group in sorted(unknown):
+        parsed.warnings.append(f"กลุ่ม '{group}' ไม่อยู่ในชีท 'สรุปกลุ่ม' — ข้าม")
+    for group in groups:
+        if tuple(counts[group]) != expected[group]:
+            parsed.warnings.append(f"กลุ่ม '{group}': จำนวน ผู้ใช้/คลัง/สิทธิ์ ในรายละเอียด {tuple(counts[group])} "
+                                   f"ไม่ตรงกับ 'สรุปกลุ่ม' {expected[group]}")
+        parsed.roles[group] = _dedupe(items[group])
+        for u in dict.fromkeys(users[group]):
+            parsed.assignments.append(RawAssignment(role_name=group, account_name=u, username=u))
+    if not parsed.roles:
+        raise ImportFileError("ไม่พบกลุ่มสิทธิ์ ATMS ในชีท 'สรุปกลุ่ม'")
+    return parsed
+
+
 def parse_atms(wb) -> Parsed:
-    """Every sheet except 'สรุป' is one role group. Role = A1 (titles are cut at 31 chars). Row 5 = headers;
+    """Flat export (sheets สรุปกลุ่ม / สิทธิ์แต่ละกลุ่ม / ผู้ใช้งาน / คลังสินค้า) → parse_atms_lists.
+    Otherwise every sheet except 'สรุป' is one role group. Role = A1 (titles are cut at 31 chars). Row 5 = headers;
     from row 6: A = usernames until the first blank, C = warehouse, E = module, F = permission ('-' = none)."""
+    if all(name in wb.sheetnames for name in ATMS_LIST_SHEETS):
+        return parse_atms_lists(wb)
     parsed = Parsed("ATMS")
     for ws in wb.worksheets:
         if ws.title.strip() in ATMS_INDEX_SHEETS:

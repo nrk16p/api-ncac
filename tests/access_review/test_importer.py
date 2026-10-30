@@ -96,6 +96,41 @@ def test_parse_atms():
         ("ACC-Officer", "r.user"), ("ACC-Officer", "OP"), ("Chief Commercial Officer (Acting COO)", "Exec.Mail")]
 
 
+def atms_lists_workbook():
+    wb = openpyxl.Workbook()
+    s = wb.active
+    s.title = "สรุปกลุ่ม"
+    s.append(["ลำดับ", "Group ID", "ชื่อกลุ่ม", "บริษัท", "จำนวนผู้ใช้", "ผู้ใช้งาน", "จำนวนคลัง", "จำนวนสิทธิ์"])
+    s.append([1, 22, "ACC-Officer", "MENA", 2, "r.user, OP", 1, 4])
+    s.append([2, 99, "Empty-Group", "MENA", 0, "-", 0, 1])  # count off by one → warning
+    p = wb.create_sheet("สิทธิ์แต่ละกลุ่ม")
+    p.append(["ชื่อกลุ่ม", "เมนู", "สิทธิ์", "Permission ID"])
+    for row in [("ACC-Officer", "บัญชี / การเงิน", "(เมนูหลัก)", 68), ("ACC-Officer", "ยาง", "แสดง", 135),
+                ("ACC-Officer", "ยาง", "แสดง", 136), ("ACC-Officer", "อุบัติเหตุ", "บันทึก", 200),
+                ("Ghost", "ยาง", "แสดง", 135)]:
+        p.append(row)
+    u = wb.create_sheet("ผู้ใช้งาน")
+    u.append(["ชื่อกลุ่ม", "ผู้ใช้งาน"])
+    u.append(["ACC-Officer", "r.user"])
+    u.append(["ACC-Officer", "OP"])
+    w = wb.create_sheet("คลังสินค้า")
+    w.append(["ชื่อกลุ่ม", "คลังสินค้า"])
+    w.append(["ACC-Officer", "คลัง IT"])
+    return _roundtrip(wb)
+
+
+def test_parse_atms_flat_export():
+    p = I.parse_atms(atms_lists_workbook())
+    assert list(p.roles) == ["ACC-Officer", "Empty-Group"]
+    assert p.roles["ACC-Officer"] == [
+        ("คลังสินค้า", "คลัง IT", None), ("บัญชี / การเงิน", None, None), ("ยาง", None, "แสดง"),
+        ("ยาง", None, "แสดง (ID 136)"), ("อุบัติเหตุ", None, "บันทึก")]
+    assert p.roles["Empty-Group"] == []
+    assert [(a.role_name, a.username) for a in p.assignments] == [("ACC-Officer", "r.user"), ("ACC-Officer", "OP")]
+    assert any("Ghost" in w for w in p.warnings)
+    assert any("Empty-Group" in w for w in p.warnings)
+
+
 def test_parse_winspeed():
     p = I.parse_winspeed(winspeed_workbook())
     assert p.roles == {
