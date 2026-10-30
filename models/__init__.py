@@ -24,3 +24,8 @@ from .complaint_master import ComplaintMaster
 
 # Finance — เบิกเงิน Advance (ต้องอยู่ใน metadata ก่อน main.py เรียก create_all)
 from .finance_model import FinAccount, FinAdvance, FinAdvanceLog
+
+# Access Review — ทบทวนสิทธิ์ผู้ใช้ (ต้องอยู่ใน metadata ก่อน main.py เรียก create_all)
+from .access_review_model import (
+    ArSystem, ArRole, ArRoleItem, ArUserRole, ArCycle, ArReview, ArReviewLine, ArReviewLineItem, ArReviewApprover,
+)
