@@ -200,7 +200,14 @@ def list_claims(employee_id: Optional[str] = None, holder: Optional[str] = None,
     rows, total = repo.list_claims(db, fund_ids=fund_ids, created_by=employee_id, status=status,
                                    month=month, limit=limit, offset=offset, head_approved_by=head_approved_by)
     names = _names(rows)
-    return {"total": total, "items": [_claim_dict(c, repo.claim_items(db, c.id), names) for c in rows]}
+    items = [_claim_dict(c, repo.claim_items(db, c.id), names) for c in rows]
+    if holder and any(c.status == L.PENDING_HEAD for c in rows):
+        # เจ้าของเงินสดที่เป็นหัวหน้าของผู้ขอเบิกด้วย กดอนุมัติจ่ายได้เลย (นับสองขั้น) — หน้าเว็บใช้ธงนี้โชว์ปุ่ม
+        people, mappings = repo.line_context(db, fresh=False)
+        for body, c in zip(items, rows):
+            if c.status == L.PENDING_HEAD:
+                body["can_head_approve"] = _head_roles_in(people, mappings, c.created_by, holder)[0]
+    return {"total": total, "items": items}
 
 
 @router.get("/claims/duplicate-check")
@@ -225,11 +232,15 @@ def duplicate_check(expense_type: str, event_date: str, truck_code: Optional[str
 
 
 @router.get("/claims/{form_id}")
-def get_claim(form_id: str, db: Session = Depends(get_db)):
+def get_claim(form_id: str, employee_id: Optional[str] = None, db: Session = Depends(get_db)):
+    """employee_id = คนที่เปิดดู → can_head_approve บอกว่าคนนี้กดอนุมัติขั้นหัวหน้าได้ไหม (BFF ใช้ตัดสินสิทธิ์ดูด้วย)"""
     claim = repo.get_claim(db, form_id)
     if claim is None:
         raise HTTPException(status_code=404, detail="ไม่พบใบเบิก")
-    return _out(db, claim)
+    body = _out(db, claim)
+    if employee_id:
+        body["can_head_approve"] = claim.status == L.PENDING_HEAD and _may_head_approve(db, claim, employee_id)
+    return body
 
 
 # ---------------------------- transitions ----------------------------

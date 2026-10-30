@@ -182,3 +182,26 @@ class TestHeadQueue:
         done = R.list_claims(head_approved_by="600050", limit=50, offset=0, db=db_session)
         assert [c["form_id"] for c in done["items"]] == [claim.form_id]
         assert done["items"][0]["head_approved_by_name"] is None or isinstance(done["items"][0]["head_approved_by_name"], str)
+
+
+class TestViewerFlags:
+    def test_detail_tells_the_head_they_can_approve(self, db_session, claim, monkeypatch, mails):
+        _line(monkeypatch)
+        assert R.get_claim(claim.form_id, employee_id="600050", db=db_session)["can_head_approve"] is True
+        assert R.get_claim(claim.form_id, employee_id="700000", db=db_session)["can_head_approve"] is False
+        assert "can_head_approve" not in R.get_claim(claim.form_id, db=db_session)
+
+    def test_detail_flag_is_false_once_the_head_step_is_done(self, db_session, claim, monkeypatch, mails):
+        _line(monkeypatch)
+        R.head_approve_claim(claim.form_id, HeadApproveIn(employee_id="600050"), db_session)
+        assert R.get_claim(claim.form_id, employee_id="600050", db=db_session)["can_head_approve"] is False
+
+    def test_owner_list_marks_claims_the_owner_may_also_head_approve(self, db_session, claim, monkeypatch, mails):
+        _line(monkeypatch, holder_dept=30)
+        rows = R.list_claims(holder="12345", limit=50, offset=0, db=db_session)["items"]
+        assert rows[0]["status"] == "PENDING_HEAD" and rows[0]["can_head_approve"] is True
+
+    def test_owner_from_another_department_waits_for_the_head(self, db_session, claim, monkeypatch, mails):
+        _line(monkeypatch)
+        rows = R.list_claims(holder="12345", limit=50, offset=0, db=db_session)["items"]
+        assert rows[0]["can_head_approve"] is False
