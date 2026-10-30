@@ -500,3 +500,72 @@ def test_clear_approver_emails_prefer_the_requester_branch(monkeypatch):
     info = {"steps": [{"step": 1, "required_level": 3, "label": "x"}]}
     sub = NS(id=1, created_by="R", form_id="ADV-2610-001")
     assert ar._clear_approver_emails(_Db(_BRANCH_USERS), sub, info, ctx, 1) == ["lkb@x.com"]
+
+
+# ---------------------------- payee result (approve / reject) ----------------------------
+
+from services.finance.payee_email import render_payee_result_email  # noqa: E402
+
+
+class _FakeQuery:
+    def __init__(self, user):
+        self.user = user
+
+    def filter(self, *a, **k):
+        return self
+
+    def first(self):
+        return self.user
+
+
+class _FakeDb:
+    def __init__(self, user):
+        self.user = user
+
+    def query(self, *a, **k):
+        return _FakeQuery(self.user)
+
+
+def _req(**kw):
+    base = dict(id=7, employee_id="690041", account_no="1234567890", account_name="สุขพัฒน์ อ",
+                review_remark=None)
+    base.update(kw)
+    return NS(**base)
+
+
+def test_payee_result_email_approved_and_rejected_text():
+    s, html = render_payee_result_email({"approved": True, "employee_name": "สุขพัฒน์", "employee_id": "690041",
+                                         "account_no": "1234567890", "account_name": "ก",
+                                         "fe_base_url": "https://menait-service.vercel.app/"})
+    assert "อนุมัติแล้ว" in s and "123-4-56789-0" in html
+    assert "https://menait-service.vercel.app/finance/advance/new" in html
+    s, html = render_payee_result_email({"approved": False, "employee_name": "ก", "employee_id": "E1",
+                                         "account_no": "1234567890", "review_remark": "<ชื่อไม่ตรง>"})
+    assert "ไม่อนุมัติ" in s and "&lt;ชื่อไม่ตรง&gt;" in html
+
+
+def test_payee_result_queued_to_requester(monkeypatch, smtp):
+    monkeypatch.setenv("FINANCE_EMAIL_ENABLED", "true")
+    monkeypatch.setenv("FINANCE_SMTP_USER", "fin@x.com")
+    monkeypatch.setenv("FINANCE_SMTP_PASSWORD", "pw")
+    monkeypatch.setattr(pr, "people_by_employee_id", lambda db, ids: {"690041": {"name": "สุขพัฒน์"}})
+    bg = BackgroundTasks()
+    pr._queue_result_email(bg, _FakeDb(NS(email="emp@x.com")), _req(review_remark="เลขไม่ตรง"), approved=False)
+    assert len(bg.tasks) == 1
+    t = bg.tasks[0]
+    t.func(*t.args, **t.kwargs)
+    sent = [c[2] for c in smtp if c[0] == "sendmail"]
+    assert sent and all(to in ("emp@x.com", ["emp@x.com"]) for to in sent)
+
+
+def test_payee_result_no_email_skips_quietly(smtp):
+    bg = BackgroundTasks()
+    pr._queue_result_email(bg, _FakeDb(NS(email=None)), _req(), approved=True)
+    pr._queue_result_email(bg, _FakeDb(None), _req(), approved=True)
+    assert bg.tasks == []
+
+
+def test_payee_result_flag_off_sends_nothing(monkeypatch, smtp):
+    monkeypatch.delenv("FINANCE_EMAIL_ENABLED", raising=False)
+    pr._send_result_email(["emp@x.com"], {"approved": True, "account_no": "1234567890"})
+    assert not [c for c in smtp if c[0] == "sendmail"]

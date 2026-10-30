@@ -34,7 +34,8 @@ def engine():
     eng = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     from models import access_review_model as m
     tables = [t.__table__ for t in TABLES] + [m.ArReview.__table__, m.ArReviewLine.__table__,
-                                                m.ArReviewApprover.__table__, m.ArReviewLineItem.__table__]
+                                                m.ArReviewApprover.__table__, m.ArReviewLineItem.__table__,
+                                                m.ArReviewLineSnapshot.__table__]
     Base.metadata.create_all(eng, tables=tables)
     yield eng
     eng.dispose()

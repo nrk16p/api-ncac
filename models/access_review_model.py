@@ -125,6 +125,16 @@ class ArReviewLineItem(Base):
     role_item_id = Column(Integer, ForeignKey("ar_role_items.id"), primary_key=True)
 
 
+class ArReviewLineSnapshot(Base):
+    """"Before": every active item the role had when the review was submitted, so later role edits don't
+    rewrite what the requester actually saw."""
+    __tablename__ = "ar_review_line_snapshot"
+    __table_args__ = (Index("ix_ar_review_line_snapshot_role_item_id", "role_item_id"),)
+
+    review_line_id = Column(Integer, ForeignKey("ar_review_lines.id", ondelete="CASCADE"), primary_key=True)
+    role_item_id = Column(Integer, ForeignKey("ar_role_items.id"), primary_key=True)
+
+
 class ArReviewApprover(Base):
     __tablename__ = "ar_review_approvers"
     __table_args__ = (Index("ix_ar_review_approvers_employee_id", "employee_id"),)

@@ -19,7 +19,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 from fastapi import BackgroundTasks
 from sqlalchemy.orm import Session
 
-from models.access_review_model import ArCycle, ArReview, ArReviewLine
+from models.access_review_model import ArCycle, ArReview, ArReviewLine, ArRoleItem
 from models.user_model import User
 from services.access_review import mail, repo
 
@@ -223,7 +223,7 @@ def compute_plan(db: Session, user: User) -> RoutePlan:
 
 # ---------------------------- serialisers ----------------------------
 
-def _account_name(user_role, owner: Optional[User]) -> Optional[str]:
+def account_name(user_role, owner: Optional[User]) -> Optional[str]:
     if user_role.account_name:
         return user_role.account_name
     return owner.email if owner is not None else None
@@ -308,7 +308,7 @@ def build_me(db: Session, caller: Caller) -> dict:
         line = lines.get(user_role.id)
         sys_entry["roles"].append({
             "user_role_id": user_role.id,
-            "account_name": _account_name(user_role, caller.user),
+            "account_name": account_name(user_role, caller.user),
             "role_id": role.id,
             "role_name": role.name,
             "item_count": counts.get(role.id, 0),
@@ -342,28 +342,58 @@ def build_me(db: Session, caller: Caller) -> dict:
     }
 
 
-def _items_payload(db: Session, rows: List[repo.Assignment], unchecked_ids: Iterable[int]) -> dict:
-    items = repo.items_for_roles(db, [role.id for _, role, _ in rows], include_ids=unchecked_ids)
+def item_sort_key(item: ArRoleItem):
+    """Same order as repo.items_for_roles (Postgres sorts NULLs last)."""
+    return (item.category or "", item.item is None, item.item or "", item.permission is None, item.permission or "",
+            item.id)
+
+
+def item_dict(item: ArRoleItem) -> dict:
+    return {"id": item.id, "category": item.category, "item": item.item, "permission": item.permission,
+            "is_active": bool(item.is_active)}
+
+
+def _snapshots(db: Session, lines: Dict[int, ArReviewLine]) -> Dict[int, List[int]]:
+    """user_role_id → item ids the role had at submit (lines submitted before snapshots existed are left out)."""
+    by_line = repo.snapshot_by_line(db, [line.id for line in lines.values()])
+    return {ur_id: by_line[line.id] for ur_id, line in lines.items() if line.id in by_line}
+
+
+def _items_payload(db: Session, rows: List[repo.Assignment], unchecked_ids: Iterable[int],
+                   snapshots: Optional[Dict[int, List[int]]] = None) -> dict:
+    """A role with a snapshot shows exactly the items it had at submit; any other role shows its live items."""
+    snapshots = snapshots or {}
+    live = repo.items_for_roles(db, [role.id for ur, role, _ in rows if ur.id not in snapshots],
+                                include_ids=unchecked_ids)
+    fixed = repo.items_by_ids(db, [i for ids in snapshots.values() for i in ids])
+
+    def items_of(ur, role):
+        if ur.id in snapshots:
+            return sorted((fixed[i] for i in snapshots[ur.id] if i in fixed), key=item_sort_key)
+        return live.get(role.id, [])
+
     return {"roles": [{
         "user_role_id": ur.id, "role_id": role.id, "role_name": role.name, "system_code": system.code,
-        "items": [{"id": i.id, "category": i.category, "item": i.item, "permission": i.permission,
-                   "is_active": bool(i.is_active)} for i in items.get(role.id, [])],
+        "items": [item_dict(i) for i in items_of(ur, role)],
     } for ur, role, system in rows]}
 
 
 def my_items(db: Session, caller: Caller) -> dict:
     cycle = repo.current_cycle(db)
     review = repo.get_review(db, cycle.id, caller.employee_id) if cycle is not None else None
-    _, unchecked = _lines_with_unchecked(db, review)
+    lines, unchecked = _lines_with_unchecked(db, review)
+    submitted = review is not None and review.status in (PENDING, APPROVED)
     return _items_payload(db, _scope(db, caller.employee_id, review),
-                          [i for ids in unchecked.values() for i in ids])
+                          [i for ids in unchecked.values() for i in ids],
+                          _snapshots(db, lines) if submitted else None)
 
 
 def review_items(db: Session, caller: Caller, review_id: int) -> dict:
     review, _ = _load_visible(db, caller, review_id)
     lines, unchecked = _lines_with_unchecked(db, review)
     rows = repo.assignments_by_ids(db, list(lines))
-    return _items_payload(db, rows, [i for ids in unchecked.values() for i in ids])
+    snapshots = _snapshots(db, lines) if review.status != DRAFT else None
+    return _items_payload(db, rows, [i for ids in unchecked.values() for i in ids], snapshots)
 
 
 def _save_lines(db: Session, caller: Caller, lines: Optional[List[dict]], requester_note=_UNSET
@@ -423,7 +453,8 @@ def save_lines(db: Session, caller: Caller, lines: List[dict], requester_note=_U
 def _normalise_for_submit(db: Session, review: ArReview, existing: Dict[int, ArReviewLine],
                           active: List[repo.Assignment]) -> None:
     """Every active role gets a line (untouched = all ticked → keep); unticked items that are no longer active
-    are dropped and decisions re-derived, so what is submitted matches the current role items."""
+    are dropped and decisions re-derived, so what is submitted matches the current role items. Each line also
+    snapshots the role's items ("before"), so the review keeps showing what the requester saw."""
     for ur, _, _ in active:
         if ur.id not in existing:
             line = ArReviewLine(review_id=review.id, user_role_id=ur.id, decision=KEEP)
@@ -439,6 +470,7 @@ def _normalise_for_submit(db: Session, review: ArReview, existing: Dict[int, ArR
         kept = stored & role_items
         if kept != stored:
             repo.set_unchecked(db, line.id, kept)
+        repo.set_snapshot(db, line.id, role_items)
         line.decision = derive_decision(role_items, kept, line.decision)
 
 
@@ -484,6 +516,7 @@ def review_detail(db: Session, caller: Caller, review_id: int) -> dict:
     rows = {ur.id: (ur, role, system) for ur, role, system in
             repo.assignments_by_ids(db, [line.user_role_id for line in lines])}
     counts = repo.item_counts(db, [role.id for _, role, _ in rows.values()])
+    snapshots = repo.snapshot_by_line(db, [line.id for line in lines]) if review.status != DRAFT else {}
     out_lines = []
     for line in lines:
         row = rows.get(line.user_role_id)
@@ -494,8 +527,9 @@ def review_detail(db: Session, caller: Caller, review_id: int) -> dict:
         out_lines.append({
             "id": line.id, "user_role_id": line.user_role_id, "system_code": system.code,
             "system_name": system.name, "role_id": role.id, "role_name": role.name,
-            "account_name": _account_name(user_role, owner), "decision": line.decision or KEEP, "note": line.note,
-            "item_count": counts.get(role.id, 0), "unchecked_item_ids": ids, "unchecked_count": len(ids),
+            "account_name": account_name(user_role, owner), "decision": line.decision or KEEP, "note": line.note,
+            "item_count": len(snapshots[line.id]) if line.id in snapshots else counts.get(role.id, 0),
+            "unchecked_item_ids": ids, "unchecked_count": len(ids),
         })
     out_lines.sort(key=lambda x: (x["system_code"], x["role_name"]))
     summary = _review_summary(db, review)

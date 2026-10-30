@@ -156,7 +156,8 @@ def test_removals_one_row_per_role_or_item(client, w):
 
 
 def test_reimport_keeps_items_referenced_by_reviews(client, w, db, org):
-    """Item ids stay stable on re-import; a referenced item that left the file is hidden, not deleted."""
+    """Item ids stay stable on re-import; a referenced item that left the file is hidden, not deleted.
+    A submitted review references every item of the role (its "before" snapshot), not just the unticked ones."""
     L, acc = w["links"], w["acc_items"]
     org.user("R2", 3, 1, username="r2.user")
     client.post("/access-review/me/submit", headers=h("R"), json={
@@ -165,7 +166,7 @@ def test_reimport_keeps_items_referenced_by_reviews(client, w, db, org):
     parsed = I.Parsed("ATMS", roles={"ACC-Officer": [ACC_ITEMS[0], ("รายงาน", None, "แสดง")]},
                       assignments=[I.RawAssignment(role_name="ACC-Officer", account_name="r.user", username="r.user")])
     rep = I.run_import(db, "ATMS", parsed, dry_run=True)
-    assert (rep["items_added"], rep["items_deleted"], rep["items_kept_for_history"]) == (1, 1, 1)
+    assert (rep["items_added"], rep["items_deleted"], rep["items_kept_for_history"]) == (1, 0, 2)
     assert db.query(ArRoleItem).filter(ArRoleItem.role_id == w["acc_role"]).count() == 3   # dry run
 
     I.run_import(db, "ATMS", parsed, dry_run=False)
@@ -173,7 +174,7 @@ def test_reimport_keeps_items_referenced_by_reviews(client, w, db, org):
     rows = {i.id: i for i in db.query(ArRoleItem).filter(ArRoleItem.role_id == w["acc_role"])}
     assert acc[0] in rows and rows[acc[0]].is_active               # unchanged item keeps its id
     assert acc[1] in rows and rows[acc[1]].is_active is False      # referenced → kept, hidden
-    assert acc[2] not in rows                                      # unreferenced → deleted
+    assert acc[2] in rows and rows[acc[2]].is_active is False      # ticked, but in the snapshot → kept, hidden
     assert len([i for i in rows.values() if i.is_active]) == 2
 
     # role-items / item_count only show active items; the review still shows its unticked (now hidden) item
@@ -222,3 +223,67 @@ def test_admin_copy_items_rejects_other_system_same_role_and_non_admin(client, o
     assert client.post(url, json={"source_role_id": gl["id"]}, headers=h("IT")).status_code == 400
     assert client.post(url, json={"source_role_id": target.id}, headers=h("IT")).status_code == 400
     assert client.post(url, json={"source_role_id": w["acc_role"]}, headers=h("R")).status_code == 403
+
+
+def test_submit_snapshots_before_and_changes_show_before_after(client, w, db):
+    """Items added to the role after submit don't leak into the submitted review; the admin sees them separately."""
+    L, acc, gl = w["links"], w["acc_items"], w["gl_items"]
+    rid = client.post("/access-review/me/submit", headers=h("R"), json={
+        "lines": [{"user_role_id": L["acc"], "unchecked_item_ids": [acc[0]]},
+                  {"user_role_id": L["grp"], "decision": "remove"}]}).json()["id"]
+    new = client.post(f"/access-review/admin/roles/{w['acc_role']}/items", headers=h("IT"),
+                      json={"category": "คลังสินค้า", "item": "คลัง ใหม่"}).json()["id"]
+
+    roles = {r["role_name"]: r for r in client.get(f"/access-review/{rid}/items", headers=h("HEAD")).json()["roles"]}
+    assert sorted(i["id"] for i in roles["ACC-Officer"]["items"]) == sorted(acc)   # not the item added later
+    detail = {x["role_name"]: x for x in client.get(f"/access-review/{rid}", headers=h("HEAD")).json()["lines"]}
+    assert detail["ACC-Officer"]["item_count"] == 3
+
+    r = client.get(f"/access-review/admin/reviews/{rid}/changes", headers=h("IT"))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "pending" and body["has_snapshot"] is True
+    lines = {x["role_name"]: x for x in body["lines"]}
+    a = lines["ACC-Officer"]
+    assert (a["change"], a["before_count"], a["after_count"]) == ("items", 3, 2)
+    assert [i["id"] for i in a["removed"]] == [acc[0]]
+    assert [i["id"] for i in a["added_since"]] == [new]
+    g = lines["GL ACC"]
+    assert (g["change"], g["before_count"], g["after_count"], g["removed"]) == (None, len(gl), len(gl), [])
+    e = lines["acc@menatransport.co.th"]
+    assert (e["change"], e["before_count"], e["after_count"], e["has_snapshot"]) == ("role", 0, 0, True)
+    assert client.get(f"/access-review/admin/reviews/{rid}/changes", headers=h("HEAD")).status_code == 403
+    assert client.get("/access-review/admin/reviews/99999/changes", headers=h("IT")).status_code == 404
+
+
+def test_snapshotted_item_is_soft_deleted_and_shown_as_retired(client, w, db):
+    L, acc = w["links"], w["acc_items"]
+    rid = client.post("/access-review/me/submit", headers=h("R"), json={
+        "lines": [{"user_role_id": L["acc"], "unchecked_item_ids": []}]}).json()["id"]
+    assert client.delete(f"/access-review/admin/role-items/{acc[1]}", headers=h("IT")).status_code in (200, 204)
+    db.expire_all()
+    assert db.get(ArRoleItem, acc[1]).is_active is False  # ticked at submit → referenced by the snapshot
+    a = {x["role_name"]: x for x in client.get(f"/access-review/admin/reviews/{rid}/changes",
+                                               headers=h("IT")).json()["lines"]}["ACC-Officer"]
+    assert (a["change"], a["before_count"], a["after_count"]) == (None, 3, 3)
+    assert [i["id"] for i in a["retired_since"]] == [acc[1]]
+
+
+def test_draft_changes_use_live_items(client, w):
+    L, acc = w["links"], w["acc_items"]
+    client.put("/access-review/me/lines", headers=h("R"),
+               json={"lines": [{"user_role_id": L["acc"], "unchecked_item_ids": [acc[2]]}]})
+    rid = client.get("/access-review/me", headers=h("R")).json()["review"]["id"]
+    body = client.get(f"/access-review/admin/reviews/{rid}/changes", headers=h("IT")).json()
+    a = {x["role_name"]: x for x in body["lines"]}["ACC-Officer"]
+    assert body["status"] == "draft" and a["has_snapshot"] is False and body["has_snapshot"] is False
+    assert (a["change"], a["before_count"], a["after_count"], a["added_since"]) == ("items", 3, 2, [])
+
+
+def test_removals_can_include_pending(client, w):
+    L, acc = w["links"], w["acc_items"]
+    client.post("/access-review/me/submit", headers=h("R"), json={
+        "lines": [{"user_role_id": L["acc"], "unchecked_item_ids": [acc[0]]}]})
+    assert client.get("/access-review/admin/removals", headers=h("IT")).json() == []
+    rows = client.get("/access-review/admin/removals?include_pending=true", headers=h("IT")).json()
+    assert [(x["status"], x["removal_type"], x["item"]) for x in rows] == [("pending", "item", "คลัง IT")]

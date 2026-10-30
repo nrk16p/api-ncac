@@ -7,7 +7,8 @@ from sqlalchemy import func, inspect, or_
 from sqlalchemy.orm import Session, joinedload
 
 from models.access_review_model import (
-    ArCycle, ArReview, ArReviewApprover, ArReviewLine, ArReviewLineItem, ArRole, ArRoleItem, ArSystem, ArUserRole,
+    ArCycle, ArReview, ArReviewApprover, ArReviewLine, ArReviewLineItem, ArReviewLineSnapshot, ArRole, ArRoleItem,
+    ArSystem, ArUserRole,
 )
 from models.form_approver_division import FormApproverDivision
 from models.user_model import Department, Position, User
@@ -314,7 +315,33 @@ def set_unchecked(db: Session, line_id: int, item_ids: Iterable[int]) -> None:
 
 def delete_line(db: Session, line: ArReviewLine) -> None:
     db.query(ArReviewLineItem).filter(ArReviewLineItem.review_line_id == line.id).delete(synchronize_session=False)
+    db.query(ArReviewLineSnapshot).filter(ArReviewLineSnapshot.review_line_id == line.id).delete(
+        synchronize_session=False)
     db.delete(line)
+
+
+def set_snapshot(db: Session, line_id: int, item_ids: Iterable[int]) -> None:
+    db.query(ArReviewLineSnapshot).filter(ArReviewLineSnapshot.review_line_id == line_id).delete(
+        synchronize_session=False)
+    for iid in sorted(set(item_ids)):
+        db.add(ArReviewLineSnapshot(review_line_id=line_id, role_item_id=iid))
+
+
+def snapshot_by_line(db: Session, line_ids: Iterable[int]) -> Dict[int, List[int]]:
+    """line_id → item ids the role had at submit. Lines submitted before snapshots existed are missing."""
+    ids = list(set(line_ids))
+    out: Dict[int, List[int]] = {}
+    if ids:
+        for line_id, item_id in (db.query(ArReviewLineSnapshot.review_line_id, ArReviewLineSnapshot.role_item_id)
+                                 .filter(ArReviewLineSnapshot.review_line_id.in_(ids))
+                                 .order_by(ArReviewLineSnapshot.role_item_id).all()):
+            out.setdefault(line_id, []).append(item_id)
+    return out
+
+
+def items_by_ids(db: Session, item_ids: Iterable[int]) -> Dict[int, ArRoleItem]:
+    ids = list(set(item_ids))
+    return {i.id: i for i in db.query(ArRoleItem).filter(ArRoleItem.id.in_(ids)).all()} if ids else {}
 
 
 def unchecked_counts(db: Session, review_ids: Iterable[int]) -> Dict[int, int]:
@@ -336,5 +363,7 @@ def referenced_item_ids(db: Session, item_ids: Iterable[int]) -> set:
     ids = list(set(item_ids))
     if not ids:
         return set()
-    return {r[0] for r in db.query(ArReviewLineItem.role_item_id)
-            .filter(ArReviewLineItem.role_item_id.in_(ids)).distinct().all()}
+    return ({r[0] for r in db.query(ArReviewLineItem.role_item_id)
+             .filter(ArReviewLineItem.role_item_id.in_(ids)).distinct().all()}
+            | {r[0] for r in db.query(ArReviewLineSnapshot.role_item_id)
+               .filter(ArReviewLineSnapshot.role_item_id.in_(ids)).distinct().all()})

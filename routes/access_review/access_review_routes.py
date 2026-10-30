@@ -245,9 +245,14 @@ def admin_reviews(cycle_id: Optional[int] = None,
 
 
 @router.get("/admin/removals")
-def admin_removals(cycle_id: Optional[int] = None, caller: Caller = Depends(require_admin),
-                   db: Session = Depends(get_db)):
-    return admin.removals_report(db, cycle_id)
+def admin_removals(cycle_id: Optional[int] = None, include_pending: bool = False,
+                   caller: Caller = Depends(require_admin), db: Session = Depends(get_db)):
+    return admin.removals_report(db, cycle_id, include_pending)
+
+
+@router.get("/admin/reviews/{review_id}/changes")
+def admin_review_changes(review_id: int, caller: Caller = Depends(require_admin), db: Session = Depends(get_db)):
+    return admin.review_changes(db, review_id)
 
 
 def _preview_caller(db: Session, employee_id: str) -> Caller:

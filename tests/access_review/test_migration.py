@@ -8,7 +8,8 @@ MIGRATIONS = Path(__file__).resolve().parents[2] / "scripts" / "migrations"
 FULL = (MIGRATIONS / "2026-10-29_access_review.sql").read_text(encoding="utf-8")
 FIX = (MIGRATIONS / "2026-10-29b_access_review_user_roles.sql").read_text(encoding="utf-8")
 MODEL_TABLES = {t.__tablename__ for t in (m.ArSystem, m.ArRole, m.ArRoleItem, m.ArUserRole, m.ArCycle, m.ArReview,
-                                          m.ArReviewLine, m.ArReviewLineItem, m.ArReviewApprover)}
+                                          m.ArReviewLine, m.ArReviewLineItem, m.ArReviewLineSnapshot,
+                                          m.ArReviewApprover)}
 
 
 def _tables(sql):
@@ -21,7 +22,7 @@ def _columns(sql, table):
             if line.strip() and not line.strip().startswith(("CONSTRAINT", "PRIMARY KEY"))}
 
 
-def test_full_migration_has_the_9_model_tables_and_columns():
+def test_full_migration_has_the_10_model_tables_and_columns():
     assert _tables(FULL) == MODEL_TABLES
     for t in MODEL_TABLES:
         model_cols = set(m.Base.metadata.tables[t].columns.keys())
@@ -52,3 +53,15 @@ def test_item_review_migration_is_additive():
     assert _tables(ITEM) == {"ar_review_line_items"}
     assert _columns(ITEM, "ar_review_line_items") == set(m.Base.metadata.tables["ar_review_line_items"].columns.keys())
     assert "ON DELETE CASCADE" in ITEM
+
+
+SNAP = (MIGRATIONS / "2026-10-30b_access_review_snapshot.sql").read_text(encoding="utf-8")
+
+
+def test_snapshot_migration_is_additive():
+    assert "BEGIN;" in SNAP and SNAP.rstrip().endswith("COMMIT;")
+    assert "DROP" not in SNAP.upper() and "ALTER" not in SNAP.upper()
+    assert _tables(SNAP) == {"ar_review_line_snapshot"}
+    assert _columns(SNAP, "ar_review_line_snapshot") == set(
+        m.Base.metadata.tables["ar_review_line_snapshot"].columns.keys())
+    assert "ON DELETE CASCADE" in SNAP
