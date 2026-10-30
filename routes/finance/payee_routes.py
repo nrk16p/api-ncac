@@ -4,6 +4,7 @@
 ตรวจ action_by ด้วย require_finance เหมือน advance_routes
 """
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -18,12 +19,12 @@ from routes.finance.advance_routes import require_finance, require_permission
 from services.finance import permission_logic as perms
 from schemas.finance_schema import (PayeeAccountCreate, PayeeAccountUpdate, PayeeActionIn, PayeeRejectIn,
                                     PayeeRequestCreate)
-from services.finance.finance_mail import send_finance_email
+from services.finance.finance_mail import pick_recipients, send_finance_email
 from services.finance import advance_logic as logic
 from services.finance import payee_logic as pl
 from services.finance import payee_repo as repo
 from services.finance.advance_repo import people_by_employee_id
-from services.finance.payee_email import render_payee_request_email
+from services.finance.payee_email import render_payee_request_email, render_payee_result_email
 
 router = APIRouter(prefix="/finance", tags=["Finance - Payee"])
 log = logging.getLogger(__name__)
@@ -175,6 +176,35 @@ def _send_request_email(ctx: dict):
         log.exception("payee request email failed (request %s)", ctx.get("request_id"))
 
 
+def _send_result_email(to: list, ctx: dict):
+    """Background task: must never raise. แจ้งผู้ขอว่าการเงินอนุมัติ / ไม่อนุมัติแล้ว"""
+    try:
+        subject, html = render_payee_result_email(ctx)
+        send_finance_email(to, subject, html)
+    except Exception:  # noqa: BLE001 - email failure must not affect the review
+        log.exception("payee result email failed (request %s)", ctx.get("request_id"))
+
+
+def _queue_result_email(background_tasks: BackgroundTasks, db: Session, req, approved: bool,
+                        old_account_no=None):
+    """หาอีเมลผู้ขอแล้วคิวเมลแจ้งผล ไม่มีอีเมลก็ข้าม (การอนุมัติ commit ไปแล้ว ห้ามพังเพราะเมล)"""
+    try:
+        user = db.query(User).filter(User.employee_id == req.employee_id).first()
+        to = pick_recipients([user.email]) if user is not None else []
+        if not to:
+            log.info("payee result email: employee %s has no email", req.employee_id)
+            return
+        person = people_by_employee_id(db, [req.employee_id]).get(req.employee_id) or {}
+        background_tasks.add_task(_send_result_email, to, {
+            "request_id": req.id, "approved": approved, "employee_id": req.employee_id,
+            "employee_name": person.get("name"), "account_no": req.account_no,
+            "account_name": req.account_name, "old_account_no": old_account_no,
+            "review_remark": req.review_remark, "fe_base_url": os.getenv("FE_BASE_URL"),
+        })
+    except Exception:  # noqa: BLE001
+        log.exception("payee result email could not be queued (request %s)", req.id)
+
+
 @router.post("/payee-requests", status_code=201)
 def create_payee_request(body: PayeeRequestCreate, background_tasks: BackgroundTasks,
                          db: Session = Depends(get_db)):
@@ -229,7 +259,8 @@ def get_payee_request(request_id: int, db: Session = Depends(get_db)):
 
 
 @router.put("/payee-requests/{request_id}/approve")
-def approve_payee_request(request_id: int, body: PayeeActionIn, db: Session = Depends(get_db)):
+def approve_payee_request(request_id: int, body: PayeeActionIn, background_tasks: BackgroundTasks,
+                          db: Session = Depends(get_db)):
     require_permission(db, body.action_by, perms.PERM_PAYEE_ADMIN)
     req = _load_request(db, request_id, for_update=True)
     if body.action_by == req.employee_id:
@@ -257,11 +288,15 @@ def approve_payee_request(request_id: int, body: PayeeActionIn, db: Session = De
     _log(db, req.employee_id, "APPROVE", pl.diff_pairs(before, _account_values(master)),
          remark=req.remark, action_by=body.action_by)
     _commit(db, "ไม่สามารถอนุมัติได้ — มีรายการซ้ำ กรุณาลองใหม่")
+    old_no = before.get("account_no")
+    _queue_result_email(background_tasks, db, req, approved=True,
+                        old_account_no=old_no if old_no and old_no != req.account_no else None)
     return {"request": repo.request_dict(db, req), "account": repo.account_dict(db, master)}
 
 
 @router.put("/payee-requests/{request_id}/reject")
-def reject_payee_request(request_id: int, body: PayeeRejectIn, db: Session = Depends(get_db)):
+def reject_payee_request(request_id: int, body: PayeeRejectIn, background_tasks: BackgroundTasks,
+                         db: Session = Depends(get_db)):
     require_permission(db, body.action_by, perms.PERM_PAYEE_ADMIN)
     req = _load_request(db, request_id, for_update=True)
     try:
@@ -276,6 +311,7 @@ def reject_payee_request(request_id: int, body: PayeeRejectIn, db: Session = Dep
     _log(db, req.employee_id, "REQUEST_REJECT", {"status": ["PENDING", "REJECTED"]}, remark=remark,
          action_by=body.action_by)
     db.commit()
+    _queue_result_email(background_tasks, db, req, approved=False)
     return repo.request_dict(db, req)
 
 

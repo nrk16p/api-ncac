@@ -77,3 +77,70 @@ def render_payee_request_email(ctx: dict):
         '</table></td></tr></table></td></tr></table></body></html>'
     )
     return subject, html
+
+
+def advance_link(fe_base_url):
+    if isinstance(fe_base_url, str) and _ORIGIN.fullmatch(fe_base_url.strip().rstrip("/")):
+        return f"{fe_base_url.strip().rstrip('/')}/finance/advance/new"
+    return None
+
+
+def render_payee_result_email(ctx: dict):
+    """เมลแจ้งผู้ขอว่าการเงินอนุมัติ / ไม่อนุมัติบัญชีรับเงินแล้ว (pure rendering, no I/O).
+    ctx: approved, employee_id, employee_name, account_no, account_name, old_account_no, review_remark,
+    fe_base_url. Returns (subject, html). Every value is HTML-escaped."""
+    e = lambda v: escape(str(v), quote=True)  # noqa: E731
+    approved = bool(ctx.get("approved"))
+    name = ctx.get("employee_name") or "-"
+    emp = ctx.get("employee_id") or "-"
+    result = "อนุมัติแล้ว" if approved else "ไม่อนุมัติ"
+    subject = f"บัญชีรับเงินสำหรับเบิก Advance · {result} · {name} ({emp})"
+    head_bg, head_sub = ("#2ea84f", "#e8f5ec") if approved else ("#c0392b", "#fbe9e7")
+    if approved:
+        lead = "การเงินตรวจ bookbank แล้ว ต่อไปเงินเบิก Advance จะโอนเข้าบัญชีนี้ เบิกได้เลย"
+    else:
+        lead = "การเงินยังไม่อนุมัติบัญชีนี้ ดูเหตุผลด้านล่าง แก้แล้วส่งคำขอใหม่ได้"
+    old = ctx.get("old_account_no")
+    old_row = ""
+    if approved and old:
+        old_row = ('<tr><td style="padding:10px 0 0;font-size:12px;color:#6b7280">เลขเดิม '
+                   f'<span style="text-decoration:line-through">{e(format_kbank_account(old))}</span>'
+                   " เลิกใช้แล้ว</td></tr>")
+    reason = ""
+    if not approved:
+        reason = ('<tr><td style="padding:18px 0 0"><div style="font-size:12px;color:#6b7280;margin-bottom:4px">'
+                  'เหตุผลจากการเงิน</div><div style="font-size:14px;color:#1f2937">'
+                  f'{e(ctx.get("review_remark") or "-")}</div></td></tr>')
+    link = advance_link(ctx.get("fe_base_url"))
+    button = ""
+    if link:
+        label = "เบิก Advance" if approved else "ส่งคำขอใหม่"
+        button = ('<tr><td style="padding:24px 0 0"><a href="' + escape(link, quote=True) + '" style="display:inline-block;'
+                  f'padding:11px 22px;background:{head_bg};color:#ffffff;text-decoration:none;border-radius:8px;'
+                  f'font-size:14px;font-weight:700">{label}</a></td></tr>')
+    html = (
+        '<!DOCTYPE html><html lang="th"><head><meta charset="UTF-8"></head>'
+        '<body style="margin:0;padding:0;background-color:#eef2f7;font-family:Tahoma,Arial,sans-serif">'
+        '<table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#eef2f7;'
+        'padding:32px 16px 32px 24px"><tr><td align="left">'
+        '<div style="font-size:12px;font-weight:700;letter-spacing:0.08em;color:#4a5568;margin-bottom:16px">'
+        '&#9679; FINANCE &mdash; บัญชีรับเงินสำหรับเบิก Advance</div>'
+        '<table width="620" cellpadding="0" cellspacing="0" border="0" style="max-width:620px;width:100%;'
+        'background-color:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #e0e6ed">'
+        f'<tr><td style="background:{head_bg};padding:28px 36px">'
+        '<div style="font-size:11px;font-weight:700;color:#ffffff;letter-spacing:0.1em;margin-bottom:10px">บัญชีรับเงิน · สำหรับเบิก Advance</div>'
+        f'<div style="font-size:24px;font-weight:700;color:#ffffff;margin-bottom:6px">{result}</div>'
+        f'<div style="font-size:13px;color:{head_sub}">{lead}</div></td></tr>'
+        '<tr><td style="padding:28px 36px"><table width="100%" cellpadding="0" cellspacing="0" border="0">'
+        f'<tr><td style="font-size:14px;color:#1f2937">เรียนคุณ{e(name)} (รหัส {e(emp)})</td></tr>'
+        '<tr><td style="padding:20px 0 0"><table width="100%" cellpadding="0" cellspacing="0" border="0" '
+        'style="background:#f7f9fb;border:1px solid #e0e6ed;border-radius:12px">'
+        '<tr><td style="padding:16px 20px">'
+        '<div style="font-size:12px;color:#4a5568;font-weight:700">ธนาคารกสิกรไทย</div>'
+        f'<div style="font-size:24px;font-weight:700;color:#1f2937;letter-spacing:0.04em;margin:6px 0 4px">'
+        f'{e(format_kbank_account(ctx.get("account_no")))}</div>'
+        f'<div style="font-size:14px;color:#1f2937">ชื่อบัญชี {e(ctx.get("account_name") or "-")}</div>'
+        f'</td></tr></table></td></tr>{old_row}{reason}{button}'
+        '</table></td></tr></table></td></tr></table></body></html>'
+    )
+    return subject, html
