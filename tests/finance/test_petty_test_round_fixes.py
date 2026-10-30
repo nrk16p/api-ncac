@@ -47,6 +47,15 @@ class TestTravelSoftDuplicateByTraveller:
         second = self._create(db_session, claim_payload, 23)
         assert [s["form_id"] for s in self._soft(db_session, second["form_id"])] == [first["form_id"]]
 
+    def test_fare_and_toll_rows_of_one_claim_do_not_warn_each_other(self, db_session, travel, claim_payload,
+                                                                    seq_stub, frozen_bkk):
+        """ค่าเดินทางที่มีค่าทางด่วนรวมในใบ = 2 แถวของคนเดียววันเดียว ไม่ใช่เบิกซ้ำ (เจอตอนรันชุดทดสอบรอบสอง)"""
+        body = ClaimIn(**claim_payload(expense_type="TRAVEL", payee_name="สมศักดิ์ แก้วใส",
+                                       items=[{"event_date": date(2026, 10, 20), "rate": 250},
+                                              {"event_date": date(2026, 10, 20), "rate": 60, "remark": "ค่าทางด่วน"}]))
+        only = R.create_claim(body, db=db_session)
+        assert self._soft(db_session, only["form_id"]) == []
+
     def test_another_traveller_does_not_warn(self, db_session, travel, claim_payload, seq_stub, frozen_bkk):
         self._create(db_session, claim_payload, 20)
         second = self._create(db_session, claim_payload, 23, payee="ประยูร ทองคำ")

@@ -186,7 +186,9 @@ def split_duplicates(items: Iterable[Mapping], prior: Iterable[Mapping], spec: M
                          "payee_name": matched_hard.get("payee_name"), "amount": matched_hard.get("amount"),
                          "message": message})
         elif (mine := _soft_key(item, keys)) is not None:
-            for other in pool:
+            # ด่านอ่อนที่เทียบด้วยคน (ค่าเดินทาง) ดูเฉพาะใบอื่น — ค่าโดยสารกับค่าทางด่วนในใบเดียวคือคนเดียววันเดียว
+            soft_pool = others if keys == ["driver"] else pool
+            for other in soft_pool:
                 if _soft_key(other, keys) != mine:
                     continue
                 here, there = item.get("event_date"), other.get("event_date")
