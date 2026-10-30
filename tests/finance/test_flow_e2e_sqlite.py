@@ -502,6 +502,29 @@ def test_extra_pay_path_one_click_approval(api):
     assert_mails(a.mails(), {legacy(fid, "รายการเบิกเงินปิดเรียบร้อย"): ([email_of(REQ)], [])})
 
 
+
+def test_list_summary_splits_outstanding_by_status(api):
+    """ยอดค้างเคลียร์แยกตามสถานะ (30/10/2026): the paged list summary runs its GROUP BY for real here."""
+    a = api
+    on_time, late = a.submit(3000), a.submit(1500)
+    a.submit(500)  # still in approval: no fin row, not outstanding
+    for fid, amount in ((on_time, 3000), (late, 1500)):
+        a.approve(fid, ASM)
+        a.voucher(fid)
+        a.pay(fid, amount)
+    db = a.Session()
+    db.query(FinAdvance).filter(FinAdvance.form_id == late).update({"clear_due_date": today() - timedelta(days=1)})
+    db.commit()
+    db.close()
+
+    r = a.c.get("/finance/advances", params={"page": 1, "page_size": 1})
+    assert r.status_code == 200, r.text
+    s = r.json()["summary"]
+    assert s["outstanding_amount"] == 4500.0
+    assert s["outstanding_by_status"]["AWAITING_CLEARING"] == 4500.0
+    assert s["outstanding_by_status"]["PENDING_APPROVAL"] == 0.0
+    assert s["overdue"] == 1 and s["overdue_amount"] == 1500.0
+
 # ================================================================ 3. unhappy paths
 
 def test_reject_at_step_one(api):

@@ -363,12 +363,14 @@ def list_advances_page(db, *, page, page_size, statuses=None, overdue=None, empl
                  cost_center=logic.clean_text(cost_center), q=q, department=logic.clean_text(department))
     today = today_bkk()
     overdue_flag = case((overdue_clause(today), 1), else_=0)
+    overdue_paid = case((overdue_clause(today), FinAdvance.amount_paid), else_=0)
     group_rows = (
         _scoped_query(db, (FormSubmission.status_approve, FinAdvance.fin_status, func.count(),
-                           func.coalesce(func.sum(overdue_flag), 0), func.sum(FinAdvance.amount_paid)), **scope)
+                           func.coalesce(func.sum(overdue_flag), 0), func.sum(FinAdvance.amount_paid),
+                           func.coalesce(func.sum(overdue_paid), 0)), **scope)
         .group_by(FormSubmission.status_approve, FinAdvance.fin_status).all()
     )
-    summary = logic.fold_summary([(a, f, int(n), int(o), amt) for a, f, n, o, amt in group_rows])
+    summary = logic.fold_summary([(a, f, int(n), int(o), amt, o_amt) for a, f, n, o, amt, o_amt in group_rows])
 
     filtered = _scoped_query(db, (FormSubmission, FinAdvance), **scope)
     if statuses:

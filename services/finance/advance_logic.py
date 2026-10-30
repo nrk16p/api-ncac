@@ -153,18 +153,28 @@ def escape_like(text):
 
 
 def fold_summary(rows):
-    """rows: (status_approve, fin_status, count, overdue_count, amount_paid_sum) groups → the list summary.
-    counts has every derived status (0 when none); outstanding_amount = Σ amount_paid over rows that have a fin row
-    and are not CLOSED."""
+    """rows: (status_approve, fin_status, count, overdue_count, amount_paid_sum, overdue_amount_paid_sum) groups →
+    the list summary. counts has every derived status (0 when none); outstanding_amount = Σ amount_paid over rows
+    that have a fin row and are not CLOSED; outstanding_by_status splits that sum by derived status (every status,
+    0 when none); overdue_amount = Σ amount_paid of the overdue rows (already inside outstanding_amount)."""
     counts = {code: 0 for code in STATUS_LABELS}
-    overdue, outstanding = 0, Decimal(0)
-    for approve, fin, n, n_overdue, amount in rows:
+    by_status = {code: Decimal(0) for code in STATUS_LABELS}
+    overdue, overdue_amount = 0, Decimal(0)
+    for approve, fin, n, n_overdue, amount, amount_overdue in rows:
         status, _ = derive_status(approve, fin, None, date.min)
         counts[status] += n
         overdue += n_overdue or 0
+        overdue_amount += Decimal(amount_overdue or 0)
         if fin is not None and fin != FIN_CLOSED:
-            outstanding += Decimal(amount or 0)
-    return {"counts": counts, "overdue": overdue, "outstanding_amount": float(outstanding.quantize(_CENT))}
+            by_status[status] += Decimal(amount or 0)
+    outstanding = sum(by_status.values(), Decimal(0))
+    return {
+        "counts": counts,
+        "overdue": overdue,
+        "outstanding_amount": float(outstanding.quantize(_CENT)),
+        "outstanding_by_status": {code: float(v.quantize(_CENT)) for code, v in by_status.items()},
+        "overdue_amount": float(overdue_amount.quantize(_CENT)),
+    }
 
 
 def default_due_date(transfer_date: date) -> date:

@@ -64,18 +64,32 @@ def test_sql_clauses_compile():
 # ---------------------------- summary fold ----------------------------
 
 def test_fold_summary_counts_overdue_and_outstanding():
-    rows = [("In Progress", None, 3, 0, None),
-            ("Approved", None, 2, 0, None),
-            ("Approved", "PAID", 4, 1, Decimal("1000.50")),
-            ("Approved", "RESUBMITTED", 1, 0, Decimal("10")),
-            ("Approved", "CLOSED", 5, 0, Decimal("9999")),
-            ("Rejected", None, 1, 0, None)]
+    rows = [("In Progress", None, 3, 0, None, 0),
+            ("Approved", None, 2, 0, None, 0),
+            ("Approved", "PAID", 4, 1, Decimal("1000.50"), Decimal("300.25")),
+            ("Approved", "RESUBMITTED", 1, 0, Decimal("10"), 0),
+            ("Approved", "SENT_BACK", 2, 2, Decimal("200"), Decimal("200")),
+            ("Approved", "CLEARING_SUBMITTED", 3, 0, Decimal("150.10"), 0),
+            ("Approved", "CLOSED", 5, 0, Decimal("9999"), 0),
+            ("Rejected", None, 1, 0, None, 0)]
     s = L.fold_summary(rows)
     assert set(s["counts"]) == set(L.STATUS_LABELS)
     assert s["counts"]["PENDING_APPROVAL"] == 3 and s["counts"]["AWAITING_VOUCHER"] == 3
-    assert s["counts"]["AWAITING_CLEARING"] == 4 and s["counts"]["CLOSED"] == 5 and s["counts"]["SENT_BACK"] == 0
-    assert s["overdue"] == 1
-    assert s["outstanding_amount"] == 1010.5  # fin rows not CLOSED; no fin row excluded
+    assert s["counts"]["AWAITING_CLEARING"] == 4 and s["counts"]["CLOSED"] == 5 and s["counts"]["SENT_BACK"] == 2
+    assert s["overdue"] == 3
+    assert s["outstanding_amount"] == 1360.6  # fin rows not CLOSED; no fin row excluded
+    by = s["outstanding_by_status"]
+    assert set(by) == set(L.STATUS_LABELS)
+    assert by["AWAITING_CLEARING"] == 1000.5 and by["SENT_BACK"] == 200.0 and by["AWAITING_REVIEW"] == 150.1
+    assert by["AWAITING_VOUCHER"] == 10.0 and by["CLOSED"] == 0.0 and by["PENDING_APPROVAL"] == 0.0
+    assert round(sum(by.values()), 2) == s["outstanding_amount"]
+    assert s["overdue_amount"] == 500.25  # already inside outstanding_amount
+
+
+def test_fold_summary_empty():
+    s = L.fold_summary([])
+    assert s["outstanding_amount"] == 0.0 and s["overdue_amount"] == 0.0
+    assert all(v == 0.0 for v in s["outstanding_by_status"].values())
 
 
 # ---------------------------- q + param validation ----------------------------
