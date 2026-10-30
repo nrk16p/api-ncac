@@ -524,6 +524,8 @@ def test_list_summary_splits_outstanding_by_status(api):
     assert s["outstanding_by_status"]["AWAITING_CLEARING"] == 4500.0
     assert s["outstanding_by_status"]["PENDING_APPROVAL"] == 0.0
     assert s["overdue"] == 1 and s["overdue_amount"] == 1500.0
+    assert s["overdue_by_status"]["AWAITING_CLEARING"] == {"count": 1, "amount": 1500.0}
+    assert s["overdue_by_status"]["SENT_BACK"] == {"count": 0, "amount": 0.0}
 
 # ================================================================ 3. unhappy paths
 

@@ -84,12 +84,19 @@ def test_fold_summary_counts_overdue_and_outstanding():
     assert by["AWAITING_VOUCHER"] == 10.0 and by["CLOSED"] == 0.0 and by["PENDING_APPROVAL"] == 0.0
     assert round(sum(by.values()), 2) == s["outstanding_amount"]
     assert s["overdue_amount"] == 500.25  # already inside outstanding_amount
+    ob = s["overdue_by_status"]
+    assert set(ob) == set(L.STATUS_LABELS)
+    assert ob["AWAITING_CLEARING"] == {"count": 1, "amount": 300.25}
+    assert ob["SENT_BACK"] == {"count": 2, "amount": 200.0}
+    assert ob["AWAITING_REVIEW"] == {"count": 0, "amount": 0.0}
+    assert sum(v["count"] for v in ob.values()) == s["overdue"]
 
 
 def test_fold_summary_empty():
     s = L.fold_summary([])
     assert s["outstanding_amount"] == 0.0 and s["overdue_amount"] == 0.0
     assert all(v == 0.0 for v in s["outstanding_by_status"].values())
+    assert all(v == {"count": 0, "amount": 0.0} for v in s["overdue_by_status"].values())
 
 
 # ---------------------------- q + param validation ----------------------------
