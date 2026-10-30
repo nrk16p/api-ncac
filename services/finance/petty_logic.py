@@ -308,6 +308,20 @@ def batch_no(branch: str, division: str, yymm: int, number: int) -> str:
     return f"{branch_letters(branch)}-{division}-{yymm:04d}-B{number}"
 
 
+# ประเภทการเบิก → แผนกของวงเงินที่เปิดได้ (ตารางบัญชี 2026-10-14) · ไม่อยู่ในนี้ = ทุกแผนก
+# ต้องตรงกับ EXPENSE_TYPE_DIVISIONS ใน FE lib/finance/petty-account-code.ts (FE ใช้กรอง dropdown)
+EXPENSE_TYPE_DIVISIONS: dict[str, tuple[str, ...]] = {
+    "WEIGH": ("B01", "B02", "B04", "B05"),
+    "TIRE": ("B02",),
+    "REPAIR": ("B02",),
+}
+
+
+def division_allowed(expense_type: str | None, division_code: str | None) -> bool:
+    allowed = EXPENSE_TYPE_DIVISIONS.get(expense_type or "")
+    return True if allowed is None else (division_code or "") in allowed
+
+
 def hard_keys_by_payee(keys) -> bool:
     """spec ตั้ง duplicate_check.hard.keys มี payee_name = เทียบ เลขที่บิล + จ่ายให้ (ค่าใช้จ่ายทั่วไป ไม่มีรถ)"""
     return "payee_name" in (keys or [])

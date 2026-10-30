@@ -135,6 +135,12 @@ def create_claim(payload: ClaimIn, db: Session = Depends(get_db)):
     body = payload.model_dump()
     items = body.pop("items")
     _reject_incomplete_rows(db, payload.expense_type, items)
+    fund = repo.get_fund(db, payload.fund_id)
+    if fund is not None and not L.division_allowed(payload.expense_type, fund.division_code):
+        # เดิมคุมแค่ dropdown หน้าเว็บ ยิง API ตรงเปิดค่ายางบนวงเงินบัญชีได้ (เจอตอนทดสอบ 30/10)
+        allowed = " ".join(L.EXPENSE_TYPE_DIVISIONS[payload.expense_type])
+        raise HTTPException(status_code=422, detail=(
+            f"ประเภทนี้เปิดได้เฉพาะวงเงินของแผนก {allowed} แต่วงเงินที่เลือกเป็นแผนก {fund.division_code}"))
     try:
         claim = repo.create_claim(db, body, items, actor=payload.created_by)
     except LookupError as exc:
@@ -211,7 +217,9 @@ def _gate(db: Session, claim, items, stage: str, attachments: dict) -> dict:
     item_dicts = [{"event_date": i.event_date, "truck_code": i.truck_code,
                    "truck_plate": i.truck_plate, "truck_type": i.truck_type,
                    "ref_no": i.ref_no, "rate": i.rate, "qty": i.qty,
-                   "remark": i.remark, "driver_name": i.driver_name or claim.driver_name,
+                   "remark": i.remark,
+                   # ค่าเดินทางไม่มีช่องคนขับ ผู้เดินทางคือผู้รับเงิน — ด่านอ่อน "คนเดิมใน 7 วัน" ต้องเทียบคนนี้
+                   "driver_name": i.driver_name or claim.driver_name or claim.payee_name,
                    "driver_role": i.driver_role, "tire_position": i.tire_position,
                    "payee_name": claim.payee_name} for i in items]
     result = validate.validate_claim(

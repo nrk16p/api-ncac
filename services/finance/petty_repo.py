@@ -644,7 +644,8 @@ def find_prior_items(db: Session, *, expense_type: str, keys: list[dict], days: 
 
     out = []
     for item, form_id, payee_name, amount, claim_driver in rows:
-        driver = item.driver_name or claim_driver  # แถวไม่ระบุ พจส. = คนขับของใบ (ค่าเดินทาง)
+        # แถวไม่ระบุ พจส. = คนขับของใบ · ไม่มีทั้งคู่ (ค่าเดินทาง) = ผู้รับเงิน ซึ่งคือผู้เดินทาง
+        driver = item.driver_name or claim_driver or payee_name
         same_truck = (L.normalize_code(item.truck_code) in codes
                       or L.normalize_plate(item.truck_plate) in plates)
         same_ref = (item.ref_no or "").strip() in refs
