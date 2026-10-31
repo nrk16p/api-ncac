@@ -6,7 +6,9 @@
 #    ห้ามใช้ ATMS_* จาก env
 # ======================================================
 import hashlib
+import hmac
 import os
+import re
 import threading
 import time
 from dataclasses import asdict
@@ -33,8 +35,17 @@ CLIENT_TTL = 20 * 60  # วินาที
 # ── auth ────────────────────────────────────────────────────────────────────
 def require_api_key(x_api_key: Optional[str] = Header(None, alias="x-api-key")):
     key = os.getenv("PIPELINE_API_KEY")
-    if not key or x_api_key != key:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+    if not key or not x_api_key or not hmac.compare_digest(x_api_key.encode(), key.encode()):
+        # 403 เสมอ — 401 สงวนไว้ให้ "ATMS login/session ไม่ผ่าน"
+        raise HTTPException(status_code=403, detail="api key ไม่ถูกต้อง")
+
+
+_DATE_RE = re.compile(r"^\d{2}/\d{2}/\d{4}$")
+
+
+def _check_date(d: Optional[str]) -> None:
+    if d is not None and not _DATE_RE.fullmatch(d):
+        raise HTTPException(status_code=422, detail="วันที่ต้องเป็นรูปแบบ DD/MM/YYYY")
 
 
 class Creds(BaseModel):
@@ -100,6 +111,8 @@ def _run(c: Creds, fn, *, write: bool = False, dry_run: bool = False):
             lock.acquire()
         return fn(_get_client(c, dry_run))
     except WithdrawPartialError as e:
+        if isinstance(e.cause, AtmsAuthError):
+            _drop(c.username)        # session/รหัสผ่านใช้ไม่ได้แล้ว → ครั้งหน้าต้อง login ใหม่
         return JSONResponse(status_code=409, content={"detail": str(e), "progress": asdict(e.progress)})
     except AtmsAuthError as e:
         _drop(c.username)
@@ -180,6 +193,7 @@ def whoami(c: Creds = Depends(atms_creds)):
 @router.get("/list", dependencies=[Depends(require_api_key)])
 def list_withdraws(inventory_id: int = Query(...), date: str = Query(..., description="DD/MM/YYYY"),
                    c: Creds = Depends(atms_creds)):
+    _check_date(date)
     return {"rows": _run(c, lambda cl: cl.list_withdraws(inventory_id, date))}
 
 
@@ -193,6 +207,7 @@ def lookup(kind: str, q: str = Query(""), limit: int = Query(20, ge=1, le=100),
 # ── write ───────────────────────────────────────────────────────────────────
 @router.post("/issue", dependencies=[Depends(require_api_key)])
 def issue(body: IssueBody, c: Creds = Depends(atms_creds)):
+    _check_date(body.date)
     lines = [IssueLine(**ln.model_dump()) for ln in body.lines]
     p = _run(c, lambda cl: cl.issue_withdraw(
         body.inventory_id, body.pick_to_id, body.remark_token, lines,
@@ -203,6 +218,7 @@ def issue(body: IssueBody, c: Creds = Depends(atms_creds)):
 
 @router.post("/return", dependencies=[Depends(require_api_key)])
 def return_(body: ReturnBody, c: Creds = Depends(atms_creds)):
+    _check_date(body.date)
     lines = [ReturnLine(**ln.model_dump()) for ln in body.lines]
     p = _run(c, lambda cl: cl.return_to_stock(
         body.inventory_id, body.withdraw_id, body.withdraw_code, body.remark_token, lines,

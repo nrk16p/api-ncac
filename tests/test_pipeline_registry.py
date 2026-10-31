@@ -58,3 +58,25 @@ def test_store_withdraw_drift_script_calls_drift_tick_with_the_key():
         assert "401" in str(e)
     else:
         raise AssertionError("non-2xx must raise")
+
+
+def test_store_withdraw_drift_missing_env_finishes_joblog_as_failed(monkeypatch):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("sw_drift2", PIPELINE_SCRIPTS["store-withdraw-drift"])
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    events = []
+
+    class FakeJob:
+        def __init__(self, *a, **k):
+            events.append(("start", a))
+
+        def finish(self, status="success", **extra):
+            events.append((status, extra))
+
+    monkeypatch.setattr(mod, "JobLog", FakeJob)
+    monkeypatch.delenv("WMS_BASE", raising=False)
+    monkeypatch.delenv("WMS_STORE_WITHDRAW_KEY", raising=False)
+    assert mod.main() == 1
+    assert events[0][0] == "start" and events[1][0] == "failed" and "WMS_BASE" in events[1][1]["error"]

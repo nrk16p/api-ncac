@@ -9,6 +9,7 @@ ATMS — ใบเบิก (WD) / ใบรับคืน (DD) ของคล
 """
 
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -65,6 +66,65 @@ _NUM = re.compile(r"-?\d[\d,]*\.?\d*")
 _REDIRECTS = (301, 302, 303, 307, 308)
 _LOC_ID = re.compile(r"/id/(\d+)")
 _TZ = ZoneInfo("Asia/Bangkok")
+
+
+# คอลัมน์ของหน้า list: key → (ตัวเทียบหัวคอลัมน์, index สำรองเมื่อหา header ไม่เจอ)
+_WD_COLS = {
+    "created_at": (lambda h: h == "วันที่เบิก", 0),
+    "code": (lambda h: h == "รหัส", 1),
+    "pick_to": (lambda h: h == "จุดประสงค์ในการเบิก", 3),
+    "approver": (lambda h: h == "approver", 10),
+    "user": (lambda h: h == "ผู้ใช้งาน", 11),
+    "remark": (lambda h: h == "หมายเหตุ", 12),
+}
+_DD_COLS = {
+    "code": (lambda h: h == "เลขที่", 0),
+    "withdraw": (lambda h: h == "เบิก", 3),
+    "supplier_ref_no": (lambda h: h.startswith("เลขที่ใบส่งของ"), 5),
+    "created_at": (lambda h: h == "บันทึกเมื่อ", 7),
+    "approver": (lambda h: h == "approver", 9),
+    "user": (lambda h: h == "ผู้ใช้งาน", 10),
+}
+
+
+def _list_table(soup: BeautifulSoup, spec: dict) -> tuple[Any, dict[str, int]]:
+    """ตารางที่ใหญ่สุด + แผนที่ key→index จากข้อความหัวคอลัมน์ (หาไม่ครบ = ใช้ index เดิมทั้งชุด)"""
+    tables = soup.find_all("table")
+    table = max(tables, key=lambda t: len(t.find_all("tr")), default=None)
+    fallback = {k: i for k, (_, i) in spec.items()}
+    if table is None:
+        return None, fallback
+    head = table.find("tr")
+    heads = [c.get_text(" ", strip=True) for c in head.find_all(["th", "td"])] if head else []
+    cols: dict[str, int] = {}
+    for key, (match, _) in spec.items():
+        idx = next((i for i, h in enumerate(heads) if match(h)), None)
+        if idx is None:
+            return table, fallback
+        cols[key] = idx
+    return table, cols
+
+
+def _same_sku(item: dict, sku_name: str) -> bool:
+    n = " ".join(_s(sku_name).split())
+    return n in {item.get("sku_full", ""), item.get("sku_name", ""), item.get("sku_code", "")} \
+        or n.startswith(f"{item.get('sku_code', '')} :")
+
+
+def _check_items(view: dict, lines: list) -> None:
+    """รายการใน ATMS ต้องตรงกับที่ส่ง (จำนวนบรรทัด + sku + amount แบบจับคู่ไม่สนลำดับ) ไม่งั้นห้ามอนุมัติ"""
+    items = list(view["items"])
+    if len(items) != len(lines):
+        raise AtmsOpenJobError(
+            f"ใบ {view['code']} มี {len(items)} บรรทัด ควรเป็น {len(lines)} — ไม่อนุมัติ ให้ตรวจมือ")
+    for ln in lines:
+        hit = next((it for it in items
+                    if _same_sku(it, ln.sku_name) and abs(it["amount"] - float(ln.amount)) < 1e-6), None)
+        if hit is None:
+            raise AtmsOpenJobError(
+                f"ใบ {view['code']} มีรายการไม่ตรงกับที่ส่ง ({ln.sku_name} x {ln.amount:g}) — "
+                "ไม่อนุมัติ ให้ตรวจมือ")
+        items.remove(hit)
 
 
 def _today() -> str:
@@ -150,6 +210,8 @@ class AtmsWithdrawClient(AtmsClient):
         super().__init__(phpsessid, username, password, **kw)
         self.phpsessid, self.username, self.password = phpsessid, username, password
         self.pace = pace
+        # rows-per-page ผูกกับ user ฝั่ง ATMS → list ที่ทับกันจะตัดหน้าของกันและกัน
+        self._list_lock = threading.RLock()
 
     def _new_session(self) -> requests.Session:
         """เหมือนของ AtmsClient แต่หน่วง pace ก่อนทุก request ของการ login"""
@@ -272,38 +334,42 @@ class AtmsWithdrawClient(AtmsClient):
         }
 
     # ── รายการใบเบิกของวัน ──────────────────────────────────────────────────
-    def list_withdraws(self, inventory_id: int, date_ddmmyyyy: str) -> list[dict]:
+    def list_withdraws(self, inventory_id: int, date_ddmmyyyy: str, remark: str = "") -> list[dict]:
         """
         ใบเบิกของคลัง+วันที่ (DD/MM/YYYY) — ตั้ง rows-per-page 1000 ก่อนแล้วคืนค่าเดิมเสมอ
-        (ค่านี้ผูกกับ user ฝั่ง ATMS ไม่ใช่ต่อ request)
+        (ค่านี้ผูกกับ user ฝั่ง ATMS ไม่ใช่ต่อ request → lock ต่อ client ตลอด ตั้ง→อ่าน→คืน)
+        remark = กรองหมายเหตุฝั่ง ATMS (ฟอร์มมี name="remark")
         """
-        self._set_rows_per_page(ROW_PER_PAGE_LIST)
-        try:
-            soup = self._get_soup(WD_INDEX_URL, {
-                "inventory_id": inventory_id,
-                "from_created_at": date_ddmmyyyy,
-                "to_created_at": date_ddmmyyyy,
-                "submit": "ค้นหา",
-            })
-        finally:
-            self._set_rows_per_page(ROW_PER_PAGE_DEFAULT)
-        tables = soup.find_all("table")
-        table = max(tables, key=lambda t: len(t.find_all("tr")), default=None)
+        params = {
+            "inventory_id": inventory_id,
+            "from_created_at": date_ddmmyyyy,
+            "to_created_at": date_ddmmyyyy,
+            "submit": "ค้นหา",
+        }
+        if remark:
+            params["remark"] = remark
+        with self._list_lock:
+            self._set_rows_per_page(ROW_PER_PAGE_LIST)
+            try:
+                soup = self._get_soup(WD_INDEX_URL, params)
+            finally:
+                self._set_rows_per_page(ROW_PER_PAGE_DEFAULT)
+        table, cols = _list_table(soup, _WD_COLS)
         out: list[dict] = []
         for tr in (table.find_all("tr")[1:] if table is not None else []):
             m = next((_ROW_ID.search(a["href"]) for a in tr.find_all("a", href=True)
                       if _ROW_ID.search(a["href"])), None)
             cells = [c.get_text(" ", strip=True) for c in tr.find_all(["th", "td"])]
-            if not m or len(cells) < 13:
+            if not m or len(cells) <= max(cols.values()):
                 continue
             out.append({
                 "id": int(m.group(1)),
-                "code": cells[1],
-                "pick_to": cells[3],
-                "user": cells[11],
-                "remark": cells[12],
-                "created_at": cells[0],
-                "approved": bool(cells[10]),
+                "code": cells[cols["code"]],
+                "pick_to": cells[cols["pick_to"]],
+                "user": cells[cols["user"]],
+                "remark": cells[cols["remark"]],
+                "created_at": cells[cols["created_at"]],
+                "approved": bool(cells[cols["approver"]]),
             })
         return out
 
@@ -313,7 +379,7 @@ class AtmsWithdrawClient(AtmsClient):
         pat = _token_re(token)
         if pat is None:
             return []
-        return [r["id"] for r in self.list_withdraws(inventory_id, date_ddmmyyyy)
+        return [r["id"] for r in self.list_withdraws(inventory_id, date_ddmmyyyy, _s(token).strip())
                 if pat.search(r["remark"])]
 
     def list_deposits(self, inventory_id: int, date_ddmmyyyy: str,
@@ -323,23 +389,25 @@ class AtmsWithdrawClient(AtmsClient):
                   "to_created_at": date_ddmmyyyy, "submit": "ค้นหา"}
         if supplier_ref_no:
             params["supplier_ref_no"] = supplier_ref_no
-        self._set_rows_per_page(ROW_PER_PAGE_LIST)
-        try:
-            soup = self._get_soup(DD_INDEX_URL, params)
-        finally:
-            self._set_rows_per_page(ROW_PER_PAGE_DEFAULT)
-        tables = soup.find_all("table")
-        table = max(tables, key=lambda t: len(t.find_all("tr")), default=None)
+        with self._list_lock:
+            self._set_rows_per_page(ROW_PER_PAGE_LIST)
+            try:
+                soup = self._get_soup(DD_INDEX_URL, params)
+            finally:
+                self._set_rows_per_page(ROW_PER_PAGE_DEFAULT)
+        table, cols = _list_table(soup, _DD_COLS)
         out: list[dict] = []
         for tr in (table.find_all("tr")[1:] if table is not None else []):
             m = next((_DD_ROW_ID.search(a["href"]) for a in tr.find_all("a", href=True)
                       if _DD_ROW_ID.search(a["href"])), None)
             cells = [c.get_text(" ", strip=True) for c in tr.find_all(["th", "td"])]
-            if not m or len(cells) < 11:
+            if not m or len(cells) <= max(cols.values()):
                 continue
-            out.append({"id": int(m.group(1)), "code": cells[0], "withdraw": cells[3],
-                        "supplier_ref_no": cells[5], "created_at": cells[7],
-                        "approved": bool(cells[9]), "user": cells[10]})
+            out.append({"id": int(m.group(1)), "code": cells[cols["code"]],
+                        "withdraw": cells[cols["withdraw"]],
+                        "supplier_ref_no": cells[cols["supplier_ref_no"]],
+                        "created_at": cells[cols["created_at"]],
+                        "approved": bool(cells[cols["approver"]]), "user": cells[cols["user"]]})
         return out
 
     def find_deposit_by_remark(self, token: str, inventory_id: int,
@@ -361,7 +429,13 @@ class AtmsWithdrawClient(AtmsClient):
         self._pause()
         for attempt in (0, 1):
             try:
-                r = self.session.request("POST", url, data=data, allow_redirects=False,
+                sess = self.session          # login ล้มเหลว = ยังไม่ได้ POST อะไร → ไม่ใช่ "ไม่ทราบผล"
+            except AtmsAuthError:
+                raise
+            except Exception as e:
+                raise AtmsOpenJobError(f"login ATMS ไม่สำเร็จ (ยังไม่ได้ส่งอะไร): {e}") from e
+            try:
+                r = sess.request("POST", url, data=data, allow_redirects=False,
                                          timeout=self.timeout,
                                          headers={"Referer": url, "Origin": BASE})
             except Exception as e:      # ไม่รู้ว่า ATMS รับไปหรือยัง → ห้ามยิงซ้ำ ให้ผู้เรียกตัดสิน
@@ -448,14 +522,19 @@ class AtmsWithdrawClient(AtmsClient):
                           "pick_to_id": pick_to_id, "extra_cost": "0.00", "extra_type": "",
                           "remark": f"{remark_token} {remark}".strip()}
                 gm = self._post_form(WD_ADD_URL, header)
+                ids = self.find_withdraw_by_remark(remark_token, inventory_id,
+                                                   date_ddmmyyyy or _today())
                 if gm is None:
-                    ids = self.find_withdraw_by_remark(remark_token, inventory_id,
-                                                       date_ddmmyyyy or _today())
                     if len(ids) != 1:
                         raise AtmsOpenJobError(
                             f"สร้างหัวใบแล้วแต่หา id ไม่เจอ (เจอ {len(ids)} ใบ) เลข {remark_token}")
                     gm = ids[0]
-                p.gm_id = gm
+                    p.gm_id = gm
+                else:
+                    p.gm_id = gm        # เก็บไว้ก่อน — ใบมีอยู่จริงแล้ว ห้ามสร้างซ้ำ
+                    if ids != [gm]:
+                        raise WithdrawPartialError(p, AtmsOpenJobError(
+                            "ค้นใบจากเลขคำขอใน ATMS ไม่เจอ — ตรวจมือก่อนลองใหม่"))
                 view = {}                          # ใบใหม่ ไม่ต้องตรวจจำนวนบรรทัดก่อนยิง
         try:
             if view is None:                       # ใบที่มีอยู่แล้ว → ตรวจก่อนยิงต่อ
@@ -481,17 +560,21 @@ class AtmsWithdrawClient(AtmsClient):
                 })
                 p.done.append(i)
             if not p.approved:
-                self._click(f"{WD_APPROVE_URL}{p.gm_id}")
-                v = self.get_withdraw(p.gm_id)
-                p.code = v["code"]
-                if not v["approved"]:
-                    raise AtmsOpenJobError(
-                        f"ATMS ยังไม่อนุมัติใบ {v['code']} — บัญชีนี้อาจไม่มีสิทธิ์อนุมัติ")
+                pre = self.get_withdraw(p.gm_id)     # อ่านสดก่อนกดอนุมัติ — ห้ามอนุมัติใบที่ไม่ครบ/ไม่ตรง
+                p.code = pre["code"]
+                _check_items(pre, lines)
+                if not pre["approved"]:
+                    self._click(f"{WD_APPROVE_URL}{p.gm_id}")
+                    v = self.get_withdraw(p.gm_id)
+                    p.code = v["code"]
+                    if not v["approved"]:
+                        raise AtmsOpenJobError(
+                            f"ATMS ยังไม่อนุมัติใบ {v['code']} — บัญชีนี้อาจไม่มีสิทธิ์อนุมัติ")
+                    view = v
+                else:
+                    view = pre
                 p.approved = True
-                view = v
-            if len(view["items"]) != len(lines):
-                raise AtmsOpenJobError(
-                    f"ใบ {view['code']} มี {len(view['items'])} บรรทัด ควรเป็น {len(lines)}")
+            _check_items(view, lines)
         except WithdrawPartialError:
             raise
         except Exception as e:
@@ -524,14 +607,19 @@ class AtmsWithdrawClient(AtmsClient):
                     "supplier_ref_no": remark_token, "supplier_inv_date": _today(),
                     "extra_cost": "0.00", "withdraw": withdraw_code, "withdraw_id": withdraw_id,
                     "remark": remark_token, "extra_type": ""})
+                ids = self.find_deposit_by_remark(remark_token, inventory_id, day)
                 if dd is None:
-                    ids = self.find_deposit_by_remark(remark_token, inventory_id, day)
                     if len(ids) != 1:
                         raise AtmsOpenJobError(
                             f"สร้างใบรับคืนแล้วแต่หา id ไม่เจอ (เจอ {len(ids)} ใบ) เลข {remark_token}"
                             " — ตรวจมือก่อนลองใหม่")
                     dd = ids[0]
-                p.gm_id, fresh = dd, True
+                    p.gm_id, fresh = dd, True
+                else:
+                    p.gm_id, fresh = dd, True
+                    if ids != [dd]:
+                        raise WithdrawPartialError(p, AtmsOpenJobError(
+                            "ค้นใบจากเลขคำขอใน ATMS ไม่เจอ — ตรวจมือก่อนลองใหม่"))
         try:
             if not fresh:
                 v = self.get_deposit(p.gm_id)
@@ -554,13 +642,21 @@ class AtmsWithdrawClient(AtmsClient):
                 })
                 p.done.append(i)
             if not p.approved:
-                self._click(f"{DD_APPROVE_URL}{p.gm_id}")
-                v = self.get_deposit(p.gm_id)
-                p.code = v["code"]
-                if not v["approved"]:
-                    raise AtmsOpenJobError(
-                        f"ATMS ยังไม่อนุมัติใบ {v['code']} — บัญชีนี้อาจไม่มีสิทธิ์อนุมัติ")
+                pre = self.get_deposit(p.gm_id)      # อ่านสดก่อนกดอนุมัติ — ห้ามอนุมัติใบที่ไม่ครบ/ไม่ตรง
+                p.code = pre["code"]
+                _check_items(pre, lines)
+                if not pre["approved"]:
+                    self._click(f"{DD_APPROVE_URL}{p.gm_id}")
+                    v = self.get_deposit(p.gm_id)
+                    p.code = v["code"]
+                    if not v["approved"]:
+                        raise AtmsOpenJobError(
+                            f"ATMS ยังไม่อนุมัติใบ {v['code']} — บัญชีนี้อาจไม่มีสิทธิ์อนุมัติ")
+                    pre = v
                 p.approved = True
+            else:
+                pre = self.get_deposit(p.gm_id)
+            _check_items(pre, lines)
             if mark_complete:
                 self._click(f"{WD_RETURNED_URL}{int(withdraw_id)}")
         except WithdrawPartialError:
@@ -588,11 +684,15 @@ def _wd_items(soup: BeautifulSoup) -> list[dict]:
         return []
     items: list[dict] = []
     for row in _rows_of(table):
-        code, _, name = _s(row.get("สินค้า")).partition(" : ")
-        if not code:
+        full = _s(row.get("สินค้า")).strip()
+        if " : " not in full:          # แถวสรุปใน <tfoot> (ภาษี / รวมสุทธิ) ไม่มี "รหัส : ชื่อ"
+            continue
+        code, _, name = full.partition(" : ")
+        if not code.strip():
             continue
         mr = _s(row.get("รายการแจ้งซ่อม")).strip()
         items.append({
+            "sku_full": " ".join(full.split()),
             "sku_code": code.strip(),
             "sku_name": name.strip(),
             "amount": _num(row.get("amount", "")),

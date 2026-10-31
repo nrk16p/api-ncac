@@ -21,14 +21,17 @@ RETURN_LINE = ReturnLine(6106, 1, 248.25, "แบตเตอรี่ N50ZL")
 
 def _view(code, items, approver, code_label="รหัส", reject_id=None):
     rows = "".join(
-        f"<tr><td>g</td><td>SKU{i} : name</td><td></td><td>{a}</td><td>10.00</td><td>x</td>"
-        f"<td>{m}</td><td></td></tr>" for i, (a, m) in enumerate(items))
+        f"<tr><td>g</td><td>SKU{i} : {n[0] if n else 'name'}</td><td></td><td>{a}</td><td>10.00</td>"
+        f"<td>x</td><td>{m}</td><td></td></tr>" for i, (a, m, *n) in enumerate(items))
     return (f"<dl><dt>{code_label} :</dt><dd>{code}</dd>"
             f"<dt>ผู้ใช้งาน :</dt><dd>u</dd>"
             + (f"<dt>approver :</dt><dd>{approver}</dd>" if approver else "")
             + "</dl><table class='defaultTable'><thead><tr><th>กลุ่มสินค้า</th><th>สินค้า</th>"
               "<th>serial no</th><th>amount</th><th>unit price</th><th>รวม</th>"
-              "<th>รายการแจ้งซ่อม</th><th></th></tr></thead><tbody>" + rows + "</tbody></table>")
+              "<th>รายการแจ้งซ่อม</th><th></th></tr></thead><tbody>" + rows + "</tbody>"
+              "<tfoot><tr><td colspan='5'>grand total</td><td>1.00</td><td colspan='2'></td></tr>"
+              "<tr><td colspan='5'>ภาษีมูลค่าเพิ่ม %</td><td>0.00</td><td colspan='2'></td></tr>"
+              "<tr><td colspan='5'>รวมสุทธิ</td><td>1.00</td><td colspan='2'></td></tr></tfoot></table>")
 
 
 class WriterSession:
@@ -41,7 +44,10 @@ class WriterSession:
         self.items, self.approved, self.item_posts = [], False, 0
         self.dd_items, self.dd_approved = [], False
         self.dd_existing, self.wd_approved_preseed = False, False
-        self.preseed = 0          # จำนวนบรรทัดที่มีอยู่ใน ATMS ก่อนเริ่ม (จำลองใบที่ทำค้าง)
+        self.preseed = []         # บรรทัดที่มีอยู่ใน ATMS ก่อนเริ่ม (จำลองใบที่ทำค้าง) = list ของ IssueLine
+        self.header_posted = False
+        self.dd_header_posted, self.dd_token = False, ""
+        self.header_visible = True
 
     def request(self, method, url, **kw):
         self.reqs.append((method, url, kw))
@@ -52,9 +58,12 @@ class WriterSession:
             html = (FIX / "wd_index.html").read_text(encoding="utf-8")
             if self.existing:
                 return Resp(200, html)
+            if self.header_posted and self.header_visible:
+                return Resp(200, html.replace("560446", str(NEW_ID)).replace("LBMR26100579", TOKEN))
             return Resp(200, re.sub(r"LBMR26100579", "OTHER", html))
         if method == "POST" and url.endswith("/inv/withdraw/add"):
             self.calls.append("POST withdraw/add")
+            self.header_posted = True
             if self.form_error_on == "header":
                 return Resp(200, '<div class="error">เลือกคลัง</div>')
             loc = f"/inv/withdraw/view/id/{NEW_ID}" if self.header_location else "/inv/withdraw/index"
@@ -66,7 +75,8 @@ class WriterSession:
                 raise requests.ConnectionError("boom")
             if self.fail_item_n == self.item_posts:
                 return Resp(200, '<div class="error">amount ผิด</div>')
-            self.items.append((kw["data"]["amount"], kw["data"].get("maintenance_request_item_id", "")))
+            self.items.append((kw["data"]["amount"], kw["data"].get("maintenance_request_item_id", ""),
+                               kw["data"]["sku"]))
             return Resp(302, "", {"Location": f"/inv/withdraw/view/id/{NEW_ID}"})
         if "/inv/withdraw/approve/id/" in url:
             self.calls.append("approve")
@@ -76,14 +86,19 @@ class WriterSession:
             self.calls.append("GET view")
             if self.wd_approved_preseed:
                 self.approved = True
-            items = [("1.00", "")] * self.preseed + self.items
+            items = [(f"{ln.amount:g}", "", ln.sku_name) for ln in self.preseed] + self.items
             return Resp(200, _view("LBWD26102300", items, "boss" if self.approved else None))
         if "/inv/deposit/index" in url:
             self.calls.append("GET dd index")
             html = (FIX / "dd_index.html").read_text(encoding="utf-8")
-            return Resp(200, html if self.dd_existing else html.replace("ORVCM6909000054", "OTHER"))
+            if self.dd_existing:
+                return Resp(200, html)
+            if self.dd_header_posted:
+                return Resp(200, html.replace("555232", "777").replace("ORVCM6909000054", self.dd_token))
+            return Resp(200, html.replace("ORVCM6909000054", "OTHER"))
         if method == "POST" and url.endswith("/inv/deposit/add"):
             self.calls.append("POST deposit/add")
+            self.dd_header_posted, self.dd_token = True, kw["data"]["supplier_ref_no"]
             return Resp(302, "", {"Location": "/inv/deposit/view/id/777"})
         if method == "POST" and "/inv/deposit.item/add/" in url:
             self.calls.append("POST deposit item")
@@ -95,7 +110,7 @@ class WriterSession:
             return Resp(302, "", {"Location": "/inv/deposit/view/id/777"})
         if "/inv/deposit/view/id/" in url:
             self.calls.append("GET dd view")
-            items = [("1.00", "")] * len(self.dd_items)
+            items = [(d["amount"], "", d["sku"]) for d in self.dd_items]
             return Resp(200, _view("LBDD26100001", items, "boss" if self.dd_approved else None,
                                    code_label="เลขที่"))
         if "spare.part.returned" in url:
@@ -119,8 +134,8 @@ def fake_writer():
 def test_issue_full_sequence(fake_writer):
     p = fake_writer.issue_withdraw(4, 45, TOKEN, LINES2)
     assert p.gm_id == NEW_ID and p.done == [0, 1] and p.approved and p.code.startswith("LBWD")
-    assert fake_writer.calls == ["GET index(remark)", "POST withdraw/add", "POST item",
-                                 "POST item", "approve", "GET view"]
+    assert fake_writer.calls == ["GET index(remark)", "POST withdraw/add", "GET index(remark)",
+                                 "POST item", "POST item", "GET view", "approve", "GET view"]
 
 
 def test_header_and_item_fields(fake_writer):
@@ -154,7 +169,7 @@ def test_post_connection_error_not_retried():
 
 def test_resume_skips_done_lines():
     c = make()
-    c._sess.preseed = 1
+    c._sess.preseed = LINES2[:1]
     p = c.issue_withdraw(4, 45, TOKEN, LINES3, progress=IssueProgress(gm_id=NEW_ID, done=[0]))
     assert c.calls.count("POST item") == 2
     assert "POST withdraw/add" not in c.calls and "GET index(remark)" not in c.calls
@@ -163,7 +178,7 @@ def test_resume_skips_done_lines():
 
 def test_resume_refuses_when_atms_line_count_disagrees():
     c = make()
-    c._sess.preseed = 2        # ATMS มี 2 บรรทัด แต่ progress บอกว่าส่งแล้ว 1
+    c._sess.preseed = LINES2        # ATMS มี 2 บรรทัด แต่ progress บอกว่าส่งแล้ว 1
     with pytest.raises(WithdrawPartialError):
         c.issue_withdraw(4, 45, TOKEN, LINES3, progress=IssueProgress(gm_id=NEW_ID, done=[0]))
     assert "POST item" not in c.calls
@@ -171,7 +186,7 @@ def test_resume_refuses_when_atms_line_count_disagrees():
 
 def test_issue_without_gm_id_searches_remark_first():
     c = make(existing=True)
-    c._sess.preseed = 0
+    c._sess.preseed = []
     p = c.issue_withdraw(4, 45, "LBMR26100579", LINES2)
     assert "POST withdraw/add" not in c.calls and p.gm_id == EXISTING_ID
 
@@ -232,7 +247,8 @@ def test_return_to_stock_sequence(fake_writer):
     p = fake_writer.return_to_stock(4, NEW_ID, "LBWD26102300", TOKEN + "-R1", [RETURN_LINE],
                                     mark_complete=True)
     assert p.approved and p.gm_id == 777 and p.done == [0] and p.code == "LBDD26100001"
-    assert fake_writer.calls == ["GET dd index", "POST deposit/add", "POST deposit item", "approve dd",
+    assert fake_writer.calls == ["GET dd index", "POST deposit/add", "GET dd index",
+                                 "POST deposit item", "GET dd view", "approve dd",
                                  "GET dd view", "returned"]
     posts = [r for r in fake_writer._sess.reqs if r[0] == "POST"]
     h = posts[0][2]["data"]
@@ -392,7 +408,7 @@ def test_no_env_fallback(monkeypatch):
 
 def test_approved_doc_with_missing_lines_not_posted_to():
     c = make()
-    c._sess.preseed = 1
+    c._sess.preseed = LINES2[:1]
     c._sess.wd_approved_preseed = True
     with pytest.raises(WithdrawPartialError, match="อนุมัติแล้วแต่รายการยังไม่ครบ"):
         c.issue_withdraw(4, 45, TOKEN, LINES3, progress=IssueProgress(gm_id=NEW_ID, done=[0]))
@@ -401,7 +417,7 @@ def test_approved_doc_with_missing_lines_not_posted_to():
 
 def test_progress_approved_but_lines_missing_not_posted_to():
     c = make()
-    c._sess.preseed = 1
+    c._sess.preseed = LINES2[:1]
     c._sess.wd_approved_preseed = True
     with pytest.raises(WithdrawPartialError, match="อนุมัติแล้วแต่รายการยังไม่ครบ"):
         c.issue_withdraw(4, 45, TOKEN, LINES3,
@@ -411,7 +427,7 @@ def test_progress_approved_but_lines_missing_not_posted_to():
 
 def test_approved_and_complete_runs_final_check_without_approve():
     c = make()
-    c._sess.preseed = 2
+    c._sess.preseed = LINES2
     c._sess.wd_approved_preseed = True
     p = c.issue_withdraw(4, 45, TOKEN, LINES2, progress=IssueProgress(gm_id=NEW_ID, done=[0, 1]))
     assert p.approved and "approve" not in c.calls and "POST item" not in c.calls
@@ -421,3 +437,127 @@ def test_remark_token_boundary(fake_client):
     from tests.atms.test_withdraw_read import TOKEN_IN_FIXTURE
     assert fake_client.find_withdraw_by_remark(TOKEN_IN_FIXTURE[:-1], 4, "31/10/2026") == []
     assert fake_client.find_withdraw_by_remark(TOKEN_IN_FIXTURE, 4, "31/10/2026") != []
+
+
+# ── final review fixes ─────────────────────────────────────────────────────
+def test_wd_not_approved_when_atms_lost_a_line():
+    """ATMS รับ POST แต่บรรทัดที่ 2 ไม่อยู่ในใบ → ห้ามกดอนุมัติ"""
+    c = make()
+    orig = c._sess.request
+
+    def req(m, url, **kw):
+        r = orig(m, url, **kw)
+        if m == "POST" and "/inv/withdraw.item/add/" in url and c._sess.item_posts == 2:
+            c._sess.items.pop()
+        return r
+    c._sess.request = req
+    with pytest.raises(WithdrawPartialError, match="ไม่อนุมัติ") as e:
+        c.issue_withdraw(4, 45, TOKEN, LINES2)
+    assert "approve" not in c.calls and not e.value.progress.approved
+    assert e.value.progress.gm_id == NEW_ID
+
+
+def test_wd_not_approved_when_line_amount_differs():
+    c = make()
+    c._sess.preseed = [IssueLine(6106, 5, "แบตเตอรี่ N50ZL"), LINES2[1]]   # ใน ATMS 5 ไม่ใช่ 2
+    with pytest.raises(WithdrawPartialError, match="ไม่อนุมัติ"):
+        c.issue_withdraw(4, 45, TOKEN, LINES2, progress=IssueProgress(gm_id=NEW_ID, done=[0, 1]))
+    assert "approve" not in c.calls
+
+
+def test_wd_not_approved_when_sku_differs():
+    c = make()
+    c._sess.preseed = [LINES2[0], IssueLine(133, 1, "ของอื่น")]
+    with pytest.raises(WithdrawPartialError, match="ไม่อนุมัติ"):
+        c.issue_withdraw(4, 45, TOKEN, LINES2, progress=IssueProgress(gm_id=NEW_ID, done=[0, 1]))
+    assert "approve" not in c.calls
+
+
+def test_dd_not_approved_when_atms_lost_a_line():
+    c = make()
+    two = [RETURN_LINE, ReturnLine(133, 1, 10.0, "น้ำมันเครื่อง")]
+    orig = c._sess.request
+
+    def req(m, url, **kw):
+        r = orig(m, url, **kw)
+        if m == "POST" and "/inv/deposit.item/add/" in url and len(c._sess.dd_items) == 2:
+            c._sess.dd_items.pop()
+        return r
+    c._sess.request = req
+    with pytest.raises(WithdrawPartialError, match="ไม่อนุมัติ"):
+        c.return_to_stock(4, NEW_ID, "LBWD1", TOKEN + "-R1", two)
+    assert "approve dd" not in c.calls
+
+
+def test_dd_final_check_after_approve_when_already_approved_and_mismatch():
+    c = make()
+    c._sess.dd_items = [{"amount": "9", "sku": "แบตเตอรี่ N50ZL"}]
+    c._sess.dd_approved = True
+    with pytest.raises(WithdrawPartialError, match="ไม่อนุมัติ|ไม่ตรง|บรรทัด"):
+        c.return_to_stock(4, NEW_ID, "LBWD1", TOKEN, [RETURN_LINE],
+                          progress=IssueProgress(gm_id=777, done=[0], approved=True))
+    assert "approve dd" not in c.calls and "POST deposit item" not in c.calls
+
+
+def test_dd_resume_full_flow_on_fixture_view_counts_one_item():
+    """DD view จริง (มี tfoot) ต้องนับ 1 บรรทัด — ไม่งั้น resume พังทุกครั้ง"""
+    c = make()
+    orig = c._sess.request
+
+    def req(m, url, **kw):
+        if "/inv/deposit/view/id/" in url:
+            c.calls.append("GET dd view")
+            return Resp(200, (FIX / "dd_view_return.html").read_text(encoding="utf-8"))
+        return orig(m, url, **kw)
+    c._sess.request = req
+    line = ReturnLine(1, 2, 1621.5, "LB05AE00135 : แบตเตอรี่ N50ZL")
+    p = c.return_to_stock(4, NEW_ID, "LBWD1", TOKEN, [line],
+                          progress=IssueProgress(gm_id=555232, done=[0]))
+    assert p.approved and "POST deposit item" not in c.calls and "approve dd" not in c.calls
+
+
+def test_wd_header_id_but_token_search_empty_raises_partial_keeping_gm_id():
+    c = make()
+    c._sess.header_visible = False
+    with pytest.raises(WithdrawPartialError, match="ค้นใบจากเลขคำขอใน ATMS ไม่เจอ — ตรวจมือก่อนลองใหม่") as e:
+        c.issue_withdraw(4, 45, TOKEN, LINES2)
+    assert e.value.progress.gm_id == NEW_ID
+    assert "POST item" not in c.calls and "approve" not in c.calls
+
+
+def test_wd_header_id_but_search_finds_other_id_raises_partial():
+    c = make()
+    c.find_withdraw_by_remark = lambda *a, **k: [1] if False else ([] if not c._sess.header_posted else [999])
+    with pytest.raises(WithdrawPartialError) as e:
+        c.issue_withdraw(4, 45, TOKEN, LINES2)
+    assert e.value.progress.gm_id == NEW_ID and "POST item" not in c.calls
+
+
+def test_dd_header_id_but_token_search_empty_raises_partial_keeping_gm_id():
+    c = make()
+    c.find_deposit_by_remark = lambda *a, **k: []
+    with pytest.raises(WithdrawPartialError, match="ตรวจมือก่อนลองใหม่") as e:
+        c.return_to_stock(4, NEW_ID, "LBWD1", TOKEN + "-R1", [RETURN_LINE])
+    assert e.value.progress.gm_id == 777
+    assert "POST deposit item" not in c.calls and "approve dd" not in c.calls
+
+
+def test_post_login_failure_is_auth_error_not_unknown_result():
+    c = AtmsWithdrawClient(username="u", password="p", pace=0)
+
+    def bad_login():
+        raise AtmsAuthError("ATMS login ไม่ผ่าน")
+    c._new_session = bad_login
+    with pytest.raises(AtmsAuthError):
+        c._post_once("https://x/inv/withdraw/add", {})
+
+
+def test_post_login_network_error_says_nothing_was_sent():
+    c = AtmsWithdrawClient(username="u", password="p", pace=0)
+
+    def bad_login():
+        raise requests.ConnectionError("down")
+    c._new_session = bad_login
+    with pytest.raises(AtmsOpenJobError) as e:
+        c._post_once("https://x/inv/withdraw/add", {})
+    assert "ไม่ทราบผล" not in str(e.value) and "ยังไม่ได้ส่ง" in str(e.value)

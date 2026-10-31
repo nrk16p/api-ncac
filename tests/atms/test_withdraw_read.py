@@ -31,6 +31,8 @@ class FakeSession:
         if self.login_page:
             return Resp(302, "", {"Location": "/account/user/login"})
         read = lambda n: Resp(200, (FIX / n).read_text(encoding="utf-8"))
+        if "/inv/deposit/view/id/" in url:
+            return read("dd_view_return.html")
         if "/inv/withdraw/add" in url:
             return read("wd_add.html")
         if "/inv/withdraw/view/id/560724" in url:
@@ -123,3 +125,83 @@ def test_list_withdraws_sets_and_restores_row_per_page(fake_client):
     rpp = [c[2]["row-per-page"] for c in fake_client._sess.calls if "set.row.per.page" in c[1]]
     assert rpp == [1000, 25]
     assert all(c[0] == "GET" for c in fake_client._sess.calls)
+
+
+def test_get_deposit_ignores_tfoot_rows(fake_client):
+    d = fake_client.get_deposit(555232)
+    assert len(d["items"]) == 1 and d["approved"] is True
+    assert d["items"][0]["sku_code"] == "LB05AE00135" and d["items"][0]["amount"] == 2.0
+
+
+def test_wd_items_skip_rows_without_code_colon_name():
+    from bs4 import BeautifulSoup
+    from services.atms_withdraw_service import _wd_items
+    html = ("<table class='defaultTable'><thead><tr><th>กลุ่มสินค้า</th><th>สินค้า</th><th>amount</th></tr></thead>"
+            "<tbody><tr><td>g</td><td>A1 : x</td><td>1</td></tr></tbody>"
+            "<tfoot><tr><td>ภาษีมูลค่าเพิ่ม %</td><td>0.00</td><td></td></tr></tfoot></table>")
+    assert len(_wd_items(BeautifulSoup(html, "html.parser"))) == 1
+
+
+def test_list_withdraws_filters_by_remark_on_atms(fake_client):
+    fake_client.find_withdraw_by_remark(TOKEN_IN_FIXTURE, 4, "31/10/2026")
+    idx = [c for c in fake_client._sess.calls if "/inv/withdraw/index" in c[1]]
+    assert idx and idx[0][2]["remark"] == TOKEN_IN_FIXTURE
+
+
+def _table_session(html):
+    class S:
+        calls = []
+
+        def request(self, method, url, **kw):
+            if "set.row.per.page" in url:
+                return Resp(200, "")
+            return Resp(200, html)
+    return S()
+
+
+def test_list_withdraws_maps_columns_by_header_text():
+    html = ("<table><tr><th>รหัส</th><th>หมายเหตุ</th><th>approver</th><th>ผู้ใช้งาน</th>"
+            "<th>วันที่เบิก</th><th>จุดประสงค์ในการเบิก</th></tr>"
+            "<tr><td>LBWD1</td><td>SW-9 note</td><td>boss</td><td>u9</td><td>31/10/2026</td><td>CM</td>"
+            "<td><a href='/inv/withdraw/view/id/42'>v</a></td></tr></table>")
+    c = AtmsWithdrawClient(phpsessid="x", pace=0)
+    c._sess = _table_session(html)
+    assert c.list_withdraws(4, "31/10/2026") == [
+        {"id": 42, "code": "LBWD1", "pick_to": "CM", "user": "u9", "remark": "SW-9 note",
+         "created_at": "31/10/2026", "approved": True}]
+
+
+def test_list_deposits_maps_columns_by_header_text():
+    html = ("<table><tr><th>ผู้ใช้งาน</th><th>เลขที่ใบส่งของ / ใบแจ้งหนี้</th><th>เลขที่</th><th>เบิก</th>"
+            "<th>บันทึกเมื่อ</th><th>approver</th></tr>"
+            "<tr><td>u1</td><td>SW-1-R1</td><td>LBDD1</td><td>LBWD1</td><td>31/10/2026</td><td></td>"
+            "<td><a href='/inv/deposit/view/id/77'>v</a></td></tr></table>")
+    c = AtmsWithdrawClient(phpsessid="x", pace=0)
+    c._sess = _table_session(html)
+    assert c.list_deposits(4, "31/10/2026") == [
+        {"id": 77, "code": "LBDD1", "withdraw": "LBWD1", "supplier_ref_no": "SW-1-R1",
+         "created_at": "31/10/2026", "approved": False, "user": "u1"}]
+
+
+def test_concurrent_lists_do_not_interleave_rows_per_page():
+    import threading
+    import time as _t
+    events = []
+
+    class S:
+        def request(self, method, url, **kw):
+            if "set.row.per.page" in url:
+                events.append(("set", kw["params"]["row-per-page"]))
+                return Resp(200, "")
+            events.append(("get",))
+            _t.sleep(0.05)               # เปิดช่องให้อีก thread แทรกถ้าไม่มี lock
+            return Resp(200, "<table></table>")
+    c = AtmsWithdrawClient(phpsessid="x", pace=0)
+    c._sess = S()
+    ts = [threading.Thread(target=c.list_withdraws, args=(4, "31/10/2026")),
+          threading.Thread(target=c.list_deposits, args=(4, "31/10/2026"))]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    assert events == [("set", 1000), ("get",), ("set", 25)] * 2

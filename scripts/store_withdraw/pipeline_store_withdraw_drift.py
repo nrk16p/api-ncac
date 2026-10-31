@@ -27,11 +27,13 @@ def tick(base: str, key: str, post=requests.post) -> dict:
 
 
 def main() -> int:
+    job = JobLog("store_withdraw_drift", "store-withdraw-drift")
     base, key = os.getenv("WMS_BASE"), os.getenv("WMS_STORE_WITHDRAW_KEY")
     if not base or not key:
-        log.error("store-withdraw-drift: ต้องตั้ง WMS_BASE และ WMS_STORE_WITHDRAW_KEY")
+        msg = "ต้องตั้ง WMS_BASE และ WMS_STORE_WITHDRAW_KEY"
+        log.error("store-withdraw-drift: %s", msg)
+        job.finish("failed", error=msg)
         return 1
-    job = JobLog("store_withdraw_drift", "store-withdraw-drift")
     try:
         res = tick(base, key)
     except Exception as e:  # noqa: BLE001 — log แล้วปิดงานเป็น failed

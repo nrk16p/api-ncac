@@ -70,13 +70,16 @@ def fake(monkeypatch):
     return Fake
 
 
-def test_missing_api_key_401(client):
-    assert client.get("/atms/withdraw/options").status_code == 401
+def test_missing_api_key_403(client):
+    r = client.get("/atms/withdraw/options")
+    assert r.status_code == 403 and r.json() == {"detail": "api key ไม่ถูกต้อง"}
+    r = client.get("/atms/withdraw/options", headers={"x-api-key": "wrong"} | CREDS)
+    assert r.status_code == 403 and r.json() == {"detail": "api key ไม่ถูกต้อง"}
 
 
-def test_api_key_unset_env_is_401(client, monkeypatch):
+def test_api_key_unset_env_is_403(client, monkeypatch):
     monkeypatch.delenv("PIPELINE_API_KEY")
-    assert client.get("/atms/withdraw/options", headers=KEY | CREDS).status_code == 401
+    assert client.get("/atms/withdraw/options", headers=KEY | CREDS).status_code == 403
 
 
 def test_no_atms_creds_401(client, fake):
@@ -170,3 +173,40 @@ def test_dry_run_makes_zero_posts(client, monkeypatch):
     r = client.post("/atms/withdraw/return", headers=KEY | CREDS, json=RETURN | {"dry_run": True})
     assert r.status_code == 200
     assert not w._cache
+
+
+def test_partial_with_auth_cause_drops_cached_client(client, fake, monkeypatch):
+    client.get("/atms/withdraw/options", headers=KEY | CREDS)
+    assert "u1" in w._cache
+
+    def boom(self, *a, **k):
+        raise WithdrawPartialError(IssueProgress(gm_id=7, done=[0]), AtmsAuthError("expired"))
+    monkeypatch.setattr(Fake, "issue_withdraw", boom)
+    r = client.post("/atms/withdraw/issue", headers=KEY | CREDS, json=ISSUE)
+    assert r.status_code == 409 and r.json()["progress"]["gm_id"] == 7
+    assert "u1" not in w._cache
+
+
+def test_partial_with_other_cause_keeps_cached_client(client, fake):
+    client.get("/atms/withdraw/options", headers=KEY | CREDS)
+    fake.behaviour = "partial"
+    client.post("/atms/withdraw/issue", headers=KEY | CREDS, json=ISSUE)
+    assert "u1" in w._cache
+
+
+@pytest.mark.parametrize("bad", ["2026-10-31", "1/1/2026", "31/10/26", "x", ""])
+def test_date_must_be_ddmmyyyy(client, fake, bad):
+    r = client.get("/atms/withdraw/list", headers=KEY | CREDS, params={"inventory_id": 4, "date": bad})
+    assert r.status_code == 422 and "DD/MM/YYYY" in r.json()["detail"]
+    r = client.post("/atms/withdraw/issue", headers=KEY | CREDS, json=ISSUE | {"date": bad})
+    assert r.status_code == 422 and "DD/MM/YYYY" in r.json()["detail"]
+    r = client.post("/atms/withdraw/return", headers=KEY | CREDS, json=RETURN | {"date": bad})
+    assert r.status_code == 422 and "DD/MM/YYYY" in r.json()["detail"]
+    assert not fake.made
+
+
+def test_valid_date_accepted(client, fake):
+    r = client.get("/atms/withdraw/list", headers=KEY | CREDS, params={"inventory_id": 4, "date": "31/10/2026"})
+    assert r.status_code == 200
+    assert client.post("/atms/withdraw/issue", headers=KEY | CREDS,
+                       json=ISSUE | {"date": "31/10/2026"}).status_code == 200
