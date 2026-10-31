@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+		<meta http-equiv="Content-Security-Policy" content="child-src 'none';" />
+	    <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1,, maximum-scale=1" />
+		
+    		    	    	    		
+	    																<link href="/assets/js/widget/bootstrap/bootstrap-icons/bootstrap-icons.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+<link href="/assets/js/widget/bootstrap/bootstrap-5.1.3/css/bootstrap.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+<link href="/assets/css/jquery_ui/aristo/jquery-ui-1.8.custom.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+<link href="/assets/css/widget/ui.multiselect.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+<link href="/assets/css/widget/datepicker.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+<link href="/assets/css/widget/jquery.fancybox.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+<link href="/assets/css/widget/autocomplete/jquery.autocomplete.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+<link href="/assets/css/widget/autocomplete/thickbox.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+<link href="/assets/css/account/theme/framework.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+<link href="/assets/css/account/theme/style.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+	    																																				
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+				<title>รับ - MENA ATMS</title></head>
+<body class="fluid-body inv-deposit-index-page ">
+		<nav><a href="/account/user/logout/">ออกจากระบบ</a></nav>
+
+<div class="toast-container">
+	<div id="noti-toast" class="toast noti-toast" role="alert" aria-live="assertive" aria-atomic="true"></div>
+</div>
+
+
+	    <div class="container-fluid content-stage">
+      	<div class="row">
+      		<div class="col-md-12">
+    			
+
+<div class="content-title">
+			ค้นหา รับ		<div class="search-menu">
+								<a class="link-icon-plus" href="/inv/deposit/add" title="เพิ่ม รายการ"></a>
+					
+		
+							<a class="link-icon-download export-btn" href="" title="ส่งออกข้อมูล"></a>
+										<a class="link-icon-toggle" id="toggle_search" href="javascript:void(0);" title="แสดง/ซ่อน"></a>
+			</div>
+</div>
+<div id="search-form" class="content-area search-form">
+	<div>
+		<div>
+			<form id="basic-input-form" class="inv-deposit-index-form" method="get" action="/inv/deposit/index"><dl class="zend_form">
+<dt id="code-label"><label for="code" class="optional">เลขที่</label></dt>
+<dd id="code-element">
+<input type="text" name="code" id="code" value="" /></dd>
+<dt id="purchase_order-label"><label for="purchase_order" class="optional">ใบสั่งซื้อ (PO)</label></dt>
+<dd id="purchase_order-element">
+<input type="text" name="purchase_order" id="purchase_order" value="" /></dd>
+<dt id="supplier-label"><label for="supplier" class="optional">ซัพพลายเออร์</label></dt>
+<dd id="supplier-element">
+<input type="text" name="supplier" id="supplier" value="" /></dd>
+<dt id="supplier_ref_no-label"><label for="supplier_ref_no" class="optional">เลขที่ใบส่งของ / ใบแจ้งหนี้</label></dt>
+<dd id="supplier_ref_no-element">
+<input type="text" name="supplier_ref_no" id="supplier_ref_no" value="" /></dd>
+<dt id="user-label"><label for="user" class="optional">ผู้ใช้งาน</label></dt>
+<dd id="user-element">
+<input type="text" name="user" id="user" value="" /></dd>
+<dt id="from_created_at-label"><label for="from_created_at" class="optional">บันทึกเมื่อ</label></dt>
+<dd id="from_created_at-element">
+<input type="text" name="from_created_at" id="from_created_at" value="01/10/2026" class="date-pick not-decorate" placeholder="วัน/ชื่อ/ชื่อ (คศ.)" /></dd>
+<dt id="to_created_at-label"><label for="to_created_at" class="optional">ถึงวันที่</label></dt>
+<dd id="to_created_at-element">
+<input type="text" name="to_created_at" id="to_created_at" value="31/10/2026" class="date-pick not-decorate" placeholder="วัน/ชื่อ/ชื่อ (คศ.)" /></dd>
+<dt id="from_received_at-label"><label for="from_received_at" class="optional">รับเมื่อ</label></dt>
+<dd id="from_received_at-element">
+<input type="text" name="from_received_at" id="from_received_at" value="" class="date-pick not-decorate" placeholder="วัน/ชื่อ/ชื่อ (คศ.)" /></dd>
+<dt id="to_received_at-label"><label for="to_received_at" class="optional">ถึงวันที่</label></dt>
+<dd id="to_received_at-element">
+<input type="text" name="to_received_at" id="to_received_at" value="" class="date-pick not-decorate" placeholder="วัน/ชื่อ/ชื่อ (คศ.)" /></dd>
+<dt id="inventory_id-label"><label for="inventory_id" class="optional">คลังสินค้า</label></dt>
+<dd id="inventory_id-element">
+<select name="inventory_id" id="inventory_id">
+    <option value="" label="ทั้งหมด">ทั้งหมด</option>
+    <option value="3" label="คลังสระบุรี">คลังสระบุรี</option>
+    <option value="4" label="คลังลาดกระบัง" selected="selected">คลังลาดกระบัง</option>
+    <option value="5" label="คลัง HR กรุงเทพ">คลัง HR กรุงเทพ</option>
+    <option value="6" label="คลัง HR ลาดกระบัง">คลัง HR ลาดกระบัง</option>
+    <option value="7" label="คลัง HR สระบุรี">คลัง HR สระบุรี</option>
+    <option value="8" label="คลัง จป.สระบุรี">คลัง จป.สระบุรี</option>
+    <option value="9" label="คลัง จป.ลาดกระบัง">คลัง จป.ลาดกระบัง</option>
+    <option value="10" label="คลังทรัพย์สินกรุงเทพ">คลังทรัพย์สินกรุงเทพ</option>
+    <option value="11" label="คลังขอนแก่น">คลังขอนแก่น</option>
+    <option value="12" label="คลัง IT">คลัง IT</option>
+    <option value="16" label="คลัง จป. ขอนแก่น">คลัง จป. ขอนแก่น</option>
+    <option value="17" label="คลังทรัพย์สินลาดกระบัง">คลังทรัพย์สินลาดกระบัง</option>
+    <option value="18" label="คลังทรัพย์สินสระบุรี">คลังทรัพย์สินสระบุรี</option>
+    <option value="21" label="คลังไม่มีสต๊อก สระบุรี">คลังไม่มีสต๊อก สระบุรี</option>
+    <option value="24" label="คลัง DIST">คลัง DIST</option>
+    <option value="25" label="คลัง DIST จป.สระบุรี">คลัง DIST จป.สระบุรี</option>
+    <option value="31" label="คลัง DIST จป.ขอนแก่น">คลัง DIST จป.ขอนแก่น</option>
+    <option value="35" label="คลัง OPS">คลัง OPS</option>
+    <option value="36" label="คลังฝ่ายสำนักเลขา">คลังฝ่ายสำนักเลขา</option>
+    <option value="38" label="คลังจัดส่ง (บางปะกง)">คลังจัดส่ง (บางปะกง)</option>
+    <option value="39" label="คลัง บัญชีการเงิน สกท.">คลัง บัญชีการเงิน สกท.</option>
+    <option value="40" label="คลังจัดส่่ง (สระบุรี)">คลังจัดส่่ง (สระบุรี)</option>
+</select></dd>
+<dt id="submit-label">&#160;</dt><dd id="submit-element">
+<input type="submit" name="submit" id="submit" value="ค้นหา" /></dd>
+<dt id="order_by-label">&#160;</dt>
+<dd id="order_by-element">
+<input type="hidden" name="order_by" value="" class="form-hidden-field" id="order_by" /></dd></dl></form>			<br class="clear" />
+		</div>
+	</div>
+	<input type="hidden" id="search-toggle-status" value="" />
+	<input type="hidden" id="current-page" value="" />
+	<input type="hidden" id="current-module" value="inv" />
+	<input type="hidden" id="current-controller" value="deposit" />
+	<input type="hidden" id="current-action" value="index" />
+	<input type="hidden" id="search-params" value="page=1&amp;inventory_id=4&amp;from_created_at=01/10/2026&amp;to_created_at=31/10/2026" />
+	<br class="clear" />
+</div>
+
+<!--
+See http://developer.yahoo.com/ypatterns/pattern.php?pattern=itempagination
+-->
+<div class="pagination">
+<span class="page-summary">
+1 - 25&nbsp;/ 1,281</span>
+
+<!-- First page link -->
+  <span class="first disabled">หน้าแรก</span>
+
+<!-- Previous page link -->
+  <span class="previous disabled">ก่อนหน้า</span>
+
+<!-- Numbered page links -->
+
+<span class="current">1</span><a href="?page=2&inventory_id=4&from_created_at=01%2F10%2F2026&to_created_at=31%2F10%2F2026" class="page_link">2</a><a href="?page=3&inventory_id=4&from_created_at=01%2F10%2F2026&to_created_at=31%2F10%2F2026" class="page_link">3</a><a href="?page=4&inventory_id=4&from_created_at=01%2F10%2F2026&to_created_at=31%2F10%2F2026" class="page_link">4</a><a href="?page=5&inventory_id=4&from_created_at=01%2F10%2F2026&to_created_at=31%2F10%2F2026" class="page_link">5</a><a href="?page=6&inventory_id=4&from_created_at=01%2F10%2F2026&to_created_at=31%2F10%2F2026" class="page_link">6</a>...&nbsp;&nbsp;<a href="?page=48&inventory_id=4&from_created_at=01%2F10%2F2026&to_created_at=31%2F10%2F2026" class="page_link">48</a><a href="?page=49&inventory_id=4&from_created_at=01%2F10%2F2026&to_created_at=31%2F10%2F2026" class="page_link">49</a><a href="?page=50&inventory_id=4&from_created_at=01%2F10%2F2026&to_created_at=31%2F10%2F2026" class="page_link">50</a><a href="?page=51&inventory_id=4&from_created_at=01%2F10%2F2026&to_created_at=31%2F10%2F2026" class="page_link">51</a><a href="?page=52&inventory_id=4&from_created_at=01%2F10%2F2026&to_created_at=31%2F10%2F2026" class="page_link">52</a>
+
+
+<!-- Next page link -->
+	<a href="?page=2&inventory_id=4&from_created_at=01%2F10%2F2026&to_created_at=31%2F10%2F2026" class="page_link next">ถัดไป</a>
+<!-- Last page link -->
+  <a href="?page=52&inventory_id=4&from_created_at=01%2F10%2F2026&to_created_at=31%2F10%2F2026" class="page_link last">หน้าสุดท้าย</a>
+  <select class="set-row-per-page not-decorate">
+  	<option  value="10">&nbsp;10 รายการ / หน้า&nbsp;</option>
+  	<option  value="15">&nbsp;15 รายการ / หน้า&nbsp;</option>
+  	<option selected="selected" value="25">&nbsp;25 รายการ / หน้า&nbsp;</option>
+  	<option  value="50">&nbsp;50 รายการ / หน้า&nbsp;</option>
+  	<option  value="100">&nbsp;100 รายการ / หน้า&nbsp;</option>
+  	<option  value="200">&nbsp;200 รายการ / หน้า&nbsp;</option>
+	<option  value="500">&nbsp;500 รายการ / หน้า&nbsp;</option>
+	<option  value="1000">&nbsp;1000 รายการ / หน้า&nbsp;</option>
+  </select>
+</div>
+<br class="clear" />
+
+<div class="content-area table-responsive">
+	<table class="defaultTable" cellpadding="0" cellspacing="0" width="100%">
+	<thead>
+		<tr>
+						<th><a class="order-by" href="gm.code">เลขที่</a></th>
+			<th><a class="order-by" href="i.name">คลังสินค้า</a></th>
+			<th><a class="order-by" href="po.code">ใบสั่งซื้อ (PO)</a></th>
+			<th><a class="order-by" href="w.code">เบิก</a></th>
+			<th><a class="order-by" href="s.name">ซัพพลายเออร์</a></th>
+			<th><a class="order-by" href="gm.supplier_ref_no">เลขที่ใบส่งของ / ใบแจ้งหนี้</a></th>
+			<th>จำนวนเงิน</th>
+			<th><a class="order-by" href="gm.created_at">บันทึกเมื่อ</a></th>
+			<th><a class="order-by" href="gm.received_at">รับเมื่อ</a></th>
+			<th><a class="order-by" href="u2.username">approver</a></th>
+			<th><a class="order-by" href="u.name">ผู้ใช้งาน</a></th>
+						<th style="width:120px;"></th>
+					</tr>
+	</thead>
+	<tbody>
+		
+				<tr>
+						<td>LBDD26100001</td>
+			<td>คลังลาดกระบัง</td>
+			<td><a href="/inv/purchase.order/view/id/156536">LBPO26090728</a></td>
+			<td></td>
+			<td>ชื่อ ทดสอบ ชื่อ ทดสอบ</td>
+			<td>ORVCM6909000054</td>
+			<td>1,780.00</td>
+			<td>01/10/2026 09:26</td>
+			<td>01/10/2026 09:26</td>
+			<td>user1.t</td>
+			<td>user2.t</td>
+						<td style="text-align:center;">
+									<a class="result-view-link" href="/inv/deposit/view/id/555232">แสดง</a>
+				
+									<a class="result-edit-link" href="/inv/deposit/edit/id/555232">แก้ไข</a>
+				
+							</td>
+					</tr>
+			
+				<tr>
+						<td>LBDD26100002</td>
+			<td>คลังลาดกระบัง</td>
+			<td><a href="/inv/purchase.order/view/id/156694">LBPO26090795</a></td>
+			<td></td>
+			<td>ชื่อ ทดสอบ ชื่อ ทดสอบ</td>
+			<td>ORVCM6909000058</td>
+			<td>6,600.00</td>
+			<td>01/10/2026 09:33</td>
+			<td>01/10/2026 09:33</td>
+			<td>user3.t</td>
+			<td>user2.t</td>
+						<td style="text-align:center;">
+									<a class="result-view-link" href="/inv/deposit/view/id/555233">แสดง</a>
+				
+									<a class="result-edit-link" href="/inv/deposit/edit/id/555233">แก้ไข</a>
+				
+							</td>
+					</tr>
+			
+				<tr>
+						<td>LBDD26100003</td>
+			<td>คลังลาดกระบัง</td>
+			<td><a href="/inv/purchase.order/view/id/156616">LBPO26090756</a></td>
+			<td></td>
+			<td>ชื่อ ทดสอบ ชื่อ ทดสอบ</td>
+			<td>ORVCM6909000057</td>
+			<td>400.00</td>
+			<td>01/10/2026 09:35</td>
+			<td>01/10/2026 09:35</td>
+			<td>user1.t</td>
+			<td>user2.t</td>
+						<td style="text-align:center;">
+									<a class="result-view-link" href="/inv/deposit/view/id/555234">แสดง</a>
+				
+									<a class="result-edit-link" href="/inv/deposit/edit/id/555234">แก้ไข</a>
+				
+							</td>
+					</tr>
+			
+				<tr>
+						<td>LBDD26100004</td>
+			<td>คลังลาดกระบัง</td>
+			<td><a href="/inv/purchase.order/view/id/156545">LBPO26090734</a></td>
+			<td></td>
+			<td>ชื่อ ทดสอบ ชื่อ ทดสอบ</td>
+			<td>ORVCM6909000055</td>
+			<td>0.00</td>
+			<td>01/10/2026 09:38</td>
+			<td>01/10/2026 09:38</td>
+			<td></td>
+			<td>user2.t</td>
+						<td style="text-align:center;">
+									<a class="result-view-link" href="/inv/deposit/view/id/555235">แสดง</a>
+				
+									<a class="result-edit-link" href="/inv/deposit/edit/id/555235">แก้ไข</a>
+				
+							</td>
+					</tr>
+			
+				<tr>
+						<td>LBDD26100005</td>
+			<td>คลังลาดกระบัง</td>
+			<td></td>
+			<td><a href="/inv/withdraw/view/id/555170">LBWD26091607</a></td>
+			<td></td>
+			<td>-</td>
+			<td>3,243.00</td>
+			<td>01/10/2026 10:54</td>
+			<td>01/10/2026 10:54</td>
+			<td>user1.t</td>
+			<td>user2.t</td>
+						<td style="text-align:center;">
+									<a class="result-view-link" href="/inv/deposit/view/id/555237">แสดง</a>
+				
+									<a class="result-edit-link" href="/inv/deposit/edit/id/555237">แก้ไข</a>
+				
+							</td>
+					</tr>
+			
+				<tr>
+						<td>LBDD26100008</td>
+			<td>คลังลาดกระบัง</td>
+			<td><a href="/inv/purchase.order/view/id/156716">LBPO26100007</a></td>
+			<td></td>
+			<td>ชื่อ ทดสอบ ชื่อ ทดสอบ</td>
+			<td>IV2610005</td>
+			<td>16,028.04</td>
+			<td>02/10/2026 13:53</td>
+			<td>02/10/2026 13:53</td>
+			<td>user4.t</td>
+			<td>user2.t</td>
+						<td style="text-align:center;">
+									<a class="result-view-link" href="/inv/deposit/view/id/555313">แสดง</a>
+				
+									<a class="result-edit-link" href="/inv/deposit/edit/id/555313">แก้ไข</a>
+				
+							</td>
+					</tr>
+			
+				<tr>
+						<td>LBDD26100009</td>
+			<td>คลังลาดกระบัง</td>
+			<td><a href="/inv/purchase.order/view/id/156641">LBPO26090777</a></td>
+			<td></td>
+			<td>ชื่อ ทดสอบ จำกัด</td>
+			<td>IVM690912971</td>
+			<td>4,580.00</td>
+			<td>02/10/2026 13:56</td>
+			<td>02/10/2026 13:56</td>
+			<td>user1.t</td>
+			<td>user2.t</td>
+						<td style="text-align:center;">
+									<a class="result-view-link" href="/inv/deposit/view/id/555317">แสดง</a>
+				
+									<a class="result-edit-link" href="/inv/deposit/edit/id/555317">แก้ไข</a>
+				
+							</td>
+					</tr>
+			
+				<tr>
+						<td>LBDD26100010</td>
+			<td>คลังลาดกระบัง</td>
+			<td><a href="/inv/purchase.order/view/id/156618">LBPO26090758</a></td>
+			<td></td>
+			<td>ชื่อ ทดสอบ จำกัด</td>
+			<td>IVM690912711</td>
+			<td>608.41</td>
+			<td>02/10/2026 13:58</td>
+			<td>02/10/2026 13:58</td>
+			<td>user1.t</td>
+			<td>user2.t</td>
+						<td style="text-align:center;">
+									<a class="result-view-link" href="/inv/deposit/view/id/555318">แสดง</a>
+				
+									<a class="result-edit-link" href="/inv/deposit/edit/id/555318">แก้ไข</a>
+				
+							</td>
+					</tr>
+			
+				<tr>
+						<td>LBDD26100014</td>
+			<td>คลังลาดกระบัง</td>
+			<td></td>
+			<td><a href="/inv/withdraw/view/id/545955">KKWD26080013</a></td>
+			<td></td>
+			<td>-</td>
+			<td>0.00</td>
+			<td>02/10/2026 16:13</td>
+			<td>02/10/2026 16:13</td>
+			<td></td>
+			<td>user2.t</td>
+						<td style="text-align:center;">
+									<a class="result-view-link" href="/inv/deposit/view/id/555382">แสดง</a>
+				
+									<a class="result-edit-link" href="/inv/deposit/edit/id/555382">แก้ไข</a>
+				
+							</td>
+					</tr>
+			
+				<tr>
+						<td>LBDD26100017</td>
+			<td>คลังลาดกระบัง</td>
+			<td><a href="/inv/purchase.order/view/id/156635">LBPO26090771</a></td>
+			<td></td>
+			<td>ชื่อ ทดสอบ.เอ.เค. ชื่อ ทดสอบ</td>
+			<td>99-0000</td>
+			<td>600.00</td>
+			<td>03/10/2026 14:19</td>
+			<td>03/10/2026 14:19</td>
+			<td>user3.t</td>
+			<td>user2.t</td>
+						<td style="text-align:center;">
+									<a class="result-view-link" href="/inv/deposit/view/id/555428">แสดง</a>
+				
+									<a class="result-edit-link" href="/inv/deposit/edit/id/555428">แก้ไข</a>
+				
+							</td>
+					</tr>
+			
+				<tr>
+						<td>LBDD26100018</td>
+			<td>คลังลาดกระบัง</td>
+			<td></td>
+			<td><a href="/inv/withdraw/view/id/554637">LBWD26091482</a></td>
+			<td></td>
+			<td>-</td>
+			<td>8,699.06</td>
+			<td>03/10/2026 14:22</td>
+			<td>03/10/2026 14:22</td>
+			<td>user3.t</td>
+			<td>user2.t</td>
+						<td style="text-align:center;">
+									<a class="result-view-link" href="/inv/deposit/view/id/555432">แสดง</a>
+				
+									<a class="result-edit-link" href="/inv/deposit/edit/id/555432">แก้ไข</a>
+				
+							</td>
+					</tr>
+			
+				<tr>
+						<td>LBDD26100019</td>
+			<td>คลังลาดกระบัง</td>
+			<td><a href="/inv/purchase.order/view/id/156685">LBPO26090789</a></td>
+			<td></td>
+			<td>ชื่อ ทดสอบ ชื่อ ทดสอบ</td>
+			<td>618-30852  กดผิด</td>
+			<td>0.00</td>
+			<td>03/10/2026 15:50</td>
+			<td>03/10/2026 15:50</td>
+			<td></td>
+			<td>user2.t</td>
+						<td style="text-align:center;">
+									<a class="result-view-link" href="/inv/deposit/view/id/555448">แสดง</a>
+				
+									<a class="result-edit-link" href="/inv/deposit/edit/id/555448">แก้ไข</a>
+				
+							</td>
+					</tr>
+			
+				
+			
+			</tbody>
+</table>	<br class="clear" />
+</div>
+
+<!--
+See http://developer.yahoo.com/ypatterns/pattern.php?pattern=itempagination
+-->
+<div class="pagination">
+<span class="page-summary">
+1 - 25&nbsp;/ 1,281</span>
+
+<!-- First page link -->
+  <span class="first disabled">หน้าแรก</span>
+
+<!-- Previous page link -->
+  <span class="previous disabled">ก่อนหน้า</span>
+
+<!-- Numbered page links -->
+
+<span class="current">1</span><a href="?page=2&inventory_id=4&from_created_at=01%2F10%2F2026&to_created_at=31%2F10%2F2026" class="page_link">2</a><a href="?page=3&inventory_id=4&from_created_at=01%2F10%2F2026&to_created_at=31%2F10%2F2026" class="page_link">3</a><a href="?page=4&inventory_id=4&from_created_at=01%2F10%2F2026&to_created_at=31%2F10%2F2026" class="page_link">4</a><a href="?page=5&inventory_id=4&from_created_at=01%2F10%2F2026&to_created_at=31%2F10%2F2026" class="page_link">5</a><a href="?page=6&inventory_id=4&from_created_at=01%2F10%2F2026&to_created_at=31%2F10%2F2026" class="page_link">6</a>...&nbsp;&nbsp;<a href="?page=48&inventory_id=4&from_created_at=01%2F10%2F2026&to_created_at=31%2F10%2F2026" class="page_link">48</a><a href="?page=49&inventory_id=4&from_created_at=01%2F10%2F2026&to_created_at=31%2F10%2F2026" class="page_link">49</a><a href="?page=50&inventory_id=4&from_created_at=01%2F10%2F2026&to_created_at=31%2F10%2F2026" class="page_link">50</a><a href="?page=51&inventory_id=4&from_created_at=01%2F10%2F2026&to_created_at=31%2F10%2F2026" class="page_link">51</a><a href="?page=52&inventory_id=4&from_created_at=01%2F10%2F2026&to_created_at=31%2F10%2F2026" class="page_link">52</a>
+
+
+<!-- Next page link -->
+	<a href="?page=2&inventory_id=4&from_created_at=01%2F10%2F2026&to_created_at=31%2F10%2F2026" class="page_link next">ถัดไป</a>
+<!-- Last page link -->
+  <a href="?page=52&inventory_id=4&from_created_at=01%2F10%2F2026&to_created_at=31%2F10%2F2026" class="page_link last">หน้าสุดท้าย</a>
+  <select class="set-row-per-page not-decorate">
+  	<option  value="10">&nbsp;10 รายการ / หน้า&nbsp;</option>
+  	<option  value="15">&nbsp;15 รายการ / หน้า&nbsp;</option>
+  	<option selected="selected" value="25">&nbsp;25 รายการ / หน้า&nbsp;</option>
+  	<option  value="50">&nbsp;50 รายการ / หน้า&nbsp;</option>
+  	<option  value="100">&nbsp;100 รายการ / หน้า&nbsp;</option>
+  	<option  value="200">&nbsp;200 รายการ / หน้า&nbsp;</option>
+	<option  value="500">&nbsp;500 รายการ / หน้า&nbsp;</option>
+	<option  value="1000">&nbsp;1000 รายการ / หน้า&nbsp;</option>
+  </select>
+</div>
+<br class="clear" />
+
+    		</div>
+    	</div>
+		    		<footer>
+	<p>&copy; Mena Transport PLC. All Rights Reserved 2026</p>
+</footer>		    	<input type="hidden" id="ROOT_URI" value="" />
+		<input type="hidden" id="page_js" value="inv_deposit_index" />
+		<input type="hidden" id="session_lang" value="th" />
+	</div>
+
+	
+</body>
+</html>
