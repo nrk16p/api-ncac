@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
+import requests
 from bs4 import BeautifulSoup
 
 from services.atms_openjob_service import (  # noqa: F401  (re-export ให้ผู้เรียกใช้ที่เดียว)
@@ -23,6 +24,10 @@ from services.atms_openjob_service import (  # noqa: F401  (re-export ให้�
     AtmsClient,
     AtmsNotFoundError,
     AtmsOpenJobError,
+    DOMAIN,
+    JOB_ADD_URL,
+    LOGIN_URL,
+    UA,
     _form_errors,
     _label_pairs,
     _rows_of,
@@ -36,6 +41,7 @@ PROFILE_URL = f"{BASE}/account/user/profile"
 ROW_PER_PAGE_URL = f"{BASE}/account/user/set.row.per.page/"
 WD_APPROVE_URL = f"{BASE}/inv/withdraw/approve/id/"
 WD_RETURNED_URL = f"{BASE}/inv/withdraw/spare.part.returned/type/y/id/"
+DD_INDEX_URL = f"{BASE}/inv/deposit/index/"
 DD_ADD_URL = f"{BASE}/inv/deposit/add"
 DD_VIEW_URL = f"{BASE}/inv/deposit/view/id/"
 DD_APPROVE_URL = f"{BASE}/inv/deposit/approve/id/"
@@ -54,6 +60,7 @@ WD_LOOKUP_URLS = {
 
 LOGIN_PATH = "account/user/login"
 _ROW_ID = re.compile(r"/inv/withdraw/(?:view|edit)/id/(\d+)")
+_DD_ROW_ID = re.compile(r"/inv/deposit/(?:view|edit)/id/(\d+)")
 _NUM = re.compile(r"-?\d[\d,]*\.?\d*")
 _REDIRECTS = (301, 302, 303, 307, 308)
 _LOC_ID = re.compile(r"/id/(\d+)")
@@ -76,6 +83,7 @@ class WithdrawPartialError(AtmsOpenJobError):
 class IssueLine:
     sku_id: int
     amount: float
+    sku_name: str              # ATMS บังคับช่อง sku (text) — ชื่อตาม sku.json
     mr_item_id: int | None = None
     serial_no_id: int | None = None
     remark: str = ""
@@ -86,6 +94,7 @@ class ReturnLine:
     sku_id: int
     amount: float
     unit_price: float          # ATMS บังคับ — ใช้ราคาจากบรรทัด WD เดิม
+    sku_name: str              # ATMS บังคับช่อง sku (text)
     serial_no: str = ""
     remark: str = ""
 
@@ -96,6 +105,14 @@ class IssueProgress:
     done: list[int] = field(default_factory=list)   # index ของ line ที่ส่งแล้ว
     approved: bool = False
     code: str | None = None
+
+
+def _token_re(token: str):
+    """token ต้องอยู่ติดขอบ: ก่อน/หลังไม่ใช่ตัวอักษร ตัวเลข หรือ - (SW-001 ไม่ชน SW-0010)"""
+    t = _s(token).strip()
+    if not t:
+        return None
+    return re.compile(r"(?<![\w-])" + re.escape(t) + r"(?![\w-])", re.I)
 
 
 def _num(text: str) -> float:
@@ -123,11 +140,40 @@ def _select_options(soup: BeautifulSoup, name: str) -> list[dict]:
 
 
 class AtmsWithdrawClient(AtmsClient):
-    """ฝั่งอ่านของ WD — pace = หน่วง (วินาที) ระหว่าง request เขียน ใช้ใน Task 2"""
+    """WD/DD client — pace = หน่วง (วินาที) ก่อนทุก request ไป ATMS"""
 
-    def __init__(self, *args, pace: float = 1.0, **kw):
-        super().__init__(*args, **kw)
+    def __init__(self, phpsessid: str | None = None, username: str | None = None,
+                 password: str | None = None, *, pace: float = 1.0, **kw):
+        # ใช้บัญชีของผู้เรียกเท่านั้น — ห้ามตกไปใช้ PHPSESSID / ATMS_* จาก env
+        if not phpsessid and not (username and password):
+            raise AtmsAuthError("ต้องส่งบัญชี ATMS ของผู้ใช้มา")
+        super().__init__(phpsessid, username, password, **kw)
+        self.phpsessid, self.username, self.password = phpsessid, username, password
         self.pace = pace
+
+    def _new_session(self) -> requests.Session:
+        """เหมือนของ AtmsClient แต่หน่วง pace ก่อนทุก request ของการ login"""
+        s = requests.Session()
+        s.verify = False
+        s.headers.update({"User-Agent": UA, "Accept-Language": "th,en;q=0.8"})
+        if self.phpsessid:
+            s.cookies.set("PHPSESSID", self.phpsessid.split("=")[-1].strip(), domain=DOMAIN)
+            return s
+        self._pause()
+        s.get(LOGIN_URL, timeout=self.timeout)
+        self._pause()
+        s.post(LOGIN_URL, timeout=self.timeout, allow_redirects=True,
+               data={"username": self.username, "password": self.password,
+                     "submit": "login", "next": "", "forgotPasswd": "ลืมรหัสผ่าน"})
+        self._pause()
+        if "account/user/login" in s.get(JOB_ADD_URL, timeout=self.timeout).url:
+            raise AtmsAuthError("ATMS login ไม่ผ่าน — เช็ค username / password")
+        return s
+
+    def _request(self, method: str, url: str, **kw):
+        """หน่วง pace ก่อนทุก request (อ่านและเขียน) — ATMS ถูกยิงถี่ไม่ได้"""
+        self._pause()
+        return super()._request(method, url, **kw)
 
     def _pause(self) -> None:
         if self.pace > 0:
@@ -264,11 +310,49 @@ class AtmsWithdrawClient(AtmsClient):
     def find_withdraw_by_remark(self, token: str, inventory_id: int,
                                 date_ddmmyyyy: str) -> list[int]:
         """id ของใบเบิกในวันนั้นที่หมายเหตุมี token (ไว้กันสร้างซ้ำ / หา id ที่ 302 ไม่บอก)"""
-        want = _s(token).strip().lower()
-        if not want:
+        pat = _token_re(token)
+        if pat is None:
             return []
         return [r["id"] for r in self.list_withdraws(inventory_id, date_ddmmyyyy)
-                if want in r["remark"].lower()]
+                if pat.search(r["remark"])]
+
+    def list_deposits(self, inventory_id: int, date_ddmmyyyy: str,
+                      supplier_ref_no: str = "") -> list[dict]:
+        """ใบรับคืน (DD) ของคลัง+วันที่สร้าง — กรอง supplier_ref_no ฝั่ง ATMS ได้"""
+        params = {"inventory_id": inventory_id, "from_created_at": date_ddmmyyyy,
+                  "to_created_at": date_ddmmyyyy, "submit": "ค้นหา"}
+        if supplier_ref_no:
+            params["supplier_ref_no"] = supplier_ref_no
+        self._set_rows_per_page(ROW_PER_PAGE_LIST)
+        try:
+            soup = self._get_soup(DD_INDEX_URL, params)
+        finally:
+            self._set_rows_per_page(ROW_PER_PAGE_DEFAULT)
+        tables = soup.find_all("table")
+        table = max(tables, key=lambda t: len(t.find_all("tr")), default=None)
+        out: list[dict] = []
+        for tr in (table.find_all("tr")[1:] if table is not None else []):
+            m = next((_DD_ROW_ID.search(a["href"]) for a in tr.find_all("a", href=True)
+                      if _DD_ROW_ID.search(a["href"])), None)
+            cells = [c.get_text(" ", strip=True) for c in tr.find_all(["th", "td"])]
+            if not m or len(cells) < 11:
+                continue
+            out.append({"id": int(m.group(1)), "code": cells[0], "withdraw": cells[3],
+                        "supplier_ref_no": cells[5], "created_at": cells[7],
+                        "approved": bool(cells[9]), "user": cells[10]})
+        return out
+
+    def find_deposit_by_remark(self, token: str, inventory_id: int,
+                               date_ddmmyyyy: str) -> list[int]:
+        """
+        id ของใบรับคืนในวันนั้นที่ "เลขที่ใบส่งของ" (supplier_ref_no) ตรงกับ token
+        (หน้า list ของ DD ไม่แสดงหมายเหตุ → ฝัง token ไว้ที่ supplier_ref_no ตอนสร้างหัวใบ)
+        """
+        pat = _token_re(token)
+        if pat is None:
+            return []
+        return [r["id"] for r in self.list_deposits(inventory_id, date_ddmmyyyy, token)
+                if pat.search(r["supplier_ref_no"])]
 
     # ═══ ฝั่งเขียน ═══════════════════════════════════════════════════════════
     # กติกาเหล็ก: POST ไม่มี auto-retry เด็ดขาด (POST ซ้ำ = บรรทัด/ใบซ้ำใน ATMS)
@@ -304,7 +388,6 @@ class AtmsWithdrawClient(AtmsClient):
 
     def _click(self, url: str) -> None:
         """ลิงก์ GET ที่เปลี่ยนสถานะ (อนุมัติ / คืนครบ) — ทำซ้ำได้ปลอดภัย"""
-        self._pause()
         r = self._request("GET", url, allow_redirects=False)
         if r.status_code in _REDIRECTS and LOGIN_PATH in r.headers.get("Location", ""):
             raise AtmsAuthError("PHPSESSID หมดอายุ — ATMS เด้งกลับหน้า login")
@@ -341,6 +424,13 @@ class AtmsWithdrawClient(AtmsClient):
     def issue_withdraw(self, inventory_id: int, pick_to_id: int, remark_token: str,
                        lines: list[IssueLine], progress: IssueProgress | None = None,
                        remark: str = "", date_ddmmyyyy: str | None = None) -> IssueProgress:
+        """
+        ยิงใบเบิกแบบทำต่อได้ — คืน IssueProgress ผู้เรียกต้องเก็บไว้ส่งกลับตอนลองใหม่
+
+        คำเตือน: การหาใบเดิมจาก remark_token ค้นเฉพาะ "วันที่สร้างใบ" (date_ddmmyyyy,
+        default = วันนี้) → ถ้าลองใหม่ข้ามวันโดยยังไม่มี progress.gm_id ต้องส่งวันที่สร้างเดิมมาด้วย
+        ไม่งั้นหาไม่เจอแล้วจะสร้างใบซ้ำ
+        """
         if self.dry_run:
             return self._dry_progress(len(lines))
         p = progress or IssueProgress()
@@ -372,17 +462,20 @@ class AtmsWithdrawClient(AtmsClient):
                 view = self.get_withdraw(p.gm_id)
                 p.code = view["code"]
                 self._reconcile(view, p, len(lines))
-                p.approved = p.approved or view["approved"]
+                p.approved = view["approved"]      # ATMS คือความจริง ไม่ใช่ progress
+                if p.approved and len(p.done) < len(lines):
+                    raise WithdrawPartialError(p, AtmsOpenJobError(
+                        f"ใบ {view['code']} อนุมัติแล้วแต่รายการยังไม่ครบ — ตรวจมือ"))
             item_url = f"{BASE}/inv/withdraw.item/add/good_movement_id/{p.gm_id}/inventory_id/{inventory_id}"
             for i, ln in enumerate(lines):
                 if i in p.done:
                     continue
                 self._post_form(item_url, {
                     "inventory_id": inventory_id, "good_movement_id": p.gm_id,
-                    "maintenance_request_item": "",
+                    "maintenance_request_item": str(ln.mr_item_id) if ln.mr_item_id else "",
                     "maintenance_request_item_id": ln.mr_item_id if ln.mr_item_id else "",
                     "sku_tag_id": "", "ajax_sku_tag_id": "",
-                    "sku": "", "sku_id": ln.sku_id,
+                    "sku": ln.sku_name, "sku_id": ln.sku_id,
                     "serial_no": "", "serial_no_id": ln.serial_no_id or "",
                     "has_serial_no": "", "amount": f"{ln.amount:g}", "remark": ln.remark,
                 })
@@ -395,9 +488,10 @@ class AtmsWithdrawClient(AtmsClient):
                     raise AtmsOpenJobError(
                         f"ATMS ยังไม่อนุมัติใบ {v['code']} — บัญชีนี้อาจไม่มีสิทธิ์อนุมัติ")
                 p.approved = True
-                if len(v["items"]) != len(lines):
-                    raise AtmsOpenJobError(
-                        f"ใบ {v['code']} มี {len(v['items'])} บรรทัด ควรเป็น {len(lines)}")
+                view = v
+            if len(view["items"]) != len(lines):
+                raise AtmsOpenJobError(
+                    f"ใบ {view['code']} มี {len(view['items'])} บรรทัด ควรเป็น {len(lines)}")
         except WithdrawPartialError:
             raise
         except Exception as e:
@@ -408,29 +502,45 @@ class AtmsWithdrawClient(AtmsClient):
     def return_to_stock(self, inventory_id: int, withdraw_id: int, withdraw_code: str,
                         remark_token: str, lines: list[ReturnLine],
                         progress: IssueProgress | None = None,
-                        mark_complete: bool = False) -> IssueProgress:
+                        mark_complete: bool = False,
+                        date_ddmmyyyy: str | None = None) -> IssueProgress:
+        """ใบรับคืน — ค้นใบเดิมจาก supplier_ref_no = remark_token ในวันสร้าง (ดูคำเตือนที่ issue_withdraw)"""
         if self.dry_run:
             return self._dry_progress(len(lines))
         p = progress or IssueProgress()
         p.done = list(p.done)
         fresh = False
         if not p.gm_id:
-            dd = self._post_form(DD_ADD_URL, {
-                "type": "deposit", "purchase_order_id": "", "inventory_id": inventory_id,
-                "supplier_ref_no": "-", "supplier_inv_date": _today(), "extra_cost": "0.00",
-                "withdraw": withdraw_code, "withdraw_id": withdraw_id,
-                "remark": remark_token, "extra_type": ""})
-            if dd is None:
-                # ไม่มีทางค้นหา DD จาก remark ได้ → ห้ามเดา ให้ตรวจมือ (ลองใหม่ = หัวใบซ้ำ)
-                raise AtmsOpenJobError(
-                    f"สร้างใบรับคืน ({remark_token}) แล้วแต่ ATMS ไม่บอก id — ตรวจมือก่อนลองใหม่")
-            p.gm_id, fresh = dd, True
+            day = date_ddmmyyyy or _today()
+            found = self.find_deposit_by_remark(remark_token, inventory_id, day)
+            if len(found) > 1:
+                raise AtmsOpenJobError(f"พบหลายใบที่มีเลข {remark_token} ใน ATMS: {found}")
+            if found:
+                p.gm_id = found[0]
+            else:
+                # token ฝังที่ supplier_ref_no เพราะหน้า list ของ DD ค้นจากหมายเหตุไม่ได้
+                dd = self._post_form(DD_ADD_URL, {
+                    "type": "deposit", "purchase_order_id": "", "inventory_id": inventory_id,
+                    "supplier_ref_no": remark_token, "supplier_inv_date": _today(),
+                    "extra_cost": "0.00", "withdraw": withdraw_code, "withdraw_id": withdraw_id,
+                    "remark": remark_token, "extra_type": ""})
+                if dd is None:
+                    ids = self.find_deposit_by_remark(remark_token, inventory_id, day)
+                    if len(ids) != 1:
+                        raise AtmsOpenJobError(
+                            f"สร้างใบรับคืนแล้วแต่หา id ไม่เจอ (เจอ {len(ids)} ใบ) เลข {remark_token}"
+                            " — ตรวจมือก่อนลองใหม่")
+                    dd = ids[0]
+                p.gm_id, fresh = dd, True
         try:
             if not fresh:
                 v = self.get_deposit(p.gm_id)
                 p.code = v["code"]
                 self._reconcile(v, p, len(lines))
-                p.approved = p.approved or v["approved"]
+                p.approved = v["approved"]
+                if p.approved and len(p.done) < len(lines):
+                    raise WithdrawPartialError(p, AtmsOpenJobError(
+                        f"ใบ {v['code']} อนุมัติแล้วแต่รายการยังไม่ครบ — ตรวจมือ"))
             item_url = f"{BASE}/inv/deposit.item/add/good_movement_id/{p.gm_id}/inventory_id/{inventory_id}"
             for i, ln in enumerate(lines):
                 if i in p.done:
@@ -438,7 +548,7 @@ class AtmsWithdrawClient(AtmsClient):
                 self._post_form(item_url, {
                     "inventory_id": inventory_id, "good_movement_id": p.gm_id,
                     "purchase_order_item_id": "", "sku_tag_id": "", "ajax_sku_tag_id": "",
-                    "sku": "", "sku_id": ln.sku_id, "serial_no": ln.serial_no,
+                    "sku": ln.sku_name, "sku_id": ln.sku_id, "serial_no": ln.serial_no,
                     "has_serial_no": "", "amount": f"{ln.amount:g}",
                     "unit_price": f"{ln.unit_price:.2f}", "remark": ln.remark,
                 })
