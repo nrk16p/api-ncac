@@ -38,6 +38,7 @@ PIPELINE_SCRIPTS = {
     "atms_stockmovement_light": SCRIPTS_DIR / "atms_stockmovement" / "pipeline_atms_stockmovement_light.py",
     "overspeed": SCRIPTS_DIR / "overspeed" / "pipeline_overspeed.py",
     "rmc_compensation": SCRIPTS_DIR / "rmc" / "pipeline_rmc.py",
+    "store-withdraw-drift": SCRIPTS_DIR / "store_withdraw" / "pipeline_store_withdraw_drift.py",
 }
 
 PIPELINE_NAMES = {"ld": "asia", "scco": "scco", "cpac": "cpac",
@@ -62,7 +63,8 @@ PIPELINE_NAMES = {"ld": "asia", "scco": "scco", "cpac": "cpac",
                   "atms_stockmovement": "atms_stockmovement",
                   "atms_stockmovement_light": "atms_stockmovement_light",
                   "overspeed": "overspeed",
-                  "rmc_compensation": "rmc_compensation"}
+                  "rmc_compensation": "rmc_compensation",
+                  "store-withdraw-drift": "store-withdraw-drift"}
 
 # Where each pipeline logs its runs: (db, collection)
 RUN_LOG_LOCATION = {
@@ -92,6 +94,7 @@ RUN_LOG_LOCATION = {
     "atms_stockmovement_light": ("atms", "stockmovement_runs"),
     "overspeed": ("analytics", "etl_jobs"),
     "rmc_compensation": ("analytics", "etl_jobs"),
+    "store-withdraw-drift": ("analytics", "etl_jobs"),
 }
 
 # In-memory run state (single-process; reset on restart)
