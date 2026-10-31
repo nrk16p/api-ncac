@@ -522,19 +522,24 @@ class AtmsWithdrawClient(AtmsClient):
                           "pick_to_id": pick_to_id, "extra_cost": "0.00", "extra_type": "",
                           "remark": f"{remark_token} {remark}".strip()}
                 gm = self._post_form(WD_ADD_URL, header)
-                ids = self.find_withdraw_by_remark(remark_token, inventory_id,
-                                                   date_ddmmyyyy or _today())
-                if gm is None:
-                    if len(ids) != 1:
-                        raise AtmsOpenJobError(
-                            f"สร้างหัวใบแล้วแต่หา id ไม่เจอ (เจอ {len(ids)} ใบ) เลข {remark_token}")
-                    gm = ids[0]
-                    p.gm_id = gm
-                else:
+                if gm is not None:
                     p.gm_id = gm        # เก็บไว้ก่อน — ใบมีอยู่จริงแล้ว ห้ามสร้างซ้ำ
-                    if ids != [gm]:
-                        raise WithdrawPartialError(p, AtmsOpenJobError(
-                            "ค้นใบจากเลขคำขอใน ATMS ไม่เจอ — ตรวจมือก่อนลองใหม่"))
+                try:
+                    ids = self.find_withdraw_by_remark(remark_token, inventory_id,
+                                                       date_ddmmyyyy or _today())
+                    if gm is None:
+                        if len(ids) != 1:
+                            raise AtmsOpenJobError(
+                                f"สร้างหัวใบแล้วแต่หา id ไม่เจอ (เจอ {len(ids)} ใบ) เลข {remark_token}")
+                        gm = ids[0]
+                        p.gm_id = gm
+                    elif ids != [gm]:
+                        raise AtmsOpenJobError(
+                            "ค้นใบจากเลขคำขอใน ATMS ไม่เจอ — ตรวจมือก่อนลองใหม่")
+                except Exception as e:
+                    if p.gm_id:
+                        raise WithdrawPartialError(p, e) from e
+                    raise
                 view = {}                          # ใบใหม่ ไม่ต้องตรวจจำนวนบรรทัดก่อนยิง
         try:
             if view is None:                       # ใบที่มีอยู่แล้ว → ตรวจก่อนยิงต่อ
@@ -607,19 +612,24 @@ class AtmsWithdrawClient(AtmsClient):
                     "supplier_ref_no": remark_token, "supplier_inv_date": _today(),
                     "extra_cost": "0.00", "withdraw": withdraw_code, "withdraw_id": withdraw_id,
                     "remark": remark_token, "extra_type": ""})
-                ids = self.find_deposit_by_remark(remark_token, inventory_id, day)
-                if dd is None:
-                    if len(ids) != 1:
+                if dd is not None:
+                    p.gm_id, fresh = dd, True
+                try:
+                    ids = self.find_deposit_by_remark(remark_token, inventory_id, day)
+                    if dd is None:
+                        if len(ids) != 1:
+                            raise AtmsOpenJobError(
+                                f"สร้างใบรับคืนแล้วแต่หา id ไม่เจอ (เจอ {len(ids)} ใบ) เลข {remark_token}"
+                                " — ตรวจมือก่อนลองใหม่")
+                        dd = ids[0]
+                        p.gm_id, fresh = dd, True
+                    elif ids != [dd]:
                         raise AtmsOpenJobError(
-                            f"สร้างใบรับคืนแล้วแต่หา id ไม่เจอ (เจอ {len(ids)} ใบ) เลข {remark_token}"
-                            " — ตรวจมือก่อนลองใหม่")
-                    dd = ids[0]
-                    p.gm_id, fresh = dd, True
-                else:
-                    p.gm_id, fresh = dd, True
-                    if ids != [dd]:
-                        raise WithdrawPartialError(p, AtmsOpenJobError(
-                            "ค้นใบจากเลขคำขอใน ATMS ไม่เจอ — ตรวจมือก่อนลองใหม่"))
+                            "ค้นใบจากเลขคำขอใน ATMS ไม่เจอ — ตรวจมือก่อนลองใหม่")
+                except Exception as e:
+                    if p.gm_id:
+                        raise WithdrawPartialError(p, e) from e
+                    raise
         try:
             if not fresh:
                 v = self.get_deposit(p.gm_id)

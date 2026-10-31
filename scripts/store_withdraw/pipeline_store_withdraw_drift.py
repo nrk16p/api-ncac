@@ -4,6 +4,8 @@ POST {WMS_BASE}/api/store-withdraw/drift-tick  (header x-api-key = WMS_STORE_WIT
 WMS เป็นคนอ่าน ATMS และเขียน drift ลงใบเอง สคริปต์นี้แค่ยิงแล้ว log ผล {checked, drifted, skipped}.
 Env: WMS_BASE (เช่น https://mena-wms.vercel.app), WMS_STORE_WITHDRAW_KEY. ตั้งรอบทุก 30 นาที 07:00-20:00 (BKK)
 เป็นงานบน Render cron ที่เรียก POST /pipeline/run/store-withdraw-drift
+Env ต้องตรงกัน: WMS_STORE_WITHDRAW_KEY (api-ncac) ต้องเท่ากับ STORE_WITHDRAW_TICK_KEY (WMS) ·
+WMS_BASE = URL ของ WMS · รัน uvicorn แบบ worker เดียว (ล็อกต่อผู้ใช้อยู่ใน process)
 """
 import os
 import sys

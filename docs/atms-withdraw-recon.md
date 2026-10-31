@@ -51,3 +51,8 @@ filter อื่น: `code`, `pick_to`, `user`, `remark`, `spare_part_returned`,
 
 ## Profile — `/account/user/profile` (fixture `profile.html`, ไม่มีฟอร์ม)
 label: ผู้ใช้งาน · อีเมล์ · ชื่อ · โทรศัพท์ · สาขา · แผนก · เป็น พจส. · เป็นช่าง · บริษัท
+
+## Env
+- `WMS_STORE_WITHDRAW_KEY` (api-ncac) ต้องเท่ากับ `STORE_WITHDRAW_TICK_KEY` (WMS)
+- `WMS_BASE` = URL ของ WMS
+- รัน uvicorn แบบ worker เดียว (ล็อกต่อผู้ใช้อยู่ใน process)

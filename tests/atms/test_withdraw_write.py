@@ -561,3 +561,34 @@ def test_post_login_network_error_says_nothing_was_sent():
     with pytest.raises(AtmsOpenJobError) as e:
         c._post_once("https://x/inv/withdraw/add", {})
     assert "ไม่ทราบผล" not in str(e.value) and "ยังไม่ได้ส่ง" in str(e.value)
+
+
+def _raise_on_second(exc):
+    n = {"i": 0}
+
+    def f(*a, **k):
+        n["i"] += 1
+        if n["i"] == 1:
+            return []
+        raise exc
+    return f
+
+
+@pytest.mark.parametrize("exc", [AtmsOpenJobError("rows-per-page พัง"), AtmsAuthError("session หลุด")])
+def test_wd_post_header_search_raises_keeps_gm_id(exc):
+    c = make()
+    c.find_withdraw_by_remark = _raise_on_second(exc)
+    with pytest.raises(WithdrawPartialError) as e:
+        c.issue_withdraw(4, 45, TOKEN, LINES2)
+    assert e.value.progress.gm_id == NEW_ID
+    assert "POST item" not in c.calls and "approve" not in c.calls
+
+
+@pytest.mark.parametrize("exc", [AtmsOpenJobError("rows-per-page พัง"), AtmsAuthError("session หลุด")])
+def test_dd_post_header_search_raises_keeps_gm_id(exc):
+    c = make()
+    c.find_deposit_by_remark = _raise_on_second(exc)
+    with pytest.raises(WithdrawPartialError) as e:
+        c.return_to_stock(4, NEW_ID, "LBWD1", TOKEN + "-R1", [RETURN_LINE])
+    assert e.value.progress.gm_id == 777
+    assert "POST deposit item" not in c.calls and "approve dd" not in c.calls
