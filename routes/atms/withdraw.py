@@ -2,7 +2,8 @@
 # 📄 ATMS — ใบเบิก (WD) / ใบรับคืน  เรียกจาก WMS แบบ server-to-server
 #    GET  /atms/withdraw/options | whoami | list | lookup/{kind} | {gm_id}
 #    POST /atms/withdraw/issue | return   (dry_run: true = ไม่ยิง ATMS)
-#    ทุกเส้นต้องมี x-api-key และบัญชี ATMS ของผู้ใช้ (X-ATMS-Username/Password หรือ X-PHPSESSID)
+#    ทุกเส้นต้องมี x-api-key · เส้นเขียนและ whoami ต้องมีบัญชี ATMS ของผู้ใช้ (X-ATMS-Username/Password หรือ X-PHPSESSID)
+#    เส้นอ่าน (options/lookup/list/{gm_id}) ไม่ส่งบัญชี = ใช้ ATMS_USERNAME/ATMS_PASSWORD ของ api-ncac
 #    ห้ามใช้ ATMS_* จาก env
 # ======================================================
 import hashlib
@@ -62,6 +63,21 @@ def atms_creds(
     if not x_phpsessid and not (x_atms_username and x_atms_password):
         raise HTTPException(status_code=401, detail="ต้องส่งบัญชี ATMS ของผู้ใช้มา")
     return Creds(username=x_atms_username, password=x_atms_password, phpsessid=x_phpsessid)
+
+
+def read_creds(
+    x_atms_username: Optional[str] = Header(None, alias="X-ATMS-Username"),
+    x_atms_password: Optional[str] = Header(None, alias="X-ATMS-Password"),
+    x_phpsessid: Optional[str] = Header(None, alias="X-PHPSESSID"),
+) -> Creds:
+    """เส้นอ่านอย่างเดียว: ส่งบัญชีมาก็ใช้บัญชีนั้น · ไม่ส่ง = ใช้บัญชี ATMS ของ api-ncac (ATMS_USERNAME/ATMS_PASSWORD ที่มีอยู่แล้ว)
+    เส้นเขียน (issue/return) และ whoami ยังบังคับบัญชีของผู้ใช้เหมือนเดิม — ห้ามตัดสต๊อกด้วยบัญชีกลาง"""
+    if x_phpsessid or (x_atms_username and x_atms_password):
+        return Creds(username=x_atms_username, password=x_atms_password, phpsessid=x_phpsessid)
+    u, pw = os.getenv("ATMS_USERNAME"), os.getenv("ATMS_PASSWORD")
+    if not (u and pw):
+        raise HTTPException(status_code=401, detail="ไม่ได้ส่งบัญชี ATMS และ api-ncac ไม่ได้ตั้ง ATMS_USERNAME/ATMS_PASSWORD")
+    return Creds(username=u, password=pw)
 
 
 # ── client cache (ต่อ username, 20 นาที) ───────────────────────────────────
@@ -181,7 +197,7 @@ def _progress(p: Optional[ProgressIn]) -> Optional[IssueProgress]:
 
 # ── read ────────────────────────────────────────────────────────────────────
 @router.get("/options", dependencies=[Depends(require_api_key)])
-def options(c: Creds = Depends(atms_creds)):
+def options(c: Creds = Depends(read_creds)):
     return _run(c, lambda cl: cl.options())
 
 
@@ -192,7 +208,7 @@ def whoami(c: Creds = Depends(atms_creds)):
 
 @router.get("/list", dependencies=[Depends(require_api_key)])
 def list_withdraws(inventory_id: int = Query(...), date: str = Query(..., description="DD/MM/YYYY"),
-                   c: Creds = Depends(atms_creds)):
+                   c: Creds = Depends(read_creds)):
     _check_date(date)
     return {"rows": _run(c, lambda cl: cl.list_withdraws(inventory_id, date))}
 
@@ -200,7 +216,7 @@ def list_withdraws(inventory_id: int = Query(...), date: str = Query(..., descri
 @router.get("/lookup/{kind}", dependencies=[Depends(require_api_key)])
 def lookup(kind: str, q: str = Query(""), limit: int = Query(20, ge=1, le=100),
            inventory_id: Optional[int] = None, sku_id: Optional[int] = None,
-           c: Creds = Depends(atms_creds)):
+           c: Creds = Depends(read_creds)):
     return {"results": _run(c, lambda cl: cl.lookup(kind, q, limit, inventory_id, sku_id))}
 
 
@@ -230,5 +246,5 @@ def return_(body: ReturnBody, c: Creds = Depends(atms_creds)):
 
 # ต้องอยู่ท้ายสุด ไม่ให้ชน /options /whoami /list
 @router.get("/{gm_id}", dependencies=[Depends(require_api_key)])
-def get_withdraw(gm_id: int, c: Creds = Depends(atms_creds)):
+def get_withdraw(gm_id: int, c: Creds = Depends(read_creds)):
     return _run(c, lambda cl: cl.get_withdraw(gm_id))

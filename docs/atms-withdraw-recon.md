@@ -53,6 +53,6 @@ filter อื่น: `code`, `pick_to`, `user`, `remark`, `spare_part_returned`,
 label: ผู้ใช้งาน · อีเมล์ · ชื่อ · โทรศัพท์ · สาขา · แผนก · เป็น พจส. · เป็นช่าง · บริษัท
 
 ## Env
-- `WMS_STORE_WITHDRAW_KEY` (api-ncac) ต้องเท่ากับ `STORE_WITHDRAW_TICK_KEY` (WMS)
-- `WMS_BASE` = URL ของ WMS
-- รัน uvicorn แบบ worker เดียว (ล็อกต่อผู้ใช้อยู่ใน process)
+ใช้ค่าเดิมเป็นค่าเริ่มต้น: `WMS_BASE` ไม่ตั้ง = https://mena-wms.vercel.app · `WMS_STORE_WITHDRAW_KEY` ไม่ตั้ง = `PIPELINE_API_KEY`
+· เส้นอ่าน (options/lookup/list/{gm_id}) ไม่ส่งบัญชี = ใช้ `ATMS_USERNAME`/`ATMS_PASSWORD` ของ api-ncac · เส้นเขียน + whoami ต้องมีบัญชีผู้ใช้เสมอ
+· รัน uvicorn แบบ worker เดียว (ล็อกต่อผู้ใช้อยู่ใน process)

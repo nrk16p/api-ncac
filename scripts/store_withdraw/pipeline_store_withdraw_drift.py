@@ -2,9 +2,11 @@
 
 POST {WMS_BASE}/api/store-withdraw/drift-tick  (header x-api-key = WMS_STORE_WITHDRAW_KEY)
 WMS เป็นคนอ่าน ATMS และเขียน drift ลงใบเอง สคริปต์นี้แค่ยิงแล้ว log ผล {checked, drifted, skipped}.
-Env: WMS_BASE (เช่น https://mena-wms.vercel.app), WMS_STORE_WITHDRAW_KEY. ตั้งรอบทุก 30 นาที 07:00-20:00 (BKK)
+Env (ใช้ค่าเดิมเป็นค่าเริ่มต้น): WMS_BASE (ไม่ตั้ง = https://mena-wms.vercel.app),
+WMS_STORE_WITHDRAW_KEY (ไม่ตั้ง = PIPELINE_API_KEY). ตั้งรอบทุก 30 นาที 07:00-20:00 (BKK)
 เป็นงานบน Render cron ที่เรียก POST /pipeline/run/store-withdraw-drift
-Env ต้องตรงกัน: WMS_STORE_WITHDRAW_KEY (api-ncac) ต้องเท่ากับ STORE_WITHDRAW_TICK_KEY (WMS) ·
+Env ต้องตรงกัน: กุญแจที่ส่ง (WMS_STORE_WITHDRAW_KEY หรือ PIPELINE_API_KEY) ต้องเท่ากับกุญแจ tick ของ WMS
+(STORE_WITHDRAW_TICK_KEY หรือ NCAC_API_KEY ซึ่งปกติ = PIPELINE_API_KEY อยู่แล้ว) ·
 WMS_BASE = URL ของ WMS · รัน uvicorn แบบ worker เดียว (ล็อกต่อผู้ใช้อยู่ใน process)
 """
 import os
@@ -16,6 +18,7 @@ import requests
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "engineon"))
 from common import JobLog, log  # noqa: E402
 
+DEFAULT_WMS_BASE = "https://mena-wms.vercel.app"
 TIMEOUT_S = 75  # WMS หยุดเองก่อน ~50 วิ (ข้อจำกัด Vercel) เผื่อ cold start
 
 
@@ -30,9 +33,10 @@ def tick(base: str, key: str, post=requests.post) -> dict:
 
 def main() -> int:
     job = JobLog("store_withdraw_drift", "store-withdraw-drift")
-    base, key = os.getenv("WMS_BASE"), os.getenv("WMS_STORE_WITHDRAW_KEY")
-    if not base or not key:
-        msg = "ต้องตั้ง WMS_BASE และ WMS_STORE_WITHDRAW_KEY"
+    base = os.getenv("WMS_BASE") or DEFAULT_WMS_BASE
+    key = os.getenv("WMS_STORE_WITHDRAW_KEY") or os.getenv("PIPELINE_API_KEY")
+    if not key:
+        msg = "ต้องตั้ง WMS_STORE_WITHDRAW_KEY หรือ PIPELINE_API_KEY"
         log.error("store-withdraw-drift: %s", msg)
         job.finish("failed", error=msg)
         return 1

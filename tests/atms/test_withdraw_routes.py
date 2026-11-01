@@ -82,9 +82,29 @@ def test_api_key_unset_env_is_403(client, monkeypatch):
     assert client.get("/atms/withdraw/options", headers=KEY | CREDS).status_code == 403
 
 
-def test_no_atms_creds_401(client, fake):
+def test_read_without_creds_and_no_env_401(client, fake, monkeypatch):
+    monkeypatch.delenv("ATMS_USERNAME", raising=False)
+    monkeypatch.delenv("ATMS_PASSWORD", raising=False)
     assert client.get("/atms/withdraw/options", headers=KEY).status_code == 401
     assert client.get("/atms/withdraw/options", headers=KEY | {"X-ATMS-Username": "u"}).status_code == 401
+    assert fake.made == []
+
+
+def test_read_without_creds_uses_ncac_env_account(client, fake, monkeypatch):
+    monkeypatch.setenv("ATMS_USERNAME", "svc-reader")
+    monkeypatch.setenv("ATMS_PASSWORD", "svc-pw")
+    assert client.get("/atms/withdraw/options", headers=KEY).json() == {"o": 1}
+    assert client.get("/atms/withdraw/lookup/sku?q=ab", headers=KEY).status_code == 200
+    assert client.get("/atms/withdraw/list?inventory_id=4&date=02/11/2026", headers=KEY).status_code == 200
+    assert client.get("/atms/withdraw/560545", headers=KEY).status_code == 200
+    assert fake.made and all(f.kw.get("username") == "svc-reader" for f in fake.made)
+
+
+def test_writes_and_whoami_never_use_ncac_env_account(client, fake, monkeypatch):
+    monkeypatch.setenv("ATMS_USERNAME", "svc-reader")
+    monkeypatch.setenv("ATMS_PASSWORD", "svc-pw")
+    assert client.get("/atms/withdraw/whoami", headers=KEY).status_code == 401
+    assert client.post("/atms/withdraw/issue", headers=KEY, json=ISSUE).status_code == 401
     assert fake.made == []
 
 

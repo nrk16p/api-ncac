@@ -78,5 +78,34 @@ def test_store_withdraw_drift_missing_env_finishes_joblog_as_failed(monkeypatch)
     monkeypatch.setattr(mod, "JobLog", FakeJob)
     monkeypatch.delenv("WMS_BASE", raising=False)
     monkeypatch.delenv("WMS_STORE_WITHDRAW_KEY", raising=False)
+    monkeypatch.delenv("PIPELINE_API_KEY", raising=False)
     assert mod.main() == 1
-    assert events[0][0] == "start" and events[1][0] == "failed" and "WMS_BASE" in events[1][1]["error"]
+    assert events[0][0] == "start" and events[1][0] == "failed" and "PIPELINE_API_KEY" in events[1][1]["error"]
+
+
+def test_store_withdraw_drift_defaults_to_existing_env(monkeypatch):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("sw_drift3", PIPELINE_SCRIPTS["store-withdraw-drift"])
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    seen = {}
+
+    class FakeJob:
+        def __init__(self, *a, **k):
+            pass
+
+        def finish(self, status="success", **extra):
+            seen["status"] = status
+
+    def fake_tick(base, key, post=None):
+        seen["base"], seen["key"] = base, key
+        return {"checked": 0, "drifted": 0, "skipped": 0}
+
+    monkeypatch.setattr(mod, "JobLog", FakeJob)
+    monkeypatch.setattr(mod, "tick", fake_tick)
+    monkeypatch.delenv("WMS_BASE", raising=False)
+    monkeypatch.delenv("WMS_STORE_WITHDRAW_KEY", raising=False)
+    monkeypatch.setenv("PIPELINE_API_KEY", "pipe-key")
+    assert mod.main() == 0
+    assert seen == {"base": "https://mena-wms.vercel.app", "key": "pipe-key", "status": "success"}
