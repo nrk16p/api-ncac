@@ -12,7 +12,7 @@ import re
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
@@ -46,6 +46,8 @@ DD_INDEX_URL = f"{BASE}/inv/deposit/index/"
 DD_ADD_URL = f"{BASE}/inv/deposit/add"
 DD_VIEW_URL = f"{BASE}/inv/deposit/view/id/"
 DD_APPROVE_URL = f"{BASE}/inv/deposit/approve/id/"
+PO_INDEX_URL = f"{BASE}/inv/purchase.order/index/"
+PO_VIEW_URL = f"{BASE}/inv/purchase.order/view/id/"
 
 # ATMS เก็บ row-per-page ไว้ฝั่งเซิร์ฟเวอร์ต่อผู้ใช้ และไม่มีหน้าให้อ่านค่าปัจจุบัน
 # → คืนเป็นค่า default ของระบบ (เหมือน pipeline_atms_supplier.py)
@@ -62,6 +64,7 @@ WD_LOOKUP_URLS = {
 LOGIN_PATH = "account/user/login"
 _ROW_ID = re.compile(r"/inv/withdraw/(?:view|edit)/id/(\d+)")
 _DD_ROW_ID = re.compile(r"/inv/deposit/(?:view|edit)/id/(\d+)")
+_PO_ROW_ID = re.compile(r"/inv/purchase\.order/(?:view|edit)/id/(\d+)")
 _NUM = re.compile(r"-?\d[\d,]*\.?\d*")
 _REDIRECTS = (301, 302, 303, 307, 308)
 _LOC_ID = re.compile(r"/id/(\d+)")
@@ -85,6 +88,38 @@ _DD_COLS = {
     "approver": (lambda h: h == "approver", 9),
     "user": (lambda h: h == "ผู้ใช้งาน", 10),
 }
+
+
+# ค้น PO/DD เพื่ออ้างอิง: ต้องมีแค่ "รหัส" ส่วนคอลัมน์อื่นไม่มี = ค่าว่าง (ไม่ถอยไปใช้ index ทั้งชุดแบบ _list_table)
+_DOC_COLS = {
+    "po": {
+        "code": lambda h: h == "รหัส",
+        "ref": lambda h: h.startswith("ใบขอสั่งซื้อ"),
+        "status": lambda h: h == "สถานะการรับสินค้า",
+        "date": lambda h: h == "วันที่",
+        "total": lambda h: h == "รวม",
+        "supplier": lambda h: h == "ซัพพลายเออร์",
+    },
+    "dd": {
+        "code": lambda h: h == "เลขที่",
+        "po": lambda h: h.startswith("ใบสั่งซื้อ"),
+        "withdraw": lambda h: h == "เบิก",
+        "supplier": lambda h: h == "ซัพพลายเออร์",
+        "total": lambda h: h == "จำนวนเงิน",
+        "date": lambda h: h == "บันทึกเมื่อ",
+    },
+}
+_DOC_URLS = {
+    "po": (PO_INDEX_URL, PO_VIEW_URL, _PO_ROW_ID, ("from_t_date", "to_t_date")),
+    "dd": (DD_INDEX_URL, DD_VIEW_URL, _DD_ROW_ID, ("from_created_at", "to_created_at")),
+}
+DOC_SEARCH_DAYS = 90
+DOC_QUERY_MIN = 2
+
+
+def _check_kind(kind: str) -> None:
+    if kind not in _DOC_URLS:
+        raise AtmsOpenJobError(f"kind ต้องเป็น po หรือ dd (ได้ {kind!r})")
 
 
 def _list_table(soup: BeautifulSoup, spec: dict) -> tuple[Any, dict[str, int]]:
@@ -422,6 +457,95 @@ class AtmsWithdrawClient(AtmsClient):
         return [r["id"] for r in self.list_deposits(inventory_id, date_ddmmyyyy, token)
                 if pat.search(r["supplier_ref_no"])]
 
+    # ── ค้น/ดู PO และ DD (อ่านอย่างเดียว) ──────────────────────────────────────
+    def search_docs(self, kind: str, q: str, inventory_id: int | None = None, limit: int = 20,
+                    date_from: str | None = None, date_to: str | None = None) -> list[dict]:
+        """
+        ค้นเลขใบจากหน้า index ด้วย filter code (ATMS ไม่มี autocomplete JSON ของ PO/DD)
+        q สั้นกว่า 2 ตัว = [] โดยไม่ยิง ATMS · ไม่ใส่วันที่ = ย้อนหลัง 90 วัน · เรียงใหม่สุด (id มาก→น้อย)
+        rows-per-page ใช้ล็อก+ตั้ง/คืนชุดเดียวกับ list_withdraws
+        """
+        _check_kind(kind)
+        q = _s(q).strip()
+        if len(q) < DOC_QUERY_MIN:
+            return []
+        index_url, _, row_id, (k_from, k_to) = _DOC_URLS[kind]
+        today = datetime.now(_TZ)
+        params: dict[str, Any] = {
+            "code": q,
+            k_from: date_from or (today - timedelta(days=DOC_SEARCH_DAYS)).strftime("%d/%m/%Y"),
+            k_to: date_to or today.strftime("%d/%m/%Y"),
+            "submit": "ค้นหา",
+        }
+        if inventory_id:
+            params["inventory_id"] = inventory_id
+        with self._list_lock:
+            self._set_rows_per_page(ROW_PER_PAGE_LIST)
+            try:
+                soup = self._get_soup(index_url, params)
+            finally:
+                self._set_rows_per_page(ROW_PER_PAGE_DEFAULT)
+        tables = soup.find_all("table")
+        table = max(tables, key=lambda x: len(x.find_all("tr")), default=None)
+        if table is None:
+            return []
+        heads = [c.get_text(" ", strip=True) for c in table.find("tr").find_all(["th", "td"])]
+        cols = {k: next((i for i, h in enumerate(heads) if m(h)), None) for k, m in _DOC_COLS[kind].items()}
+        if cols["code"] is None:
+            return []
+
+        def cell(cells: list[str], key: str) -> str:
+            i = cols.get(key)
+            return cells[i] if i is not None and i < len(cells) else ""
+
+        out: list[dict] = []
+        for tr in table.find_all("tr")[1:]:
+            m = next((row_id.search(a["href"]) for a in tr.find_all("a", href=True)
+                      if row_id.search(a["href"])), None)
+            cells = [c.get_text(" ", strip=True) for c in tr.find_all(["th", "td"])]
+            if not m or cols["code"] >= len(cells):
+                continue
+            total = cell(cells, "total")
+            out.append({
+                "id": int(m.group(1)),
+                "code": cells[cols["code"]],
+                "kind": kind,
+                "date": cell(cells, "date")[:10],
+                "supplier": cell(cells, "supplier"),
+                "status": cell(cells, "status") or None,
+                "total": _num(total) if total.strip() else None,
+                # PO = เลข PR · DD = เลข PO ถ้ามี ไม่งั้นเลข WD (ใบรับคืน)
+                "ref": (cell(cells, "ref") if kind == "po"
+                        else cell(cells, "po") or cell(cells, "withdraw")),
+            })
+        out.sort(key=lambda r: r["id"], reverse=True)
+        return out[:max(1, int(limit))]
+
+    def get_doc(self, kind: str, doc_id: int) -> dict:
+        """หน้า view ของ PO/DD → หัวใบ + รายการสินค้า (ไม่รวมแถว grand total/ภาษี/รวมสุทธิ)"""
+        _check_kind(kind)
+        soup = self._get_soup(f"{_DOC_URLS[kind][1]}{int(doc_id)}")
+        info = _label_pairs(soup)
+        code = info.get("รหัส" if kind == "po" else "เลขที่", "")
+        if not code:
+            raise AtmsNotFoundError(f"ไม่พบ{'ใบสั่งซื้อ' if kind == 'po' else 'ใบรับ'} id {doc_id} ใน ATMS")
+        is_po = kind == "po"
+        po_label = next((v for k, v in info.items() if k.startswith("ใบสั่งซื้อ") or k.lower().startswith("purchase order")), "")
+        when = info.get("วันที่") if is_po else (info.get("รับเมื่อ") or info.get("บันทึกเมื่อ") or "")
+        return {
+            "id": int(doc_id),
+            "code": code,
+            "kind": kind,
+            "date": _s(when)[:10],
+            "supplier": info.get("ซัพพลายเออร์", ""),
+            "inventory": info.get("คลังสินค้า", ""),
+            "pr": (info.get("ใบขอสั่งซื้อ (PR)") or None) if is_po else None,
+            "po": None if is_po else (po_label.strip() or None),
+            "withdraw": None if is_po else (info.get("เบิก", "").strip() or None),
+            "remark": info.get("หมายเหตุ", ""),
+            "lines": _doc_lines(soup, is_po),
+        }
+
     # ═══ ฝั่งเขียน ═══════════════════════════════════════════════════════════
     # กติกาเหล็ก: POST ไม่มี auto-retry เด็ดขาด (POST ซ้ำ = บรรทัด/ใบซ้ำใน ATMS)
     # _request ของ AtmsClient retry เมื่อ connection หลุด → ใช้กับ POST ไม่ได้ จึงมี _post_once
@@ -710,3 +834,35 @@ def _wd_items(soup: BeautifulSoup) -> list[dict]:
             "mr_item_id": int(mr) if mr.isdigit() else None,
         })
     return items
+
+
+def _doc_lines(soup: BeautifulSoup, is_po: bool) -> list[dict]:
+    """
+    ตารางรายการของ PO/DD — สินค้าต้องเป็น "รหัส : ชื่อ" (แถวสรุปไม่มี → ข้าม)
+    PO: amount=สั่ง, received=คอลัมน์ "รับ", remaining="ค้างรับ" · DD: amount=ที่รับ, received=amount, remaining=None
+    is_labour = กลุ่มสินค้าขึ้นต้น "ค่าแรง" (ติดป้ายเฉยๆ ไม่กรองทิ้ง)
+    """
+    table = soup.find("table", class_="defaultTable")
+    if table is None:
+        return []
+    lines: list[dict] = []
+    for row in _rows_of(table):
+        full = " ".join(_s(row.get("สินค้า")).split())
+        code, sep, _ = full.partition(" : ")
+        if not sep or not code.strip():
+            continue
+        amount = _num(row.get("amount", ""))
+        group = _s(row.get("กลุ่มสินค้า")).strip()
+        lines.append({
+            "sku_code": code.strip(),
+            "sku_name": full,
+            "group": group,
+            "amount": amount,
+            "received": _num(row.get("รับ", "")) if is_po else amount,
+            "remaining": _num(row.get("ค้างรับ", "")) if is_po else None,
+            "unit_price": _num(row.get("unit price", "")),
+            "total": _num(row.get("รวม", "")),
+            "remark": _s(row.get("หมายเหตุ")).strip(),
+            "is_labour": group.startswith("ค่าแรง"),
+        })
+    return lines

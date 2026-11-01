@@ -1,0 +1,375 @@
+<body class="fluid-body inv-purchase-order-index-page">
+
+<div class="toast-container">
+<div aria-atomic="true" aria-live="assertive" class="toast noti-toast" id="noti-toast" role="alert"></div>
+</div>
+<div class="container-fluid content-stage">
+<div class="row">
+<div class="col-md-12">
+<div class="content-title">
+			ค้นหา ใบสั่งซื้อ (PO)		<div class="search-menu">
+<a class="link-icon-plus" href="/inv/purchase.order/add" title="เพิ่ม รายการ"></a>
+<a class="link-icon-download export-btn" href="" title="ส่งออกข้อมูล"></a>
+<a class="link-icon-toggle" href="javascript:void(0);" id="toggle_search" title="แสดง/ซ่อน"></a>
+</div>
+</div>
+<div class="content-area search-form" id="search-form">
+<div>
+<div>
+<form action="/inv/purchase.order/index" class="inv-purchase-order-index-form" id="basic-input-form" method="get"><dl class="zend_form">
+<dt id="code-label"><label class="optional" for="code">รหัส</label></dt>
+<dd id="code-element">
+<input id="code" name="code" type="text" value=""/></dd>
+<dt id="purchase_request-label"><label class="optional" for="purchase_request">ใบขอสั่งซื้อ (PR)</label></dt>
+<dd id="purchase_request-element">
+<input id="purchase_request" name="purchase_request" type="text" value=""/></dd>
+<dt id="supplier-label"><label class="optional" for="supplier">ซัพพลายเออร์</label></dt>
+<dd id="supplier-element">
+<input id="supplier" name="supplier" type="text" value=""/></dd>
+<dt id="vehicle-label"><label class="optional" for="vehicle">ยานพาหนะ</label></dt>
+<dd id="vehicle-element">
+<input id="vehicle" name="vehicle" type="text" value=""/></dd>
+<dt id="inventory_id-label"><label class="optional" for="inventory_id">คลังสินค้า</label></dt>
+<dd id="inventory_id-element">
+<select id="inventory_id" name="inventory_id">
+<option label="ทั้งหมด" selected="selected" value="">ทั้งหมด</option>
+<option label="คลังสระบุรี" value="3">คลังสระบุรี</option>
+<option label="คลังลาดกระบัง" value="4">คลังลาดกระบัง</option>
+<option label="คลัง HR กรุงเทพ" value="5">คลัง HR กรุงเทพ</option>
+<option label="คลัง HR ลาดกระบัง" value="6">คลัง HR ลาดกระบัง</option>
+<option label="คลัง HR สระบุรี" value="7">คลัง HR สระบุรี</option>
+<option label="คลัง จป.สระบุรี" value="8">คลัง จป.สระบุรี</option>
+<option label="คลัง จป.ลาดกระบัง" value="9">คลัง จป.ลาดกระบัง</option>
+<option label="คลังทรัพย์สินกรุงเทพ" value="10">คลังทรัพย์สินกรุงเทพ</option>
+<option label="คลังขอนแก่น" value="11">คลังขอนแก่น</option>
+<option label="คลัง IT" value="12">คลัง IT</option>
+<option label="คลัง จป. ขอนแก่น" value="16">คลัง จป. ขอนแก่น</option>
+<option label="คลังทรัพย์สินลาดกระบัง" value="17">คลังทรัพย์สินลาดกระบัง</option>
+<option label="คลังทรัพย์สินสระบุรี" value="18">คลังทรัพย์สินสระบุรี</option>
+<option label="คลังไม่มีสต๊อก สระบุรี" value="21">คลังไม่มีสต๊อก สระบุรี</option>
+<option label="คลัง DIST" value="24">คลัง DIST</option>
+<option label="คลัง DIST จป.สระบุรี" value="25">คลัง DIST จป.สระบุรี</option>
+<option label="คลัง DIST จป.ขอนแก่น" value="31">คลัง DIST จป.ขอนแก่น</option>
+<option label="คลัง OPS" value="35">คลัง OPS</option>
+<option label="คลังฝ่ายสำนักเลขา" value="36">คลังฝ่ายสำนักเลขา</option>
+<option label="คลังจัดส่ง (บางปะกง)" value="38">คลังจัดส่ง (บางปะกง)</option>
+<option label="คลัง บัญชีการเงิน สกท." value="39">คลัง บัญชีการเงิน สกท.</option>
+<option label="คลังจัดส่่ง (สระบุรี)" value="40">คลังจัดส่่ง (สระบุรี)</option>
+</select></dd>
+<dt id="department_id-label"><label class="optional" for="department_id">แผนก</label></dt>
+<dd id="department_id-element">
+<select id="department_id" name="department_id">
+<option label="ทั้งหมด" selected="selected" value="">ทั้งหมด</option>
+<option label="Business Development" value="45">Business Development</option>
+<option label="HR กรุงเทพ" value="16">HR กรุงเทพ</option>
+<option label="HR ลาดกระบัง" value="3">HR ลาดกระบัง</option>
+<option label="HR สระบุรี" value="8">HR สระบุรี</option>
+<option label="Operation Support" value="40">Operation Support</option>
+<option label="ขายรถร่วม(ศลบ)" value="44">ขายรถร่วม(ศลบ)</option>
+<option label="ขายสินค้า(ศลบ)" value="24">ขายสินค้า(ศลบ)</option>
+<option label="คณะกรรมการบริหาร" value="29">คณะกรรมการบริหาร</option>
+<option label="จัดซื้อ กรุงเทพ" value="18">จัดซื้อ กรุงเทพ</option>
+<option label="จัดซื้อจัดจ้าง(ศขก)" value="43">จัดซื้อจัดจ้าง(ศขก)</option>
+<option label="จัดซื้อจัดจ้าง(ศลบ)" value="7">จัดซื้อจัดจ้าง(ศลบ)</option>
+<option label="จัดซื้อจัดจ้าง(สสบ)" value="13">จัดซื้อจัดจ้าง(สสบ)</option>
+<option label="จัดซื้อสโตร์(ศขก)" value="38">จัดซื้อสโตร์(ศขก)</option>
+<option label="จัดซื้อสโตร์(ศลบ)" value="36">จัดซื้อสโตร์(ศลบ)</option>
+<option label="จัดซื้อสโตร์(สสบ)" value="37">จัดซื้อสโตร์(สสบ)</option>
+<option label="จัดส่ง DIST" value="34">จัดส่ง DIST</option>
+<option label="จัดส่ง ขอนแก่น" value="23">จัดส่ง ขอนแก่น</option>
+<option label="จัดส่งลาดกระบัง" value="2">จัดส่งลาดกระบัง</option>
+<option label="ทรัพยากรบุคคล (ศบก)" value="46">ทรัพยากรบุคคล (ศบก)</option>
+<option label="บริการจัดส่ง (สระบุรี)" value="12">บริการจัดส่ง (สระบุรี)</option>
+<option label="บัญชีการเงิน (ศลบ)" value="6">บัญชีการเงิน (ศลบ)</option>
+<option label="บัญชีการเงิน (สกท)" value="15">บัญชีการเงิน (สกท)</option>
+<option label="บัญชีการเงิน (สสบ)" value="11">บัญชีการเงิน (สสบ)</option>
+<option label="ฝ่ายบริหาร" value="30">ฝ่ายบริหาร</option>
+<option label="พัฒนาประสบการณ์ลูกค้า (ศบก.)" value="47">พัฒนาประสบการณ์ลูกค้า (ศบก.)</option>
+<option label="มาตรฐานความปลอดภัย(Dist)" value="33">มาตรฐานความปลอดภัย(Dist)</option>
+<option label="มาตรฐานความปลอดภัย(ศขก)" value="41">มาตรฐานความปลอดภัย(ศขก)</option>
+<option label="มาตรฐานความปลอดภัย(ศลบ)" value="4">มาตรฐานความปลอดภัย(ศลบ)</option>
+<option label="มาตรฐานความปลอดภัย(สสบ)" value="10">มาตรฐานความปลอดภัย(สสบ)</option>
+<option label="ยานยนต์ (ศขก)" value="22">ยานยนต์ (ศขก)</option>
+<option label="ยานยนต์ (ศลบ)" value="5">ยานยนต์ (ศลบ)</option>
+<option label="ยานยนต์ (สสบ)" value="14">ยานยนต์ (สสบ)</option>
+<option label="สำนักกรรมการผู้จัดการ" value="28">สำนักกรรมการผู้จัดการ</option>
+<option label="สำนักเลขาและงานกำกับดูแลการปฎิบัติงาน" value="42">สำนักเลขาและงานกำกับดูแลการปฎิบัติงาน</option>
+<option label="อัตราค่าขนส่ง (สกท.)" value="25">อัตราค่าขนส่ง (สกท.)</option>
+<option label="เชื้อเพลิง (ศลบ.)" value="31">เชื้อเพลิง (ศลบ.)</option>
+<option label="เทคโนโลยีสารสนเทศ" value="17">เทคโนโลยีสารสนเทศ</option>
+</select></dd>
+<dt id="received_status-label"><label class="optional" for="received_status">สถานะการรับสินค้า</label></dt>
+<dd id="received_status-element">
+<select id="received_status" name="received_status">
+<option label="ทั้งหมด" selected="selected" value="">ทั้งหมด</option>
+<option label="ยังไม่ได้รับสินค้า" value="not receive">ยังไม่ได้รับสินค้า</option>
+<option label="รับสินค้าแล้วบางส่วน" value="partial receive">รับสินค้าแล้วบางส่วน</option>
+<option label="รับสินค้าแล้วทั้งหมด" value="complete receive">รับสินค้าแล้วทั้งหมด</option>
+<option label="บังคับปิด" value="partial close">บังคับปิด</option>
+<option label="ยกเลิก" value="cancel">ยกเลิก</option>
+</select></dd>
+<dt id="from_t_date-label"><label class="optional" for="from_t_date">วันที่</label></dt>
+<dd id="from_t_date-element">
+<input class="date-pick not-decorate" id="from_t_date" name="from_t_date" placeholder="วัน/เดือน/ปี (คศ.)" type="text" value="25/10/2026"/></dd>
+<dt id="to_t_date-label"><label class="optional" for="to_t_date">ถึงวันที่</label></dt>
+<dd id="to_t_date-element">
+<input class="date-pick not-decorate" id="to_t_date" name="to_t_date" placeholder="วัน/เดือน/ปี (คศ.)" type="text" value="01/11/2026"/></dd>
+<dt id="related_party_transaction-label"><label class="optional" for="related_party_transaction">RPT</label></dt>
+<dd id="related_party_transaction-element">
+<select id="related_party_transaction" name="related_party_transaction">
+<option label="ทั้งหมด" selected="selected" value="">ทั้งหมด</option>
+<option label="ใช่" value="y">ใช่</option>
+<option label="ไม่" value="n">ไม่</option>
+</select></dd>
+<dt id="submit-label"> </dt><dd id="submit-element">
+<input id="submit" name="submit" type="submit" value="ค้นหา"/></dd>
+<dt id="order_by-label"> </dt>
+<dd id="order_by-element">
+<input class="form-hidden-field" id="order_by" name="order_by" type="hidden" value=""/></dd></dl></form> <br class="clear"/>
+</div>
+</div>
+<input id="search-toggle-status" type="hidden" value=""/>
+<input id="current-page" type="hidden" value=""/>
+<input id="current-module" type="hidden" value="inv"/>
+<input id="current-controller" type="hidden" value="purchase.order"/>
+<input id="current-action" type="hidden" value="index"/>
+<input id="search-params" type="hidden" value="page=1&amp;from_t_date=25/10/2026&amp;to_t_date=01/11/2026"/>
+<br class="clear"/>
+</div>
+<!--
+See http://developer.yahoo.com/ypatterns/pattern.php?pattern=itempagination
+-->
+<div class="pagination">
+<span class="page-summary">
+1 - 25 / 456</span>
+<!-- First page link -->
+<span class="first disabled">หน้าแรก</span>
+<!-- Previous page link -->
+<span class="previous disabled">ก่อนหน้า</span>
+<!-- Numbered page links -->
+<span class="current">1</span><a class="page_link" href="?page=2&amp;from_t_date=25%2F10%2F2026&amp;to_t_date=01%2F11%2F2026">2</a><a class="page_link" href="?page=3&amp;from_t_date=25%2F10%2F2026&amp;to_t_date=01%2F11%2F2026">3</a><a class="page_link" href="?page=4&amp;from_t_date=25%2F10%2F2026&amp;to_t_date=01%2F11%2F2026">4</a><a class="page_link" href="?page=5&amp;from_t_date=25%2F10%2F2026&amp;to_t_date=01%2F11%2F2026">5</a><a class="page_link" href="?page=6&amp;from_t_date=25%2F10%2F2026&amp;to_t_date=01%2F11%2F2026">6</a>...  <a class="page_link" href="?page=15&amp;from_t_date=25%2F10%2F2026&amp;to_t_date=01%2F11%2F2026">15</a><a class="page_link" href="?page=16&amp;from_t_date=25%2F10%2F2026&amp;to_t_date=01%2F11%2F2026">16</a><a class="page_link" href="?page=17&amp;from_t_date=25%2F10%2F2026&amp;to_t_date=01%2F11%2F2026">17</a><a class="page_link" href="?page=18&amp;from_t_date=25%2F10%2F2026&amp;to_t_date=01%2F11%2F2026">18</a><a class="page_link" href="?page=19&amp;from_t_date=25%2F10%2F2026&amp;to_t_date=01%2F11%2F2026">19</a>
+<!-- Next page link -->
+<a class="page_link next" href="?page=2&amp;from_t_date=25%2F10%2F2026&amp;to_t_date=01%2F11%2F2026">ถัดไป</a>
+<!-- Last page link -->
+<a class="page_link last" href="?page=19&amp;from_t_date=25%2F10%2F2026&amp;to_t_date=01%2F11%2F2026">หน้าสุดท้าย</a>
+<select class="set-row-per-page not-decorate">
+<option value="10"> 10 รายการ / หน้า </option>
+<option value="15"> 15 รายการ / หน้า </option>
+<option selected="selected" value="25"> 25 รายการ / หน้า </option>
+<option value="50"> 50 รายการ / หน้า </option>
+<option value="100"> 100 รายการ / หน้า </option>
+<option value="200"> 200 รายการ / หน้า </option>
+<option value="500"> 500 รายการ / หน้า </option>
+<option value="1000"> 1000 รายการ / หน้า </option>
+</select>
+</div>
+<br class="clear"/>
+<div class="content-area table-responsive">
+<table cellpadding="0" cellspacing="0" class="defaultTable" width="100%">
+<thead>
+<tr>
+<th><a class="order-by" href="po.code">รหัส</a></th>
+<th><a class="order-by" href="pr.name">ใบขอสั่งซื้อ (PR)</a></th>
+<th class="align-center"><a class="order-by" href="u.username">ผู้ใช้งาน</a></th>
+<th><a class="order-by" href="u2.username">approver</a></th>
+<th><a class="order-by" href="i.name">คลังสินค้า</a></th>
+<th><a class="order-by" href="d.name">แผนก</a></th>
+<th><a class="order-by" href="v.plate_no">ยานพาหนะ</a></th>
+<th><a class="order-by" href="po.received_status">สถานะการรับสินค้า</a></th>
+<th><a class="order-by" href="po.t_date">วันที่</a></th>
+<th><a class="order-by" href="po.due_date">กำหนดส่งสินค้า</a></th>
+<th><a class="order-by" href="po.total">รวม</a></th>
+<th><a class="order-by" href="s.name">ซัพพลายเออร์</a></th>
+<th><a class="order-by" href="atx.code">ap term</a></th>
+<th><a class="order-by" href="s.related_party_transaction">RPT</a></th>
+<th style="width:210px;"></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>LBPO26100704</td>
+<td>LBPR26100561</td>
+<td class="align-center">user1.t</td>
+<td>user2.t</td>
+<td>คลังลาดกระบัง</td>
+<td>ยานยนต์ (ศลบ)</td>
+<td>99-0000</td>
+<td>ยังไม่ได้รับสินค้า</td>
+<td>25/10/2026</td>
+<td>25/10/2026</td>
+<td>1,100.00</td>
+<td>ซัพพลายเออร์ ตัวอย่าง</td>
+<td>15D</td>
+<td class="align-center"><img src="/assets/js/widget/bootstrap/bootstrap-icons/x-square-fill.svg"/></td>
+<td style="text-align:center;">
+<a class="result-view-link" href="/inv/purchase.order/view/id/157902">แสดง</a>
+<a class="result-edit-link" href="/inv/purchase.order/edit/id/157902">แก้ไข</a>
+<a class="result-save-link" href="/inv/deposit/add/purchase_order_id/157902/inventory_id/4">รับ</a>
+<a class="result-heart-link" href="/inv/purchase.order.item/supplier.evaluation/purchase_order_id/157902/search-toggle-status/hide">ประเมินผู้ส่งมอบ</a>
+</td>
+</tr>
+<tr>
+<td>LBPO26100705</td>
+<td>LBPR26100548</td>
+<td class="align-center">user1.t</td>
+<td>user2.t</td>
+<td>คลังลาดกระบัง</td>
+<td>ยานยนต์ (ศลบ)</td>
+<td>99-0000</td>
+<td>รับสินค้าแล้วทั้งหมด</td>
+<td>25/10/2026</td>
+<td>26/10/2026</td>
+<td>3,852.00</td>
+<td>ซัพพลายเออร์ ตัวอย่าง</td>
+<td>60D</td>
+<td class="align-center"><img src="/assets/js/widget/bootstrap/bootstrap-icons/x-square-fill.svg"/></td>
+<td style="text-align:center;">
+<a class="result-view-link" href="/inv/purchase.order/view/id/157903">แสดง</a>
+<a class="result-edit-link" href="/inv/purchase.order/edit/id/157903">แก้ไข</a>
+<a class="result-heart-link" href="/inv/purchase.order.item/supplier.evaluation/purchase_order_id/157903/search-toggle-status/hide">ประเมินผู้ส่งมอบ</a>
+</td>
+</tr>
+<tr>
+<td>LBPO26100706</td>
+<td>LBPR26100548</td>
+<td class="align-center">user1.t</td>
+<td>user2.t</td>
+<td>คลังลาดกระบัง</td>
+<td>ยานยนต์ (ศลบ)</td>
+<td>99-0000</td>
+<td>รับสินค้าแล้วทั้งหมด</td>
+<td>25/10/2026</td>
+<td>26/10/2026</td>
+<td>6,014.47</td>
+<td>ซัพพลายเออร์ ตัวอย่าง</td>
+<td>60D</td>
+<td class="align-center"><img src="/assets/js/widget/bootstrap/bootstrap-icons/x-square-fill.svg"/></td>
+<td style="text-align:center;">
+<a class="result-view-link" href="/inv/purchase.order/view/id/157904">แสดง</a>
+<a class="result-edit-link" href="/inv/purchase.order/edit/id/157904">แก้ไข</a>
+<a class="result-heart-link" href="/inv/purchase.order.item/supplier.evaluation/purchase_order_id/157904/search-toggle-status/hide">ประเมินผู้ส่งมอบ</a>
+</td>
+</tr>
+<tr>
+<td>LBPO26100707</td>
+<td>LBPR26100222</td>
+<td class="align-center">user1.t</td>
+<td>user2.t</td>
+<td>คลังลาดกระบัง</td>
+<td>ยานยนต์ (ศลบ)</td>
+<td>99-0000</td>
+<td>รับสินค้าแล้วทั้งหมด</td>
+<td>25/10/2026</td>
+<td>25/10/2026</td>
+<td>37,171.10</td>
+<td>ซัพพลายเออร์ ตัวอย่าง</td>
+<td>30D</td>
+<td class="align-center"><img src="/assets/js/widget/bootstrap/bootstrap-icons/x-square-fill.svg"/></td>
+<td style="text-align:center;">
+<a class="result-view-link" href="/inv/purchase.order/view/id/157905">แสดง</a>
+<a class="result-edit-link" href="/inv/purchase.order/edit/id/157905">แก้ไข</a>
+<a class="result-heart-link" href="/inv/purchase.order.item/supplier.evaluation/purchase_order_id/157905/search-toggle-status/hide">ประเมินผู้ส่งมอบ</a>
+</td>
+</tr>
+<tr>
+<td>LBPO26100708</td>
+<td>LBPR26100563</td>
+<td class="align-center">user1.t</td>
+<td>user2.t</td>
+<td>คลังลาดกระบัง</td>
+<td>ยานยนต์ (ศลบ)</td>
+<td>99-0000</td>
+<td>รับสินค้าแล้วทั้งหมด</td>
+<td>25/10/2026</td>
+<td>25/10/2026</td>
+<td>2,568.00</td>
+<td>ซัพพลายเออร์ ตัวอย่าง</td>
+<td>60D</td>
+<td class="align-center"><img src="/assets/js/widget/bootstrap/bootstrap-icons/x-square-fill.svg"/></td>
+<td style="text-align:center;">
+<a class="result-view-link" href="/inv/purchase.order/view/id/157906">แสดง</a>
+<a class="result-edit-link" href="/inv/purchase.order/edit/id/157906">แก้ไข</a>
+<a class="result-heart-link" href="/inv/purchase.order.item/supplier.evaluation/purchase_order_id/157906/search-toggle-status/hide">ประเมินผู้ส่งมอบ</a>
+</td>
+</tr>
+<tr>
+<td>LBPO26100709</td>
+<td>LBPR26100564</td>
+<td class="align-center">user1.t</td>
+<td>user2.t</td>
+<td>คลังลาดกระบัง</td>
+<td>ยานยนต์ (ศลบ)</td>
+<td>99-0000</td>
+<td>รับสินค้าแล้วทั้งหมด</td>
+<td>25/10/2026</td>
+<td>25/10/2026</td>
+<td>4,000.00</td>
+<td>ซัพพลายเออร์ ตัวอย่าง</td>
+<td>30D</td>
+<td class="align-center"><img src="/assets/js/widget/bootstrap/bootstrap-icons/x-square-fill.svg"/></td>
+<td style="text-align:center;">
+<a class="result-view-link" href="/inv/purchase.order/view/id/157907">แสดง</a>
+<a class="result-edit-link" href="/inv/purchase.order/edit/id/157907">แก้ไข</a>
+<a class="result-heart-link" href="/inv/purchase.order.item/supplier.evaluation/purchase_order_id/157907/search-toggle-status/hide">ประเมินผู้ส่งมอบ</a>
+</td>
+</tr>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+</tbody>
+</table> <br class="clear"/>
+</div>
+<!--
+See http://developer.yahoo.com/ypatterns/pattern.php?pattern=itempagination
+-->
+<div class="pagination">
+<span class="page-summary">
+1 - 25 / 456</span>
+<!-- First page link -->
+<span class="first disabled">หน้าแรก</span>
+<!-- Previous page link -->
+<span class="previous disabled">ก่อนหน้า</span>
+<!-- Numbered page links -->
+<span class="current">1</span><a class="page_link" href="?page=2&amp;from_t_date=25%2F10%2F2026&amp;to_t_date=01%2F11%2F2026">2</a><a class="page_link" href="?page=3&amp;from_t_date=25%2F10%2F2026&amp;to_t_date=01%2F11%2F2026">3</a><a class="page_link" href="?page=4&amp;from_t_date=25%2F10%2F2026&amp;to_t_date=01%2F11%2F2026">4</a><a class="page_link" href="?page=5&amp;from_t_date=25%2F10%2F2026&amp;to_t_date=01%2F11%2F2026">5</a><a class="page_link" href="?page=6&amp;from_t_date=25%2F10%2F2026&amp;to_t_date=01%2F11%2F2026">6</a>...  <a class="page_link" href="?page=15&amp;from_t_date=25%2F10%2F2026&amp;to_t_date=01%2F11%2F2026">15</a><a class="page_link" href="?page=16&amp;from_t_date=25%2F10%2F2026&amp;to_t_date=01%2F11%2F2026">16</a><a class="page_link" href="?page=17&amp;from_t_date=25%2F10%2F2026&amp;to_t_date=01%2F11%2F2026">17</a><a class="page_link" href="?page=18&amp;from_t_date=25%2F10%2F2026&amp;to_t_date=01%2F11%2F2026">18</a><a class="page_link" href="?page=19&amp;from_t_date=25%2F10%2F2026&amp;to_t_date=01%2F11%2F2026">19</a>
+<!-- Next page link -->
+<a class="page_link next" href="?page=2&amp;from_t_date=25%2F10%2F2026&amp;to_t_date=01%2F11%2F2026">ถัดไป</a>
+<!-- Last page link -->
+<a class="page_link last" href="?page=19&amp;from_t_date=25%2F10%2F2026&amp;to_t_date=01%2F11%2F2026">หน้าสุดท้าย</a>
+<select class="set-row-per-page not-decorate">
+<option value="10"> 10 รายการ / หน้า </option>
+<option value="15"> 15 รายการ / หน้า </option>
+<option selected="selected" value="25"> 25 รายการ / หน้า </option>
+<option value="50"> 50 รายการ / หน้า </option>
+<option value="100"> 100 รายการ / หน้า </option>
+<option value="200"> 200 รายการ / หน้า </option>
+<option value="500"> 500 รายการ / หน้า </option>
+<option value="1000"> 1000 รายการ / หน้า </option>
+</select>
+</div>
+<br class="clear"/>
+ </div>
+</div>
+<footer>
+<p>© Mena Transport PLC. All Rights Reserved 2026</p>
+</footer> <input id="ROOT_URI" type="hidden" value=""/>
+<input id="page_js" type="hidden" value="inv_purchase_order_index"/>
+<input id="session_lang" type="hidden" value="th"/>
+</div>
+
+</body>

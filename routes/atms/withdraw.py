@@ -1,6 +1,6 @@
 # ======================================================
 # 📄 ATMS — ใบเบิก (WD) / ใบรับคืน  เรียกจาก WMS แบบ server-to-server
-#    GET  /atms/withdraw/options | whoami | list | lookup/{kind} | {gm_id}
+#    GET  /atms/withdraw/options | whoami | list | lookup/{kind} | doc/search | doc/{kind}/{id} | {gm_id}
 #    POST /atms/withdraw/issue | return   (dry_run: true = ไม่ยิง ATMS)
 #    ทุกเส้นต้องมี x-api-key · เส้นเขียนและ whoami ต้องมีบัญชี ATMS ของผู้ใช้ (X-ATMS-Username/Password หรือ X-PHPSESSID)
 #    เส้นอ่าน (options/lookup/list/{gm_id}) ไม่ส่งบัญชี = ใช้ ATMS_USERNAME/ATMS_PASSWORD ของ api-ncac
@@ -13,7 +13,7 @@ import re
 import threading
 import time
 from dataclasses import asdict
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import JSONResponse
@@ -218,6 +218,25 @@ def lookup(kind: str, q: str = Query(""), limit: int = Query(20, ge=1, le=100),
            inventory_id: Optional[int] = None, sku_id: Optional[int] = None,
            c: Creds = Depends(read_creds)):
     return {"results": _run(c, lambda cl: cl.lookup(kind, q, limit, inventory_id, sku_id))}
+
+
+@router.get("/doc/search", dependencies=[Depends(require_api_key)])
+def doc_search(kind: Literal["po", "dd"] = Query(...), q: str = Query(""),
+               inventory_id: Optional[int] = None, limit: int = Query(20, ge=1, le=50),
+               date_from: Optional[str] = Query(None, alias="from", description="DD/MM/YYYY"),
+               date_to: Optional[str] = Query(None, alias="to", description="DD/MM/YYYY"),
+               c: Creds = Depends(read_creds)):
+    """ค้นเลข PO/DD (อ่านอย่างเดียว) · q < 2 ตัว = results [] ไม่ยิง ATMS"""
+    _check_date(date_from)
+    _check_date(date_to)
+    if len(q.strip()) < 2:
+        return {"results": []}
+    return {"results": _run(c, lambda cl: cl.search_docs(kind, q, inventory_id, limit, date_from, date_to))}
+
+
+@router.get("/doc/{kind}/{doc_id}", dependencies=[Depends(require_api_key)])
+def doc_view(kind: Literal["po", "dd"], doc_id: int, c: Creds = Depends(read_creds)):
+    return _run(c, lambda cl: cl.get_doc(kind, doc_id))
 
 
 # ── write ───────────────────────────────────────────────────────────────────
