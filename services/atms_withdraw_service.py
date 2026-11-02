@@ -50,6 +50,7 @@ PO_INDEX_URL = f"{BASE}/inv/purchase.order/index/"
 PO_VIEW_URL = f"{BASE}/inv/purchase.order/view/id/"
 PR_INDEX_URL = f"{BASE}/inv/purchase.request/index"
 PR_VIEW_URL = f"{BASE}/inv/purchase.request/view/id/"
+MR_INDEX_URL = f"{BASE}/veh/maintenance.request/index"
 
 # ATMS เก็บ row-per-page ไว้ฝั่งเซิร์ฟเวอร์ต่อผู้ใช้ และไม่มีหน้าให้อ่านค่าปัจจุบัน
 # → คืนเป็นค่า default ของระบบ (เหมือน pipeline_atms_supplier.py)
@@ -68,6 +69,21 @@ _ROW_ID = re.compile(r"/inv/withdraw/(?:view|edit)/id/(\d+)")
 _DD_ROW_ID = re.compile(r"/inv/deposit/(?:view|edit)/id/(\d+)")
 _PO_ROW_ID = re.compile(r"/inv/purchase\.order/(?:view|edit)/id/(\d+)")
 _PR_ROW_ID = re.compile(r"/inv/purchase\.request/(?:view|edit)/id/(\d+)")
+_MR_ROW_ID = re.compile(r"/veh/maintenance\.request/view/id/(\d+)")
+# MR: หัวคอลัมน์หน้า list (ยืนยันกับหน้าจริงแล้ว 2/11/2026)
+_MR_COLS = {
+    "code": lambda h: h == "เลขที่แจ้งซ่อม",
+    "step": lambda h: h == "ขั้นตอน",
+    "branch": lambda h: h == "สาขา",
+    "project": lambda h: h == "โปรเจค",
+    "vehicle_no": lambda h: h == "เลขรถ",
+    "plate": lambda h: h == "ยานพาหนะ",
+    "driver": lambda h: h == "พจส.",
+    "mechanic": lambda h: h.lower() == "mechanic",
+    "date": lambda h: h == "แจ้งซ่อม",
+}
+MR_SEARCH_LIMIT_DEFAULT = 5
+MR_SEARCH_LIMIT_MAX = 20
 _NUM = re.compile(r"-?\d[\d,]*\.?\d*")
 _REDIRECTS = (301, 302, 303, 307, 308)
 _LOC_ID = re.compile(r"/id/(\d+)")
@@ -545,6 +561,52 @@ class AtmsWithdrawClient(AtmsClient):
             })
         out.sort(key=lambda r: r["id"], reverse=True)
         return out[:max(1, int(limit))]
+
+    def search_mrs(self, q: str, limit: int = MR_SEARCH_LIMIT_DEFAULT) -> list[dict]:
+        """
+        ค้นใบแจ้งซ่อม (MR) จากทะเบียน/เลขรถ — อ่านอย่างเดียว · q < 2 ตัว = [] ไม่ยิง ATMS
+        ยิง 2 GET (plate_no, vehicle_no) หน่วงตาม pace · ATMS กรอง substring เอง · รวม+ตัดซ้ำด้วย id · ใหม่สุดก่อน
+        ไม่แตะ rows-per-page (หน้าละ 25 แถวพอสำหรับ 5 ใบล่าสุด)
+        """
+        q = _s(q).strip()
+        if len(q) < DOC_QUERY_MIN:
+            return []
+        limit = max(1, min(int(limit or MR_SEARCH_LIMIT_DEFAULT), MR_SEARCH_LIMIT_MAX))
+        found: dict[int, dict] = {}
+        for key in ("plate_no", "vehicle_no"):
+            soup = self._get_soup(MR_INDEX_URL, {key: q, "order_by": "mr.id desc", "submit": "ค้นหา"})
+            for row in self._mr_rows(soup):
+                found.setdefault(row["id"], row)
+        return sorted(found.values(), key=lambda r: r["id"], reverse=True)[:limit]
+
+    @staticmethod
+    def _mr_rows(soup: BeautifulSoup) -> list[dict]:
+        table = soup.find("table", class_="defaultTable")
+        if table is None:
+            tables = soup.find_all("table")
+            table = max(tables, key=lambda t: len(t.find_all("tr")), default=None)
+        if table is None or table.find("tr") is None:
+            return []
+        heads = [c.get_text(" ", strip=True) for c in table.find("tr").find_all(["th", "td"])]
+        cols = {k: next((i for i, h in enumerate(heads) if m(h)), None) for k, m in _MR_COLS.items()}
+        out: list[dict] = []
+        for tr in table.find_all("tr")[1:]:
+            m = next((_MR_ROW_ID.search(a["href"]) for a in tr.find_all("a", href=True)
+                      if _MR_ROW_ID.search(a["href"])), None)
+            if not m:
+                continue
+            cells = [c.get_text(" ", strip=True) for c in tr.find_all(["th", "td"])]
+
+            def cell(key: str) -> str:
+                i = cols.get(key)
+                return cells[i] if i is not None and i < len(cells) else ""
+            out.append({
+                "id": int(m.group(1)), "code": cell("code"), "date": cell("date")[:10],
+                "plate": cell("plate"), "vehicle_no": cell("vehicle_no"), "step": cell("step"),
+                "branch": cell("branch"), "project": cell("project"),
+                "driver": cell("driver"), "mechanic": cell("mechanic"),
+            })
+        return out
 
     def _search_pr(self, q: str, inventory_id: int | None, limit: int,
                    date_from: str | None, date_to: str | None) -> list[dict]:

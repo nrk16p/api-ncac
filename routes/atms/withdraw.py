@@ -1,6 +1,6 @@
 # ======================================================
 # 📄 ATMS — ใบเบิก (WD) / ใบรับคืน  เรียกจาก WMS แบบ server-to-server
-#    GET  /atms/withdraw/options | whoami | list | lookup/{kind} | doc/search | doc/{kind}/{id} | {gm_id}
+#    GET  /atms/withdraw/options | whoami | list | lookup/{kind} | doc/search | mr/search | doc/{kind}/{id} | {gm_id}
 #    POST /atms/withdraw/issue | return   (dry_run: true = ไม่ยิง ATMS)
 #    ทุกเส้นต้องมี x-api-key · เส้นเขียนและ whoami ต้องมีบัญชี ATMS ของผู้ใช้ (X-ATMS-Username/Password หรือ X-PHPSESSID)
 #    เส้นอ่าน (options/lookup/list/{gm_id}) ไม่ส่งบัญชี = ใช้ ATMS_USERNAME/ATMS_PASSWORD ของ api-ncac
@@ -234,6 +234,16 @@ def doc_search(kind: Literal["po", "dd", "pr"] = Query(...), q: str = Query(""),
     # pr: ค่าเริ่มต้น 5 เพดาน 20 · po/dd: ค่าเริ่มต้น 20
     limit = min(limit or 5, 20) if kind == "pr" else (limit or 20)
     return {"results": _run(c, lambda cl: cl.search_docs(kind, q, inventory_id, limit, date_from, date_to))}
+
+
+@router.get("/mr/search", dependencies=[Depends(require_api_key)])
+def mr_search(q: str = Query(""), limit: int = Query(5, ge=1), c: Creds = Depends(read_creds)):
+    """ค้นใบแจ้งซ่อม MR จากทะเบียน/เลขรถ (อ่านอย่างเดียว) · q < 2 ตัว = results [] ไม่ยิง ATMS · limit เพดาน 20"""
+    q = q.strip()
+    if len(q) < 2:
+        return {"results": []}
+    limit = min(limit, 20)
+    return {"results": _run(c, lambda cl: cl.search_mrs(q, limit))}
 
 
 @router.get("/doc/{kind}/{doc_id}", dependencies=[Depends(require_api_key)])

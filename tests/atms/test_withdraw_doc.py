@@ -189,7 +189,7 @@ def client():
 
 
 class Fake:
-    made, behaviour, searches = [], "ok", []
+    made, behaviour, searches, mr_searches = [], "ok", [], []
 
     def __init__(self, **kw):
         self.kw = kw
@@ -198,6 +198,10 @@ class Fake:
     def search_docs(self, kind, q, inventory_id=None, limit=20, date_from=None, date_to=None):
         Fake.searches.append((kind, q, inventory_id, limit, date_from, date_to))
         return [{"id": 1, "code": "X", "kind": kind}]
+
+    def search_mrs(self, q, limit):
+        Fake.mr_searches.append((q, limit))
+        return [{"id": 5}]
 
     def get_doc(self, kind, doc_id):
         if Fake.behaviour == "404":
@@ -210,7 +214,7 @@ class Fake:
 
 @pytest.fixture
 def fake(monkeypatch):
-    Fake.made, Fake.behaviour, Fake.searches = [], "ok", []
+    Fake.made, Fake.behaviour, Fake.searches, Fake.mr_searches = [], "ok", [], []
     monkeypatch.setattr(w, "AtmsWithdrawClient", Fake)
     return Fake
 
@@ -364,3 +368,42 @@ def test_pr_route_default_and_cap_limit(client, fake, monkeypatch):
     assert client.get("/atms/withdraw/doc/search?kind=pr&q=กข1234&limit=50", headers=KEY).status_code == 200
     assert client.get("/atms/withdraw/doc/pr/901", headers=KEY).status_code == 200
     assert [s[3] for s in fake.searches] == [5, 20]
+
+
+# ── MR search (ใบแจ้งซ่อม) ──────────────────────────────────────────────────
+def test_search_mrs_parses_by_header_and_skips_rows_without_link():
+    c = make({"/veh/maintenance.request/index": "mr_index.html"})
+    rows = c.search_mrs("71-0626")
+    assert rows[0] == {"id": 90231, "code": "LBMR26110012", "date": "01/11/2026", "plate": "สบ.71-0626",
+                       "vehicle_no": "T-0031", "step": "รอซ่อม", "branch": "ลาดกระบัง",
+                       "project": "โปรเจค ตัวอย่าง", "driver": "สมชาย ทดสอบ", "mechanic": "ช่าง ตัวอย่าง"}
+    assert [r["id"] for r in rows] == [90231, 90100]        # แถวไม่มีลิงก์ถูกข้าม · ใหม่สุดก่อน
+    g = gets(c)
+    assert len(g) == 2 and all(m == "GET" for m, _, _ in g)
+    assert g[0][2]["plate_no"] == "71-0626" and g[1][2]["vehicle_no"] == "71-0626"
+    assert all(p["order_by"] == "mr.id desc" for _, _, p in g)
+    assert not any("set.row.per.page" in x[1] for x in c._sess.calls)
+
+
+def test_search_mrs_dedupes_across_both_queries_and_limits():
+    c = make({"/veh/maintenance.request/index": "mr_index.html"})
+    assert len(c.search_mrs("T-0031", limit=10)) == 2        # สองคำค้นคืนชุดเดียวกัน = ไม่ซ้ำ
+    assert [r["id"] for r in c.search_mrs("T-0031", limit=1)] == [90231]
+
+
+def test_search_mrs_short_q_makes_no_call():
+    c = make({})
+    assert c.search_mrs("a") == [] and c.search_mrs("  b ") == []
+    assert c._sess.calls == []
+
+
+def test_mr_search_route(client, fake, monkeypatch):
+    monkeypatch.setenv("ATMS_USERNAME", "u")
+    monkeypatch.setenv("ATMS_PASSWORD", "p")
+    assert client.get("/atms/withdraw/mr/search?q=71-0626").status_code == 403
+    assert client.get("/atms/withdraw/mr/search?q=a", headers=KEY).json() == {"results": []}
+    assert fake.mr_searches == []
+    assert client.get("/atms/withdraw/mr/search?q=%20T-0031%20", headers=KEY).json() == {"results": [{"id": 5}]}
+    client.get("/atms/withdraw/mr/search?q=T-0031&limit=99", headers=KEY)
+    assert fake.mr_searches == [("T-0031", 5), ("T-0031", 20)]
+    assert client.get("/atms/withdraw/mr/search?q=T-0031&limit=0", headers=KEY).status_code == 422

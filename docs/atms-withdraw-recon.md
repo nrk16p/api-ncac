@@ -63,3 +63,9 @@ label: ผู้ใช้งาน · อีเมล์ · ชื่อ · โ�
 - ระบุรถจาก **หมายเหตุ** เท่านั้น: เทียบแบบ lowercase + ตัดช่องว่าง - . / ทั้งสองฝั่ง (ไม่ใช้ filter `remark` ของ ATMS เพราะเทียบตรงตัว) · คืน `remark` ดิบให้ผู้ขอตรวจ · เรียงใหม่สุด · limit เริ่มต้น 5 เพดาน 20
 - ถ้าหน้า list ไม่มีคอลัมน์ `หมายเหตุ` จะเปิดหน้า view ทีละใบ (ใหม่→เก่า) หยุดเมื่อครบ limit หรือครบ 40 GET ต่อการค้นหนึ่งครั้ง เว้น 3 วินาทีต่อ GET
 - view: `GET /inv/purchase.request/view/id/<id>` · ตาราง `defaultTable` โครงเดียวกับ PO แต่ไม่มี รับ/ค้างรับ → `received=0`, `remaining=amount` · `is_labour` = กลุ่มสินค้าขึ้นต้น ค่าแรง
+
+## MR (ใบแจ้งซ่อม) — เพิ่ม 2/11/2026, `GET /atms/withdraw/mr/search?q=&limit=5`
+ยืนยันโครงหน้ากับ ATMS จริงแล้ว (อ่านอย่างเดียว) fixture `mr_index.html` เป็นของสังเคราะห์ ชื่อคนเป็นชื่อสมมติ
+- list: `GET /veh/maintenance.request/index?plate_no=|vehicle_no=&order_by=mr.id desc&submit=ค้นหา` · `table.defaultTable` · แมปคอลัมน์จากข้อความหัว: เลขที่แจ้งซ่อม · ขั้นตอน · สาขา · โปรเจค · เลขรถ · ยานพาหนะ (= ทะเบียน) · พจส. · Mechanic · แจ้งซ่อม (DD/MM/YYYY HH:MM, คืนแค่วันที่) · id จากลิงก์ `/veh/maintenance.request/view/id/<id>` แถวไม่มีลิงก์ถูกข้าม
+- ยิง 2 GET (plate_no แล้ว vehicle_no) หน่วงตาม pace · ATMS กรอง substring เอง (`71-0626` ตรง `สบ.71-0626`) · รวม ตัดซ้ำด้วย id เรียง id มาก→น้อย · ไม่แตะ rows-per-page (หน้าละ 25 พอสำหรับ 5 ใบล่าสุด)
+- q ต้องยาว 2 ตัวขึ้นไปหลัง trim ไม่งั้น `results: []` โดยไม่ยิง ATMS · limit เริ่มต้น 5 เพดาน 20 (limit < 1 = 422) · auth เหมือน doc/search
