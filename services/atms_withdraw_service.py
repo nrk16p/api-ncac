@@ -51,6 +51,7 @@ PO_VIEW_URL = f"{BASE}/inv/purchase.order/view/id/"
 PR_INDEX_URL = f"{BASE}/inv/purchase.request/index"
 PR_VIEW_URL = f"{BASE}/inv/purchase.request/view/id/"
 MR_INDEX_URL = f"{BASE}/veh/maintenance.request/index"
+MR_VIEW_URL = f"{BASE}/veh/maintenance.request/view/id/"
 
 # ATMS เก็บ row-per-page ไว้ฝั่งเซิร์ฟเวอร์ต่อผู้ใช้ และไม่มีหน้าให้อ่านค่าปัจจุบัน
 # → คืนเป็นค่า default ของระบบ (เหมือน pipeline_atms_supplier.py)
@@ -84,6 +85,9 @@ _MR_COLS = {
 }
 MR_SEARCH_LIMIT_DEFAULT = 5
 MR_SEARCH_LIMIT_MAX = 20
+MR_VIEW_FETCH_MAX = 5         # เพดาน GET หน้า view ต่อการค้นหนึ่งครั้ง (อ่านหมายเหตุ) ไม่ว่า limit เท่าไร
+MR_DETAIL_CHARS = 120         # รายละเอียดต่อรายการ
+MR_REMARK_CHARS = 300         # หมายเหตุรวม
 _NUM = re.compile(r"-?\d[\d,]*\.?\d*")
 _REDIRECTS = (301, 302, 303, 307, 308)
 _LOC_ID = re.compile(r"/id/(\d+)")
@@ -567,6 +571,7 @@ class AtmsWithdrawClient(AtmsClient):
         ค้นใบแจ้งซ่อม (MR) จากทะเบียน/เลขรถ — อ่านอย่างเดียว · q < 2 ตัว = [] ไม่ยิง ATMS
         ยิง 2 GET (plate_no, vehicle_no) หน่วงตาม pace · ATMS กรอง substring เอง · รวม+ตัดซ้ำด้วย id · ใหม่สุดก่อน
         ไม่แตะ rows-per-page (หน้าละ 25 แถวพอสำหรับ 5 ใบล่าสุด)
+        หลังเลือกผลแล้ว GET หน้า view ทีละใบ (สูงสุด MR_VIEW_FETCH_MAX) เพื่อสร้าง remark + items
         """
         q = _s(q).strip()
         if len(q) < DOC_QUERY_MIN:
@@ -577,7 +582,47 @@ class AtmsWithdrawClient(AtmsClient):
             soup = self._get_soup(MR_INDEX_URL, {key: q, "order_by": "mr.id desc", "submit": "ค้นหา"})
             for row in self._mr_rows(soup):
                 found.setdefault(row["id"], row)
-        return sorted(found.values(), key=lambda r: r["id"], reverse=True)[:limit]
+        out = sorted(found.values(), key=lambda r: r["id"], reverse=True)[:limit]
+        for n, r in enumerate(out):
+            r["remark"], r["items"] = "", []
+            if n >= MR_VIEW_FETCH_MAX:
+                continue
+            if n and self.pace > 0:
+                time.sleep(max(0.0, PR_DETAIL_PACE - self.pace))
+            try:
+                r["items"] = self._mr_items(self._get_soup(f"{MR_VIEW_URL}{r['id']}"))
+            except Exception:       # หน้า view ใบเดียวพัง ห้ามทำให้การค้นล้ม
+                continue
+            r["remark"] = self._mr_remark(r["items"])
+        return out
+
+    @staticmethod
+    def _mr_items(soup: BeautifulSoup) -> list[dict]:
+        """รายการซ่อมจากหน้า view: จับคอลัมน์จากข้อความหัว (ประเภทการซ่อม / รายละเอียด)"""
+        for table in soup.find_all("table"):
+            rows = table.find_all("tr")
+            if not rows:
+                continue
+            heads = [re.sub(r"\s+", " ", c.get_text(" ", strip=True)) for c in rows[0].find_all(["th", "td"])]
+            ti = next((i for i, h in enumerate(heads) if "ประเภทการซ่อม" in h), None)
+            di = next((i for i, h in enumerate(heads) if "รายละเอียด" in h), None)
+            if ti is None or di is None:
+                continue
+            items = []
+            for tr in rows[1:]:
+                cells = [re.sub(r"\s+", " ", c.get_text(" ", strip=True)).strip() for c in tr.find_all(["th", "td"])]
+                if max(ti, di) >= len(cells):
+                    continue
+                typ, detail = cells[ti], cells[di][:MR_DETAIL_CHARS].strip()
+                if typ or detail:
+                    items.append({"type": typ, "detail": detail})
+            return items
+        return []
+
+    @staticmethod
+    def _mr_remark(items: list[dict]) -> str:
+        text = " · ".join(f"{i['type']}: {i['detail']}" if i["detail"] else i["type"] for i in items)
+        return text[:MR_REMARK_CHARS].strip()
 
     @staticmethod
     def _mr_rows(soup: BeautifulSoup) -> list[dict]:

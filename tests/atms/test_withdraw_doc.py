@@ -376,9 +376,10 @@ def test_search_mrs_parses_by_header_and_skips_rows_without_link():
     rows = c.search_mrs("71-0626")
     assert rows[0] == {"id": 90231, "code": "LBMR26110012", "date": "01/11/2026", "plate": "สบ.71-0626",
                        "vehicle_no": "T-0031", "step": "รอซ่อม", "branch": "ลาดกระบัง",
-                       "project": "โปรเจค ตัวอย่าง", "driver": "สมชาย ทดสอบ", "mechanic": "ช่าง ตัวอย่าง"}
+                       "project": "โปรเจค ตัวอย่าง", "driver": "สมชาย ทดสอบ", "mechanic": "ช่าง ตัวอย่าง",
+                       "remark": "", "items": []}      # ไม่มีหน้า view ใน pages = remark ว่าง ไม่ล้ม
     assert [r["id"] for r in rows] == [90231, 90100]        # แถวไม่มีลิงก์ถูกข้าม · ใหม่สุดก่อน
-    g = gets(c)
+    g = [x for x in gets(c) if "/index" in x[1]]
     assert len(g) == 2 and all(m == "GET" for m, _, _ in g)
     assert g[0][2]["plate_no"] == "71-0626" and g[1][2]["vehicle_no"] == "71-0626"
     assert all(p["order_by"] == "mr.id desc" for _, _, p in g)
@@ -389,6 +390,44 @@ def test_search_mrs_dedupes_across_both_queries_and_limits():
     c = make({"/veh/maintenance.request/index": "mr_index.html"})
     assert len(c.search_mrs("T-0031", limit=10)) == 2        # สองคำค้นคืนชุดเดียวกัน = ไม่ซ้ำ
     assert [r["id"] for r in c.search_mrs("T-0031", limit=1)] == [90231]
+
+
+def test_search_mrs_adds_remark_and_items_from_view_page():
+    c = make({"/veh/maintenance.request/index": "mr_index.html",
+              "/veh/maintenance.request/view/id/90231": "mr_view.html"})
+    rows = c.search_mrs("71-0626")
+    first, second = rows
+    assert [i["type"] for i in first["items"]] == ["อู่ใน-CM-ระบบเครื่องยนต์", "อู่ใน-PM-ระบบไฟ", "อู่นอก-CM-ช่วงล่าง"]
+    assert first["items"][0]["detail"] == "ปัญหา ความร้อนขึ้น ( * เปลี่ยนท่อยางหม้อน้ำ ตรวจระบบระบายความร้อนทั้งชุด )"
+    assert first["items"][1]["detail"] == "ไฟท้ายซ้ายไม่ติด"
+    assert 100 < len(first["items"][2]["detail"]) <= 120
+    assert first["remark"].startswith("อู่ใน-CM-ระบบเครื่องยนต์: ปัญหา ความร้อนขึ้น") and " · อู่ใน-PM-ระบบไฟ: ไฟท้ายซ้ายไม่ติด · " in first["remark"]
+    assert len(first["remark"]) <= 300
+    assert second["remark"] == "" and second["items"] == []     # view ใบที่สอง 404 → ว่าง ไม่ทำให้ค้นล้ม
+    views = [x for x in gets(c) if "/view/id/" in x[1]]
+    assert len(views) == 2 and all(m == "GET" for m, _, _ in views)
+
+
+def test_search_mrs_view_fetches_capped_at_five():
+    page = (FIX / "mr_index.html").read_text(encoding="utf-8")
+    base = page.split('<tr><td><a href="/veh/maintenance.request/view/id/90231"')[0]
+    rows = "".join(f'<tr><td><a href="/veh/maintenance.request/view/id/{9000 + i}">MR{i}</a></td>'
+                   f'<td>x</td><td>b</td><td>p</td><td>T-1</td><td>กข1</td><td></td><td>d</td><td>m</td><td>01/11/2026 08:00</td><td></td></tr>'
+                   for i in range(12))
+    c = make({})
+    html = base + rows + "</table></body></html>"
+    c._sess.pages = {"/veh/maintenance.request/index": None}
+
+    def req(method, url, **kw):
+        c._sess.calls.append((method, url, kw.get("params")))
+        if "/index" in url:
+            return Resp(200, html)
+        return Resp(200, (FIX / "mr_view.html").read_text(encoding="utf-8"))
+    c._sess.request = req
+    out = c.search_mrs("กข1", limit=20)
+    assert len(out) == 12
+    assert len([x for x in c._sess.calls if "/view/id/" in x[1]]) == 5
+    assert all(r["remark"] for r in out[:5]) and all(r["remark"] == "" for r in out[5:])
 
 
 def test_search_mrs_short_q_makes_no_call():
