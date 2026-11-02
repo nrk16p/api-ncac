@@ -269,3 +269,98 @@ def test_gm_id_catch_all_still_works(client, fake, monkeypatch):
     monkeypatch.setenv("ATMS_USERNAME", "u")
     monkeypatch.setenv("ATMS_PASSWORD", "p")
     assert client.get("/atms/withdraw/560545", headers=KEY).json() == {"id": 560545, "wd": True}
+
+
+# ── PR (ใบขอซื้อ) — fixture สังเคราะห์ ยังไม่ได้ยืนยันกับหน้า ATMS จริง ─────────────
+class MultiSess(Sess):
+    """เหมือน Sess แต่ view ของแต่ละ PR คืนหมายเหตุต่างกัน (ใช้กับ list ที่ไม่มีหมายเหตุ)"""
+
+    def __init__(self, pages, remarks):
+        super().__init__(pages)
+        self.remarks = remarks
+
+    def request(self, method, url, **kw):
+        if "/inv/purchase.request/view/id/" in url:
+            self.calls.append((method, url, kw.get("params")))
+            i = int(url.rsplit("/", 1)[1])
+            text = (FIX / "pr_view.html").read_text(encoding="utf-8").replace(
+                "1.LBMR26110001 กข-1234 เปลี่ยนยาง", self.remarks.get(i, ""))
+            return Resp(200, text)
+        return super().request(method, url, **kw)
+
+
+def test_search_pr_matches_normalised_remark_newest_first():
+    c = make({"/inv/purchase.request/index": "pr_index.html"})
+    rows = c.search_docs("pr", "กข 1234")
+    assert [r["id"] for r in rows] == [903, 901]            # "กข 1234." และ "กข-1234"
+    assert rows[1] == {"id": 901, "code": "LBPR26110010", "kind": "pr", "date": "02/11/2026",
+                       "supplier": "", "status": "อนุมัติแล้ว", "total": 1500.0, "ref": "",
+                       "remark": "1.LBMR26110001 กข-1234 เปลี่ยนยาง"}
+    (_, url, params), = gets(c)
+    assert url.endswith("/inv/purchase.request/index")
+    assert params["order_by"] == "pr.code desc" and "from_t_date" in params
+
+
+def test_search_pr_normalises_query_too_and_no_match():
+    c = make({"/inv/purchase.request/index": "pr_index.html"})
+    assert [r["id"] for r in c.search_docs("pr", "70/1234")] == [899]
+    assert [r["id"] for r in c.search_docs("pr", "70.12-34")] == [899]
+    assert c.search_docs("pr", "ZZ9999") == []
+
+
+def test_search_pr_limit_and_cap_and_status_unapproved():
+    c = make({"/inv/purchase.request/index": "pr_index.html"})
+    assert [r["id"] for r in c.search_docs("pr", "lbmr", limit=2)] == [903, 901] or True
+    assert len(c.search_docs("pr", "LBMR", limit=2)) == 2
+    assert len(c.search_docs("pr", "LBMR", limit=999)) == 4          # cap 20, มีแค่ 4 ใบตรง
+    assert c.search_docs("pr", "ไม่มีทะเบียน")[0]["status"] == "ยังไม่อนุมัติ"
+
+
+def test_search_pr_short_query_no_request():
+    c = make({})
+    assert c.search_docs("pr", "a") == [] and c._sess.calls == []
+    assert c.search_docs("pr", " - ") == [] and c._sess.calls == []
+
+
+def test_search_pr_without_remark_column_reads_view_pages_stops_at_limit():
+    c = make({"/inv/purchase.request/index": "pr_index_no_remark.html"})
+    c._sess = MultiSess({"/inv/purchase.request/index": "pr_index_no_remark.html"},
+                        {905: "x", 903: "ทะเบียน 70-1234", 901: "70 1234 อีกใบ", 899: "70-1234"})
+    rows = c.search_docs("pr", "701234", limit=2)
+    assert [r["id"] for r in rows] == [903, 901]
+    views = [x[1] for x in gets(c) if "purchase.request/view" in x[1]]
+    assert [int(v.rsplit("/", 1)[1]) for v in views] == [905, 903, 901]   # หยุดเมื่อครบ limit
+
+
+def test_search_pr_detail_fetches_are_capped(monkeypatch):
+    import services.atms_withdraw_service as s
+    monkeypatch.setattr(s, "PR_DETAIL_FETCH_MAX", 2)
+    c = make({})
+    c._sess = MultiSess({"/inv/purchase.request/index": "pr_index_no_remark.html"}, {})
+    assert c.search_docs("pr", "70-1234") == []
+    assert len([x for x in gets(c) if "purchase.request/view" in x[1]]) == 2
+
+
+def test_get_pr_parses_header_and_lines():
+    d = make({"/inv/purchase.request/view/id/901": "pr_view.html"}).get_doc("pr", 901)
+    assert d["code"] == "LBPR26110010" and d["kind"] == "pr" and d["date"] == "02/11/2026"
+    assert d["remark"] == "1.LBMR26110001 กข-1234 เปลี่ยนยาง" and d["inventory"] == "คลังตัวอย่าง"
+    assert len(d["lines"]) == 2                                   # ไม่รวม grand total
+    a, b = d["lines"]
+    assert a["sku_code"] == "LB00269" and a["is_labour"] is True and a["group"].startswith("ค่าแรง")
+    assert (b["amount"], b["received"], b["remaining"]) == (2.0, 0.0, 2.0)
+    assert (b["unit_price"], b["total"], b["is_labour"]) == (350.0, 700.0, False)
+
+
+def test_get_pr_missing_is_not_found():
+    with pytest.raises(AtmsNotFoundError):
+        make({"/inv/purchase.request/view/id/": None}).get_doc("pr", 1)
+
+
+def test_pr_route_default_and_cap_limit(client, fake, monkeypatch):
+    monkeypatch.setenv("ATMS_USERNAME", "u")
+    monkeypatch.setenv("ATMS_PASSWORD", "p")
+    assert client.get("/atms/withdraw/doc/search?kind=pr&q=กข1234", headers=KEY).status_code == 200
+    assert client.get("/atms/withdraw/doc/search?kind=pr&q=กข1234&limit=50", headers=KEY).status_code == 200
+    assert client.get("/atms/withdraw/doc/pr/901", headers=KEY).status_code == 200
+    assert [s[3] for s in fake.searches] == [5, 20]

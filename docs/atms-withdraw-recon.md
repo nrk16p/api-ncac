@@ -56,3 +56,10 @@ label: ผู้ใช้งาน · อีเมล์ · ชื่อ · โ�
 ใช้ค่าเดิมเป็นค่าเริ่มต้น: `WMS_BASE` ไม่ตั้ง = https://mena-wms.vercel.app · `WMS_STORE_WITHDRAW_KEY` ไม่ตั้ง = `PIPELINE_API_KEY`
 · เส้นอ่าน (options/lookup/list/{gm_id}) ไม่ส่งบัญชี = ใช้ `ATMS_USERNAME`/`ATMS_PASSWORD` ของ api-ncac · เส้นเขียน + whoami ต้องมีบัญชีผู้ใช้เสมอ
 · รัน uvicorn แบบ worker เดียว (ล็อกต่อผู้ใช้อยู่ใน process)
+
+## PR (ใบขอซื้อ) — เพิ่ม 2/11/2026, kind=pr ใน doc/search และ doc/pr/{id}
+⚠️ ยังไม่ได้ยืนยันกับ ATMS จริง (ไม่มีสิทธิ์เปิดหน้าจากเครื่องที่เขียนโค้ด) fixture `pr_index*.html` / `pr_view.html` เป็นของสังเคราะห์ตามโครงหน้า PO + คอลัมน์ที่ pipeline procurement เก็บ
+- list: `GET /inv/purchase.request/index?from_t_date=&to_t_date=&inventory_id=&order_by=pr.code desc` (ค่าเริ่มต้นย้อน 180 วัน, 1 หน้า 1000 แถว, ตั้ง/คืน rows-per-page เหมือน PO/DD) · คอลัมน์ `ใบขอสั่งซื้อ (PR)` · `วันที่` · `รวม` · `is approved` (ไอคอน)
+- ระบุรถจาก **หมายเหตุ** เท่านั้น: เทียบแบบ lowercase + ตัดช่องว่าง - . / ทั้งสองฝั่ง (ไม่ใช้ filter `remark` ของ ATMS เพราะเทียบตรงตัว) · คืน `remark` ดิบให้ผู้ขอตรวจ · เรียงใหม่สุด · limit เริ่มต้น 5 เพดาน 20
+- ถ้าหน้า list ไม่มีคอลัมน์ `หมายเหตุ` จะเปิดหน้า view ทีละใบ (ใหม่→เก่า) หยุดเมื่อครบ limit หรือครบ 40 GET ต่อการค้นหนึ่งครั้ง เว้น 3 วินาทีต่อ GET
+- view: `GET /inv/purchase.request/view/id/<id>` · ตาราง `defaultTable` โครงเดียวกับ PO แต่ไม่มี รับ/ค้างรับ → `received=0`, `remaining=amount` · `is_labour` = กลุ่มสินค้าขึ้นต้น ค่าแรง

@@ -221,8 +221,8 @@ def lookup(kind: str, q: str = Query(""), limit: int = Query(20, ge=1, le=100),
 
 
 @router.get("/doc/search", dependencies=[Depends(require_api_key)])
-def doc_search(kind: Literal["po", "dd"] = Query(...), q: str = Query(""),
-               inventory_id: Optional[int] = None, limit: int = Query(20, ge=1, le=50),
+def doc_search(kind: Literal["po", "dd", "pr"] = Query(...), q: str = Query(""),
+               inventory_id: Optional[int] = None, limit: Optional[int] = Query(None, ge=1, le=50),
                date_from: Optional[str] = Query(None, alias="from", description="DD/MM/YYYY"),
                date_to: Optional[str] = Query(None, alias="to", description="DD/MM/YYYY"),
                c: Creds = Depends(read_creds)):
@@ -231,11 +231,13 @@ def doc_search(kind: Literal["po", "dd"] = Query(...), q: str = Query(""),
     _check_date(date_to)
     if len(q.strip()) < 2:
         return {"results": []}
+    # pr: ค่าเริ่มต้น 5 เพดาน 20 · po/dd: ค่าเริ่มต้น 20
+    limit = min(limit or 5, 20) if kind == "pr" else (limit or 20)
     return {"results": _run(c, lambda cl: cl.search_docs(kind, q, inventory_id, limit, date_from, date_to))}
 
 
 @router.get("/doc/{kind}/{doc_id}", dependencies=[Depends(require_api_key)])
-def doc_view(kind: Literal["po", "dd"], doc_id: int, c: Creds = Depends(read_creds)):
+def doc_view(kind: Literal["po", "dd", "pr"], doc_id: int, c: Creds = Depends(read_creds)):
     return _run(c, lambda cl: cl.get_doc(kind, doc_id))
 
 

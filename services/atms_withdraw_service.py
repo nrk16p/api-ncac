@@ -48,6 +48,8 @@ DD_VIEW_URL = f"{BASE}/inv/deposit/view/id/"
 DD_APPROVE_URL = f"{BASE}/inv/deposit/approve/id/"
 PO_INDEX_URL = f"{BASE}/inv/purchase.order/index/"
 PO_VIEW_URL = f"{BASE}/inv/purchase.order/view/id/"
+PR_INDEX_URL = f"{BASE}/inv/purchase.request/index"
+PR_VIEW_URL = f"{BASE}/inv/purchase.request/view/id/"
 
 # ATMS เก็บ row-per-page ไว้ฝั่งเซิร์ฟเวอร์ต่อผู้ใช้ และไม่มีหน้าให้อ่านค่าปัจจุบัน
 # → คืนเป็นค่า default ของระบบ (เหมือน pipeline_atms_supplier.py)
@@ -65,6 +67,7 @@ LOGIN_PATH = "account/user/login"
 _ROW_ID = re.compile(r"/inv/withdraw/(?:view|edit)/id/(\d+)")
 _DD_ROW_ID = re.compile(r"/inv/deposit/(?:view|edit)/id/(\d+)")
 _PO_ROW_ID = re.compile(r"/inv/purchase\.order/(?:view|edit)/id/(\d+)")
+_PR_ROW_ID = re.compile(r"/inv/purchase\.request/(?:view|edit)/id/(\d+)")
 _NUM = re.compile(r"-?\d[\d,]*\.?\d*")
 _REDIRECTS = (301, 302, 303, 307, 308)
 _LOC_ID = re.compile(r"/id/(\d+)")
@@ -112,14 +115,33 @@ _DOC_COLS = {
 _DOC_URLS = {
     "po": (PO_INDEX_URL, PO_VIEW_URL, _PO_ROW_ID, ("from_t_date", "to_t_date")),
     "dd": (DD_INDEX_URL, DD_VIEW_URL, _DD_ROW_ID, ("from_created_at", "to_created_at")),
+    "pr": (PR_INDEX_URL, PR_VIEW_URL, _PR_ROW_ID, ("from_t_date", "to_t_date")),
+}
+# PR: หัวคอลัมน์หน้า list (ยังไม่ได้ยืนยันกับ ATMS จริง — matcher หลวม ๆ ไม่เจอ = ค่าว่าง)
+_PR_COLS = {
+    "code": lambda h: h.startswith("ใบขอสั่งซื้อ") or h == "รหัส",
+    "date": lambda h: h == "วันที่",
+    "total": lambda h: h == "รวม",
+    "remark": lambda h: h == "หมายเหตุ",
+    "approved": lambda h: h.lower() == "is approved",
 }
 DOC_SEARCH_DAYS = 90
+PR_SEARCH_DAYS = 180
+PR_SEARCH_LIMIT_DEFAULT = 5
+PR_SEARCH_LIMIT_MAX = 20
+PR_DETAIL_FETCH_MAX = 40      # เพดาน GET หน้า view ต่อการค้นหนึ่งครั้ง (เมื่อ list ไม่มีหมายเหตุ)
+PR_DETAIL_PACE = 3.0          # วินาทีขั้นต่ำระหว่าง GET หน้า view
 DOC_QUERY_MIN = 2
+
+
+def norm_remark(text: Any) -> str:
+    """เทียบหมายเหตุ/ทะเบียน: ตัวพิมพ์เล็ก ตัดช่องว่าง - . / ทิ้ง"""
+    return re.sub(r"[\s\-./\u2010-\u2015]+", "", _s(text).lower())
 
 
 def _check_kind(kind: str) -> None:
     if kind not in _DOC_URLS:
-        raise AtmsOpenJobError(f"kind ต้องเป็น po หรือ dd (ได้ {kind!r})")
+        raise AtmsOpenJobError(f"kind ต้องเป็น po, dd หรือ pr (ได้ {kind!r})")
 
 
 def _list_table(soup: BeautifulSoup, spec: dict) -> tuple[Any, dict[str, int]]:
@@ -469,6 +491,8 @@ class AtmsWithdrawClient(AtmsClient):
         q = _s(q).strip()
         if len(q) < DOC_QUERY_MIN:
             return []
+        if kind == "pr":
+            return self._search_pr(q, inventory_id, limit, date_from, date_to)
         index_url, _, row_id, (k_from, k_to) = _DOC_URLS[kind]
         today = datetime.now(_TZ)
         params: dict[str, Any] = {
@@ -521,9 +545,90 @@ class AtmsWithdrawClient(AtmsClient):
         out.sort(key=lambda r: r["id"], reverse=True)
         return out[:max(1, int(limit))]
 
+    def _search_pr(self, q: str, inventory_id: int | None, limit: int,
+                   date_from: str | None, date_to: str | None) -> list[dict]:
+        """
+        ค้น PR จาก "หมายเหตุ" เท่านั้น (ระบุรถจากทะเบียน/เบอร์รถที่พิมพ์ในหมายเหตุ)
+        เทียบแบบ norm_remark ทั้งสองข้าง → ไม่ใช้ filter remark ฝั่ง ATMS (มันเทียบตรงตัว ไม่ normalise)
+        ดึง list หน้าเดียว 1000 แถว (ย้อน 180 วัน) เรียงใหม่สุด · ถ้าหน้า list ไม่มีคอลัมน์หมายเหตุ
+        ต้องเปิดหน้า view ทีละใบ (ใหม่→เก่า) เพื่ออ่านหมายเหตุ: เพดาน PR_DETAIL_FETCH_MAX GET/ครั้ง
+        เว้น PR_DETAIL_PACE วินาทีต่อ GET และหยุดทันทีเมื่อได้ครบ limit
+        """
+        limit = max(1, min(int(limit or PR_SEARCH_LIMIT_DEFAULT), PR_SEARCH_LIMIT_MAX))
+        needle = norm_remark(q)
+        if len(needle) < DOC_QUERY_MIN:
+            return []
+        today = datetime.now(_TZ)
+        params: dict[str, Any] = {
+            "code": "", "user": "", "remark": "", "inventory_id": inventory_id or "",
+            "department_id": "", "is_approved": "", "has_po": "",
+            "from_t_date": date_from or (today - timedelta(days=PR_SEARCH_DAYS)).strftime("%d/%m/%Y"),
+            "to_t_date": date_to or today.strftime("%d/%m/%Y"),
+            "submit": "ค้นหา", "order_by": "pr.code desc",
+        }
+        with self._list_lock:
+            self._set_rows_per_page(ROW_PER_PAGE_LIST)
+            try:
+                soup = self._get_soup(PR_INDEX_URL, params)
+            finally:
+                self._set_rows_per_page(ROW_PER_PAGE_DEFAULT)
+        tables = soup.find_all("table")
+        table = max(tables, key=lambda x: len(x.find_all("tr")), default=None)
+        if table is None:
+            return []
+        heads = [c.get_text(" ", strip=True) for c in table.find("tr").find_all(["th", "td"])]
+        cols = {k: next((i for i, h in enumerate(heads) if m(h)), None) for k, m in _PR_COLS.items()}
+        if cols["code"] is None:
+            return []
+        rows: list[dict] = []
+        for tr in table.find_all("tr")[1:]:
+            m = next((_PR_ROW_ID.search(a["href"]) for a in tr.find_all("a", href=True)
+                      if _PR_ROW_ID.search(a["href"])), None)
+            tds = tr.find_all(["th", "td"])
+            cells = [c.get_text(" ", strip=True) for c in tds]
+            if not m or cols["code"] >= len(cells):
+                continue
+
+            def cell(key: str) -> str:
+                i = cols.get(key)
+                return cells[i] if i is not None and i < len(cells) else ""
+
+            status = None
+            ai = cols["approved"]
+            if ai is not None and ai < len(tds):
+                img = tds[ai].find("img")
+                src = img.get("src", "") if img else ""
+                status = "อนุมัติแล้ว" if "check-square" in src else "ยังไม่อนุมัติ" if "x-square" in src else None
+            total = cell("total")
+            rows.append({
+                "id": int(m.group(1)), "code": cells[cols["code"]], "kind": "pr",
+                "date": cell("date")[:10], "supplier": "", "status": status,
+                "total": _num(total) if total.strip() else None, "ref": "",
+                "remark": cell("remark") if cols["remark"] is not None else None,
+            })
+        rows.sort(key=lambda r: r["id"], reverse=True)
+        out: list[dict] = []
+        fetched = 0
+        for r in rows:
+            if len(out) >= limit:
+                break
+            if r["remark"] is None:           # list ไม่มีหมายเหตุ → อ่านจากหน้า view (มีเพดาน)
+                if fetched >= PR_DETAIL_FETCH_MAX:
+                    break
+                if fetched and self.pace > 0:
+                    time.sleep(max(0.0, PR_DETAIL_PACE - self.pace))
+                fetched += 1
+                info = _label_pairs(self._get_soup(f"{PR_VIEW_URL}{r['id']}"))
+                r["remark"] = info.get("หมายเหตุ", "")
+            if needle in norm_remark(r["remark"]):
+                out.append(r)
+        return out
+
     def get_doc(self, kind: str, doc_id: int) -> dict:
-        """หน้า view ของ PO/DD → หัวใบ + รายการสินค้า (ไม่รวมแถว grand total/ภาษี/รวมสุทธิ)"""
+        """หน้า view ของ PO/DD/PR → หัวใบ + รายการสินค้า (ไม่รวมแถว grand total/ภาษี/รวมสุทธิ)"""
         _check_kind(kind)
+        if kind == "pr":
+            return self._get_pr(doc_id)
         soup = self._get_soup(f"{_DOC_URLS[kind][1]}{int(doc_id)}")
         info = _label_pairs(soup)
         code = info.get("รหัส" if kind == "po" else "เลขที่", "")
@@ -544,6 +649,22 @@ class AtmsWithdrawClient(AtmsClient):
             "withdraw": None if is_po else (info.get("เบิก", "").strip() or None),
             "remark": info.get("หมายเหตุ", ""),
             "lines": _doc_lines(soup, is_po),
+        }
+
+    def _get_pr(self, doc_id: int) -> dict:
+        soup = self._get_soup(f"{PR_VIEW_URL}{int(doc_id)}")
+        info = _label_pairs(soup)
+        code = info.get("ใบขอสั่งซื้อ (PR)") or info.get("รหัส") or info.get("เลขที่") or ""
+        if not code:
+            raise AtmsNotFoundError(f"ไม่พบใบขอซื้อ id {doc_id} ใน ATMS")
+        return {
+            "id": int(doc_id), "code": code, "kind": "pr",
+            "date": _s(info.get("วันที่", ""))[:10],
+            "supplier": "",
+            "inventory": info.get("คลังสินค้า", ""),
+            "pr": None, "po": None, "withdraw": None,
+            "remark": info.get("หมายเหตุ", ""),
+            "lines": _doc_lines(soup, kind="pr"),
         }
 
     # ═══ ฝั่งเขียน ═══════════════════════════════════════════════════════════
@@ -836,12 +957,13 @@ def _wd_items(soup: BeautifulSoup) -> list[dict]:
     return items
 
 
-def _doc_lines(soup: BeautifulSoup, is_po: bool) -> list[dict]:
+def _doc_lines(soup: BeautifulSoup, is_po: bool = False, kind: str | None = None) -> list[dict]:
     """
     ตารางรายการของ PO/DD — สินค้าต้องเป็น "รหัส : ชื่อ" (แถวสรุปไม่มี → ข้าม)
     PO: amount=สั่ง, received=คอลัมน์ "รับ", remaining="ค้างรับ" · DD: amount=ที่รับ, received=amount, remaining=None
     is_labour = กลุ่มสินค้าขึ้นต้น "ค่าแรง" (ติดป้ายเฉยๆ ไม่กรองทิ้ง)
     """
+    is_pr = kind == "pr"       # PR: amount = จำนวนที่ขอ · received=0 · remaining=amount
     table = soup.find("table", class_="defaultTable")
     if table is None:
         return []
@@ -858,8 +980,8 @@ def _doc_lines(soup: BeautifulSoup, is_po: bool) -> list[dict]:
             "sku_name": full,
             "group": group,
             "amount": amount,
-            "received": _num(row.get("รับ", "")) if is_po else amount,
-            "remaining": _num(row.get("ค้างรับ", "")) if is_po else None,
+            "received": 0.0 if is_pr else _num(row.get("รับ", "")) if is_po else amount,
+            "remaining": amount if is_pr else _num(row.get("ค้างรับ", "")) if is_po else None,
             "unit_price": _num(row.get("unit price", "")),
             "total": _num(row.get("รวม", "")),
             "remark": _s(row.get("หมายเหตุ")).strip(),
