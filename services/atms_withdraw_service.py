@@ -117,12 +117,13 @@ _DOC_URLS = {
     "dd": (DD_INDEX_URL, DD_VIEW_URL, _DD_ROW_ID, ("from_created_at", "to_created_at")),
     "pr": (PR_INDEX_URL, PR_VIEW_URL, _PR_ROW_ID, ("from_t_date", "to_t_date")),
 }
-# PR: หัวคอลัมน์หน้า list (ยังไม่ได้ยืนยันกับ ATMS จริง — matcher หลวม ๆ ไม่เจอ = ค่าว่าง)
+# PR: หัวคอลัมน์หน้า list (ยืนยันกับหน้า list จริงแล้ว 2026-11-02)
 _PR_COLS = {
     "code": lambda h: h.startswith("ใบขอสั่งซื้อ") or h == "รหัส",
     "date": lambda h: h == "วันที่",
     "total": lambda h: h == "รวม",
     "remark": lambda h: h == "หมายเหตุ",
+    "plate": lambda h: h == "ทะเบียน",
     "approved": lambda h: h.lower() == "is approved",
 }
 DOC_SEARCH_DAYS = 90
@@ -605,6 +606,7 @@ class AtmsWithdrawClient(AtmsClient):
                 "date": cell("date")[:10], "supplier": "", "status": status,
                 "total": _num(total) if total.strip() else None, "ref": "",
                 "remark": cell("remark") if cols["remark"] is not None else None,
+                "_plate": cell("plate"),
             })
         rows.sort(key=lambda r: r["id"], reverse=True)
         out: list[dict] = []
@@ -619,9 +621,12 @@ class AtmsWithdrawClient(AtmsClient):
                     time.sleep(max(0.0, PR_DETAIL_PACE - self.pace))
                 fetched += 1
                 info = _label_pairs(self._get_soup(f"{PR_VIEW_URL}{r['id']}"))
-                r["remark"] = info.get("หมายเหตุ", "")
-            if needle in norm_remark(r["remark"]):
+                r["remark"] = info.get("เหตุผลในการขอ", "")
+            # หมายเหตุเป็นหลัก · คอลัมน์ "ทะเบียน" ของ ATMS เป็นตัวช่วย (ใบที่เลือกรถไว้แต่ไม่ได้เขียนในหมายเหตุ)
+            if needle in norm_remark(f"{r['remark']} {r.get('_plate', '')}"):
                 out.append(r)
+        for r in out:
+            r.pop("_plate", None)
         return out
 
     def get_doc(self, kind: str, doc_id: int) -> dict:
@@ -663,7 +668,8 @@ class AtmsWithdrawClient(AtmsClient):
             "supplier": "",
             "inventory": info.get("คลังสินค้า", ""),
             "pr": None, "po": None, "withdraw": None,
-            "remark": info.get("หมายเหตุ", ""),
+            "remark": info.get("เหตุผลในการขอ", ""),     # หน้า view PR: "หมายเหตุ" คือหมายเหตุอนุมัติ ไม่ใช่เหตุผลขอ
+            "plate": info.get("ทะเบียน", ""),
             "lines": _doc_lines(soup, kind="pr"),
         }
 
