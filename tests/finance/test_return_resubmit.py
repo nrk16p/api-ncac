@@ -906,7 +906,7 @@ def test_check_violation_is_500_with_sql_hint(caplog):
     with caplog.at_level("ERROR"):
         with pytest.raises(HTTPException) as ei:
             ar._commit_and_return(db, "ADV-2610-001")
-    assert ei.value.status_code == 500 and "finance_advance_v3" in ei.value.detail
+    assert ei.value.status_code == 500 and "SQL migration" in ei.value.detail
     assert db.rolled_back and any("CHECK violation" in r.message for r in caplog.records)
 
 
