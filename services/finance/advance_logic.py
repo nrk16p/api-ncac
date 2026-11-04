@@ -23,6 +23,7 @@ AWAITING_REVIEW = "AWAITING_REVIEW"
 CLOSED = "CLOSED"
 CLEARING_APPROVAL = "CLEARING_APPROVAL"  # ผู้เบิกส่งเคลียร์แล้ว รอหัวหน้าอนุมัติก่อนถึงบัญชี
 RETURNED = "RETURNED"  # v3 §6: Finance sent it back to the requester to edit + resubmit
+CANCELLED = "CANCELLED"  # ตีกลับแบบยกเลิก: บัญชียกเลิกใบก่อนจ่ายเงิน จบใบ ผู้เบิกแก้/ส่งใหม่ไม่ได้ (ผู้ใช้สั่ง 04/11/2026)
 
 STATUS_LABELS = {
     PENDING_APPROVAL: "รออนุมัติ",
@@ -35,6 +36,7 @@ STATUS_LABELS = {
     CLOSED: "ปิดแล้ว",
     CLEARING_APPROVAL: "รออนุมัติเคลียร์",
     RETURNED: "ตีกลับให้ผู้เบิกแก้ไข",
+    CANCELLED: "ยกเลิก",
 }
 
 FIN_VOUCHERED = "VOUCHERED"
@@ -46,6 +48,7 @@ FIN_CLEAR_PENDING = "CLEAR_PENDING"   # รออนุมัติการเ�
 FIN_CLEARING_SUBMITTED = "CLEARING_SUBMITTED"
 FIN_SENT_BACK = "SENT_BACK"
 FIN_CLOSED = "CLOSED"
+FIN_CANCELLED = "CANCELLED"  # ตีกลับแบบยกเลิก (terminal, like CLOSED)
 
 _FIN_TO_STATUS = {
     FIN_VOUCHERED: AWAITING_PAYMENT,
@@ -57,6 +60,7 @@ _FIN_TO_STATUS = {
     FIN_CLEAR_PENDING: CLEARING_APPROVAL,
     FIN_CLEARING_SUBMITTED: AWAITING_REVIEW,
     FIN_CLOSED: CLOSED,
+    FIN_CANCELLED: CANCELLED,
 }
 
 _CENT = Decimal("0.01")
@@ -171,7 +175,7 @@ def fold_summary(rows):
         overdue_amount += Decimal(amount_overdue or 0)
         overdue_count_by[status] += n_overdue or 0
         overdue_amount_by[status] += Decimal(amount_overdue or 0)
-        if fin is not None and fin != FIN_CLOSED:
+        if fin is not None and fin not in (FIN_CLOSED, FIN_CANCELLED):
             by_status[status] += Decimal(amount or 0)
     outstanding = sum(by_status.values(), Decimal(0))
     return {
@@ -237,6 +241,18 @@ def check_return(status, *, remark):
     """v3 §6: Finance returns the request to the requester from รอตั้งเบิกทำจ่าย or รอจ่าย; a reason is required."""
     _require_status(status, (AWAITING_VOUCHER, AWAITING_PAYMENT), RETURN_ACTION)
     _require(bool(remark and remark.strip()), RETURN_REMARK_REQUIRED)
+
+
+CANCEL_ACTION = "ตีกลับแบบยกเลิก"
+CANCEL_REMARK_REQUIRED = "กรุณาระบุเหตุผลที่ยกเลิก"
+CANCELLABLE_STATUSES = (AWAITING_VOUCHER, AWAITING_PAYMENT, RETURNED)
+
+
+def check_cancel(status, *, remark):
+    """ตีกลับแบบยกเลิก (ผู้ใช้สั่ง 04/11/2026): บัญชียกเลิกใบได้ก่อนจ่ายเงิน (รอตั้งเบิกทำจ่าย / รอจ่าย) และตอนใบค้างอยู่ที่
+    ตีกลับให้ผู้เบิกแก้ไข เพื่อจบใบที่ผู้เบิกไม่ส่งกลับมา; ต้องมีเหตุผล."""
+    _require_status(status, CANCELLABLE_STATUSES, CANCEL_ACTION)
+    _require(bool(remark and remark.strip()), CANCEL_REMARK_REQUIRED)
 
 
 def check_resubmit(status, *, is_owner):

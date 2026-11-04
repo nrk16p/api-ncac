@@ -39,6 +39,7 @@ STEP_PENDING = "step_pending"
 APPROVED = "approved"
 REJECTED = "rejected"
 RETURNED = "returned"
+CANCELLED = "cancelled"
 PAID = "paid"
 SENT_BACK = "sent_back"
 CLOSED = "closed"
@@ -47,7 +48,7 @@ CLEAR_APPROVED = "clear_approved"
 CLEAR_PENDING = "clear_pending"
 CLEAR_REJECTED = "clear_rejected"
 APPROVER_EVENTS = (SUBMITTED, RESUBMITTED, STEP_PENDING)
-REQUESTER_EVENTS = (APPROVED, REJECTED, RETURNED, PAID, SENT_BACK, CLOSED, CLEAR_SUBMITTED)
+REQUESTER_EVENTS = (APPROVED, REJECTED, RETURNED, CANCELLED, PAID, SENT_BACK, CLOSED, CLEAR_SUBMITTED)
 # งานถึงมือบัญชี: สรุปเลขที่ ผู้เบิก ยอดเงิน และ CC กล่องบัญชี (ผู้ใช้สั่ง 20/10/2026)
 ACCOUNT_CC_EVENTS = (APPROVED, CLEAR_SUBMITTED, CLEAR_APPROVED)
 # หน้าตาแบบสรุปยอด (หัวเรื่อง "เบิกเงิน Advance · …") — รอท่านอนุมัติการเคลียร์ใช้แบบเดียวกันแต่ CC ผู้เบิก ไม่ใช่บัญชี
@@ -216,6 +217,7 @@ _TITLES = {
     APPROVED: ("เบิกเงิน Advance", "อนุมัติครบทุกขั้นแล้ว", "คำขอผ่านการอนุมัติครบทุกขั้นแล้ว รอฝ่ายบัญชีตั้งเบิก", False),
     REJECTED: ("ไม่อนุมัติ", "คำขอเบิกเงินไม่ได้รับการอนุมัติ", "คำขอของท่านถูกปฏิเสธ", False),
     RETURNED: ("ตีกลับ", "บัญชีตีกลับให้แก้ไข", "กรุณาแก้ไขและส่งคำขอใหม่", False),
+    CANCELLED: ("ยกเลิก", "บัญชียกเลิกคำขอเบิกเงิน", "รายการนี้ปิดแล้ว ถ้ายังต้องใช้เงินให้ยื่นคำขอใหม่", False),
     PAID: ("จ่ายเงินแล้ว", "การเงินจ่ายเงินเรียบร้อย", "โปรดเคลียร์เงินภายในกำหนด", False),
     SENT_BACK: ("ตีกลับเคลียร์", "บัญชีตีกลับเอกสารเคลียร์", "กรุณาแก้ไขเอกสารเคลียร์และส่งใหม่", False),
     CLOSED: ("ปิดรายการ", "รายการเบิกเงินปิดเรียบร้อย", "บัญชีตรวจสอบและปิดรายการแล้ว", False),
@@ -309,7 +311,7 @@ def _legacy_rows(event: str, ctx: dict, form_id, requester) -> list:
                 rows.append((label, value))
     if event == CLEAR_REJECTED and ctx.get("approver_name"):
         rows.append(("ผู้ไม่อนุมัติ", ctx["approver_name"]))
-    if event in (REJECTED, RETURNED, SENT_BACK, CLEAR_REJECTED) and ctx.get("remark"):
+    if event in (REJECTED, RETURNED, CANCELLED, SENT_BACK, CLEAR_REJECTED) and ctx.get("remark"):
         rows.append(("เหตุผล", ctx.get("remark")))
     return rows
 
