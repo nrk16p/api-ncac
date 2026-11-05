@@ -135,6 +135,16 @@ class ArReviewLineRequest(Base):
     role_item_id = Column(Integer, ForeignKey("ar_role_items.id"), primary_key=True)
 
 
+class ArReviewRoleRequest(Base):
+    """A whole role the requester ASKED FOR ("ต้องการเพิ่มอีเมลกลุ่ม") — they hold no ar_user_roles row for it yet,
+    so it hangs off the review, not a line."""
+    __tablename__ = "ar_review_role_requests"
+    __table_args__ = (Index("ix_ar_review_role_requests_role_id", "role_id"),)
+
+    review_id = Column(Integer, ForeignKey("ar_reviews.id", ondelete="CASCADE"), primary_key=True)
+    role_id = Column(Integer, ForeignKey("ar_roles.id"), primary_key=True)
+
+
 class ArReviewLineSnapshot(Base):
     """"Before": every active item the role had when the review was submitted, so later role edits don't
     rewrite what the requester actually saw."""

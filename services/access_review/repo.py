@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from models.access_review_model import (
     ArCycle, ArReview, ArReviewApprover, ArReviewLine, ArReviewLineItem, ArReviewLineRequest, ArReviewLineSnapshot,
-    ArRole, ArRoleItem, ArSystem, ArUserRole,
+    ArReviewRoleRequest, ArRole, ArRoleItem, ArSystem, ArUserRole,
 )
 from models.form_approver_division import FormApproverDivision
 from models.user_model import Department, Position, User
@@ -369,6 +369,43 @@ def catalog_items(db: Session, system_code: str) -> List[ArRoleItem]:
     )
     return (db.query(ArRoleItem).filter(ArRoleItem.id.in_(first))
             .order_by(ArRoleItem.category, ArRoleItem.item, ArRoleItem.permission, ArRoleItem.id).all())
+
+
+def catalog_roles(db: Session, system_code: str) -> List[ArRole]:
+    """Active roles of an active system, by name."""
+    return (
+        db.query(ArRole).join(ArSystem, ArSystem.id == ArRole.system_id)
+        .filter(ArSystem.code == system_code, ArSystem.is_active.is_(True), ArRole.is_active.is_(True))
+        .order_by(ArRole.name, ArRole.id).all()
+    )
+
+
+def roles_with_system(db: Session, role_ids: Iterable[int], active_only: bool = True) -> Dict[int, Tuple[ArRole, ArSystem]]:
+    ids = list(set(role_ids))
+    if not ids:
+        return {}
+    q = db.query(ArRole, ArSystem).join(ArSystem, ArSystem.id == ArRole.system_id).filter(ArRole.id.in_(ids))
+    if active_only:
+        q = q.filter(ArRole.is_active.is_(True), ArSystem.is_active.is_(True))
+    return {role.id: (role, system) for role, system in q.all()}
+
+
+def requested_role_ids(db: Session, review_ids: Iterable[int]) -> Dict[int, List[int]]:
+    """review_id → role ids asked for ("ต้องการเพิ่มอีเมลกลุ่ม")."""
+    ids = list(set(review_ids))
+    out: Dict[int, List[int]] = {i: [] for i in ids}
+    if ids:
+        for rid, role_id in (db.query(ArReviewRoleRequest.review_id, ArReviewRoleRequest.role_id)
+                             .filter(ArReviewRoleRequest.review_id.in_(ids))
+                             .order_by(ArReviewRoleRequest.role_id).all()):
+            out[rid].append(role_id)
+    return out
+
+
+def set_requested_roles(db: Session, review_id: int, role_ids: Iterable[int]) -> None:
+    db.query(ArReviewRoleRequest).filter(ArReviewRoleRequest.review_id == review_id).delete(synchronize_session=False)
+    for rid in sorted(set(role_ids)):
+        db.add(ArReviewRoleRequest(review_id=review_id, role_id=rid))
 
 
 def item_systems(db: Session, item_ids: Iterable[int]) -> Dict[int, Tuple[ArRoleItem, str]]:

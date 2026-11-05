@@ -26,11 +26,14 @@ class LineIn(BaseModel):
 
 class LinesIn(BaseModel):
     requester_note: Optional[str] = Field(default=None, max_length=2000)
+    # "ต้องการเพิ่มอีเมลกลุ่ม": whole roles to ask for; omitted = leave the stored set as is
+    requested_role_ids: Optional[List[int]] = Field(default=None, max_length=500)
     lines: List[LineIn] = Field(default_factory=list, max_length=2000)
 
 
 class SubmitIn(BaseModel):
     requester_note: Optional[str] = Field(default=None, max_length=2000)
+    requested_role_ids: Optional[List[int]] = Field(default=None, max_length=500)
     lines: Optional[List[LineIn]] = Field(default=None, max_length=2000)
 
 

@@ -61,8 +61,10 @@ def _lines(items) -> Optional[List[dict]]:
 
 
 def _note(body) -> dict:
-    """requester_note only when the client sent the field (absent = leave as is, null/"" = clear)."""
-    return {"requester_note": body.requester_note} if body is not None and "requester_note" in body.model_fields_set else {}
+    """requester_note / requested_role_ids only when the client sent the field (absent = leave as is)."""
+    if body is None:
+        return {}
+    return {k: getattr(body, k) for k in ("requester_note", "requested_role_ids") if k in body.model_fields_set}
 
 
 # ---------------------------- user ----------------------------
@@ -81,6 +83,12 @@ def get_role_items(role_id: int = Query(...), caller: Caller = Depends(get_calle
 def get_catalog(system: str = Query(..., max_length=30), caller: Caller = Depends(get_caller),
                 db: Session = Depends(get_db)):
     return logic.catalog(db, system)
+
+
+@router.get("/catalog/roles")
+def get_catalog_roles(system: str = Query(..., max_length=30), caller: Caller = Depends(get_caller),
+                      db: Session = Depends(get_db)):
+    return logic.catalog_roles(db, system)
 
 
 @router.get("/me/items")

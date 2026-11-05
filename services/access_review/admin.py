@@ -16,7 +16,7 @@ from models.access_review_model import (
 from services.access_review import repo
 from services.access_review.logic import (
     APPROVED, DRAFT, MSG_NOT_FOUND, PENDING, REMOVE, ArConflict, ArError, ArNotFound, account_name, cycle_dict,
-    full_name, iso, item_dict, item_sort_key, next_approver_names, person, user_division_id,
+    full_name, iso, item_dict, item_sort_key, next_approver_names, person, requested_roles_out, user_division_id,
 )
 
 MSG_SYSTEM_NOT_FOUND = "ไม่พบระบบ"
@@ -490,5 +490,7 @@ def review_changes(db: Session, review_id: int) -> dict:
         "decided_by_name": (full_name(decider) or review.decided_by) if review.decided_by else None,
         "requester_note": review.requester_note, "comment": review.comment,
         "has_snapshot": all(line["has_snapshot"] for line in out_lines),
+        # "ต้องการเพิ่มอีเมลกลุ่ม" — whole roles asked for (no line: the requester doesn't hold them yet)
+        "requested_roles": requested_roles_out(db, review),
         "lines": out_lines,
     }
