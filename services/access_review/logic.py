@@ -58,6 +58,8 @@ MSG_FORBIDDEN_DECIDE = "คุณไม่ใช่ผู้อนุมัต�
 MSG_NOT_PENDING = "แบบทบทวนนี้ไม่ได้อยู่ระหว่างรออนุมัติ"
 MSG_REJECT_COMMENT = "กรุณาระบุเหตุผลที่ไม่อนุมัติ"
 MSG_ROLE_NOT_FOUND = "ไม่พบกลุ่มสิทธิ์"
+MSG_BAD_REQUEST_ITEM = "ขอเพิ่มสิทธิ์รายการ {item_id} ไม่ได้ (ไม่พบในระบบเดียวกับ user_role_id {id})"
+MSG_UNKNOWN_SYSTEM = "ไม่พบระบบ {code}"
 
 
 class ArError(Exception):
@@ -300,6 +302,7 @@ def build_me(db: Session, caller: Caller) -> dict:
     review = repo.get_review(db, cycle.id, caller.employee_id) if cycle is not None else None
     rows = _scope(db, caller.employee_id, review)
     lines, unchecked = _lines_with_unchecked(db, review)
+    requested = repo.requested_by_line(db, [line.id for line in lines.values()])
     counts = repo.item_counts(db, [role.id for _, role, _ in rows])
 
     systems: Dict[int, dict] = {}
@@ -313,6 +316,7 @@ def build_me(db: Session, caller: Caller) -> dict:
             "role_name": role.name,
             "item_count": counts.get(role.id, 0),
             "unchecked_item_ids": unchecked.get(line.id, []) if line else [],
+            "requested_item_ids": requested.get(line.id, []) if line else [],
             "decision": (line.decision or KEEP) if line else KEEP,
             "note": line.note if line else None,
         })
@@ -359,13 +363,22 @@ def _snapshots(db: Session, lines: Dict[int, ArReviewLine]) -> Dict[int, List[in
     return {ur_id: by_line[line.id] for ur_id, line in lines.items() if line.id in by_line}
 
 
+def _requested_by_user_role(db: Session, lines: Dict[int, ArReviewLine]) -> Dict[int, List[int]]:
+    """user_role_id → item ids asked to be added on that line."""
+    by_line = repo.requested_by_line(db, [line.id for line in lines.values()])
+    return {ur_id: by_line.get(line.id, []) for ur_id, line in lines.items()}
+
+
 def _items_payload(db: Session, rows: List[repo.Assignment], unchecked_ids: Iterable[int],
-                   snapshots: Optional[Dict[int, List[int]]] = None) -> dict:
-    """A role with a snapshot shows exactly the items it had at submit; any other role shows its live items."""
+                   snapshots: Optional[Dict[int, List[int]]] = None,
+                   requested: Optional[Dict[int, List[int]]] = None) -> dict:
+    """A role with a snapshot shows exactly the items it had at submit; any other role shows its live items.
+    requested_items = what the requester asked to add to that role (items of other roles, same system)."""
     snapshots = snapshots or {}
+    requested = requested or {}
     live = repo.items_for_roles(db, [role.id for ur, role, _ in rows if ur.id not in snapshots],
                                 include_ids=unchecked_ids)
-    fixed = repo.items_by_ids(db, [i for ids in snapshots.values() for i in ids])
+    fixed = repo.items_by_ids(db, [i for ids in list(snapshots.values()) + list(requested.values()) for i in ids])
 
     def items_of(ur, role):
         if ur.id in snapshots:
@@ -375,6 +388,8 @@ def _items_payload(db: Session, rows: List[repo.Assignment], unchecked_ids: Iter
     return {"roles": [{
         "user_role_id": ur.id, "role_id": role.id, "role_name": role.name, "system_code": system.code,
         "items": [item_dict(i) for i in items_of(ur, role)],
+        "requested_items": [item_dict(i) for i in sorted((fixed[i] for i in requested.get(ur.id, []) if i in fixed),
+                                                         key=item_sort_key)],
     } for ur, role, system in rows]}
 
 
@@ -385,7 +400,7 @@ def my_items(db: Session, caller: Caller) -> dict:
     submitted = review is not None and review.status in (PENDING, APPROVED)
     return _items_payload(db, _scope(db, caller.employee_id, review),
                           [i for ids in unchecked.values() for i in ids],
-                          _snapshots(db, lines) if submitted else None)
+                          _snapshots(db, lines) if submitted else None, _requested_by_user_role(db, lines))
 
 
 def review_items(db: Session, caller: Caller, review_id: int) -> dict:
@@ -393,7 +408,8 @@ def review_items(db: Session, caller: Caller, review_id: int) -> dict:
     lines, unchecked = _lines_with_unchecked(db, review)
     rows = repo.assignments_by_ids(db, list(lines))
     snapshots = _snapshots(db, lines) if review.status != DRAFT else None
-    return _items_payload(db, rows, [i for ids in unchecked.values() for i in ids], snapshots)
+    return _items_payload(db, rows, [i for ids in unchecked.values() for i in ids], snapshots,
+                          _requested_by_user_role(db, lines))
 
 
 def _save_lines(db: Session, caller: Caller, lines: Optional[List[dict]], requester_note=_UNSET
@@ -405,6 +421,7 @@ def _save_lines(db: Session, caller: Caller, lines: Optional[List[dict]], reques
     if not active:
         raise ArError(MSG_NO_ROLES)
     role_of = {ur.id: role.id for ur, role, _ in active}
+    system_of = {ur.id: system.code for ur, _, system in active}
 
     review = repo.get_review(db, cycle.id, caller.employee_id)
     if review is None:
@@ -440,8 +457,30 @@ def _save_lines(db: Session, caller: Caller, lines: Optional[List[dict]], reques
             if "note" in payload:
                 line.note = clean_note(payload.get("note"))
             repo.set_unchecked(db, line.id, unchecked)
+            if "requested_item_ids" in payload:
+                repo.set_requested(db, line.id, _clean_requested(
+                    db, ur_id, role_of[ur_id], system_of[ur_id], payload.get("requested_item_ids") or []))
     db.flush()
     return review, existing, active
+
+
+def _label(item: ArRoleItem) -> tuple:
+    return item.category, item.item, item.permission
+
+
+def _clean_requested(db: Session, ur_id: int, role_id: int, system_code: str, item_ids: Iterable[int]) -> List[int]:
+    """Requested items must be active items of the same system. Ones the role already has (same id or same
+    category/item/permission label) are dropped silently — there is nothing to add."""
+    ids = set(item_ids)
+    if not ids:
+        return []
+    found = repo.item_systems(db, ids)
+    for iid in sorted(ids):
+        if iid not in found or found[iid][1] != system_code:
+            raise ArError(MSG_BAD_REQUEST_ITEM.format(item_id=iid, id=ur_id))
+    own = repo.items_for_roles(db, [role_id]).get(role_id, [])
+    own_ids, own_labels = {i.id for i in own}, {_label(i) for i in own}
+    return sorted(i for i in ids if i not in own_ids and _label(found[i][0]) not in own_labels)
 
 
 def save_lines(db: Session, caller: Caller, lines: List[dict], requester_note=_UNSET) -> dict:
@@ -472,6 +511,11 @@ def _normalise_for_submit(db: Session, review: ArReview, existing: Dict[int, ArR
             repo.set_unchecked(db, line.id, kept)
         repo.set_snapshot(db, line.id, role_items)
         line.decision = derive_decision(role_items, kept, line.decision)
+    requested = repo.requested_by_line(db, [line.id for line in existing.values()])
+    live = repo.item_systems(db, [i for ids in requested.values() for i in ids])
+    for line_id, ids in requested.items():
+        if any(i not in live for i in ids):
+            repo.set_requested(db, line_id, [i for i in ids if i in live])
 
 
 def submit(db: Session, caller: Caller, lines: Optional[List[dict]], background_tasks: Optional[BackgroundTasks],
@@ -513,6 +557,7 @@ def review_detail(db: Session, caller: Caller, review_id: int) -> dict:
     owner = repo.get_user(db, review.employee_id)
     lines = repo.review_lines(db, review.id)
     unchecked = repo.unchecked_by_line(db, [line.id for line in lines])
+    requested = repo.requested_by_line(db, [line.id for line in lines])
     rows = {ur.id: (ur, role, system) for ur, role, system in
             repo.assignments_by_ids(db, [line.user_role_id for line in lines])}
     counts = repo.item_counts(db, [role.id for _, role, _ in rows.values()])
@@ -530,6 +575,7 @@ def review_detail(db: Session, caller: Caller, review_id: int) -> dict:
             "account_name": account_name(user_role, owner), "decision": line.decision or KEEP, "note": line.note,
             "item_count": len(snapshots[line.id]) if line.id in snapshots else counts.get(role.id, 0),
             "unchecked_item_ids": ids, "unchecked_count": len(ids),
+            "requested_item_ids": requested.get(line.id, []), "requested_count": len(requested.get(line.id, [])),
         })
     out_lines.sort(key=lambda x: (x["system_code"], x["role_name"]))
     summary = _review_summary(db, review)
@@ -561,6 +607,7 @@ def _review_rows(db: Session, reviews: List[ArReview]) -> List[dict]:
         + [e for eids in approvers.values() for e in eids])
     counts = repo.line_counts(db, ids)
     unchecked = repo.unchecked_counts(db, ids)
+    requested = repo.requested_counts(db, ids)
     out = []
     for r in reviews:
         total, removes = counts.get(r.id, (0, 0))
@@ -569,7 +616,7 @@ def _review_rows(db: Session, reviews: List[ArReview]) -> List[dict]:
             "id": r.id, "requester": person(users.get(r.employee_id), r.employee_id),
             "submitted_at": iso(r.submitted_at), "total_lines": total, "remove_count": removes, "route": r.route,
             # additive
-            "status": r.status, "unchecked_count": unchecked.get(r.id, 0),
+            "status": r.status, "unchecked_count": unchecked.get(r.id, 0), "requested_count": requested.get(r.id, 0),
             "next_approver_names": next_approver_names(r, approvers.get(r.id, []), users),
             "decided_at": iso(r.decided_at),
             "decided_by_name": (full_name(decider) if decider else r.decided_by) if r.decided_by else None,
@@ -615,6 +662,14 @@ def role_items_view(db: Session, role_id: int) -> dict:
     }
 
 
+def catalog(db: Session, system_code: str) -> dict:
+    """Menus a requester can ask to add ("ต้องการเพิ่มสิทธิ์"): every distinct item across the system's roles."""
+    code = system_code.strip().upper()
+    if repo.get_system_by_code(db, code) is None:
+        raise ArNotFound(MSG_UNKNOWN_SYSTEM.format(code=code))
+    return {"system_code": code, "items": [item_dict(i) for i in repo.catalog_items(db, code)]}
+
+
 # ---------------------------- mail ----------------------------
 
 def _mail_context(db: Session, review: ArReview) -> Tuple[List[str], dict]:
@@ -624,12 +679,13 @@ def _mail_context(db: Session, review: ArReview) -> Tuple[List[str], dict]:
     to = [users[e].email for e in approver_ids if e in users and users[e].email]
     total, removes = repo.line_counts(db, [review.id]).get(review.id, (0, 0))
     unchecked = repo.unchecked_counts(db, [review.id]).get(review.id, 0)
+    requested = repo.requested_counts(db, [review.id]).get(review.id, 0)
     p = person(owner, review.employee_id)
     cycle = review.cycle or repo.get_cycle(db, review.cycle_id)
     return to, {
         "review_id": review.id, "requester_name": p["name"], "requester_employee_id": review.employee_id,
         "department": p["department"], "division": p["division"], "cycle_name": cycle.name if cycle else None,
-        "total_lines": total, "remove_count": removes, "unchecked_count": unchecked,
+        "total_lines": total, "remove_count": removes, "unchecked_count": unchecked, "requested_count": requested,
         "requester_note": review.requester_note,
     }
 

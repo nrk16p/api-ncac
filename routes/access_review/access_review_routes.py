@@ -77,6 +77,12 @@ def get_role_items(role_id: int = Query(...), caller: Caller = Depends(get_calle
     return logic.role_items_view(db, role_id)
 
 
+@router.get("/catalog")
+def get_catalog(system: str = Query(..., max_length=30), caller: Caller = Depends(get_caller),
+                db: Session = Depends(get_db)):
+    return logic.catalog(db, system)
+
+
 @router.get("/me/items")
 def get_my_items(caller: Caller = Depends(get_caller), db: Session = Depends(get_db)):
     return logic.my_items(db, caller)

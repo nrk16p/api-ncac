@@ -36,7 +36,7 @@ def _one_line(text: str) -> str:
 
 def render_approver_mail(ctx: dict) -> Tuple[str, str]:
     """ctx: review_id, requester_name, requester_employee_id, department, division, cycle_name, total_lines,
-    remove_count, unchecked_count, requester_note. Every value is HTML-escaped."""
+    remove_count, unchecked_count, requested_count, requester_note. Every value is HTML-escaped."""
     e = lambda v: escape(str(v), quote=True)  # noqa: E731
     name = ctx.get("requester_name") or ctx.get("requester_employee_id") or "-"
     cycle = ctx.get("cycle_name")
@@ -51,6 +51,8 @@ def render_approver_mail(ctx: dict) -> Tuple[str, str]:
     rows.append(("จำนวนสิทธิ์ทั้งหมด", f"{int(ctx.get('total_lines') or 0)} รายการ"))
     rows.append(("ขอยกเลิกทั้งกลุ่มสิทธิ์", f"{int(ctx.get('remove_count') or 0)} กลุ่ม"))
     rows.append(("รายการสิทธิ์ที่ไม่ติ๊ก (ไม่ขอรับสิทธิ์)", f"{int(ctx.get('unchecked_count') or 0)} รายการ"))
+    if ctx.get("requested_count"):
+        rows.append(("ขอเพิ่มสิทธิ์", f"{int(ctx['requested_count'])} รายการ"))
     if ctx.get("requester_note"):
         rows.append(("ข้อเสนอแนะ (ผู้แจ้ง)", ctx["requester_note"]))
     table = "".join(

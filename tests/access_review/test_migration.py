@@ -9,7 +9,7 @@ FULL = (MIGRATIONS / "2026-10-29_access_review.sql").read_text(encoding="utf-8")
 FIX = (MIGRATIONS / "2026-10-29b_access_review_user_roles.sql").read_text(encoding="utf-8")
 MODEL_TABLES = {t.__tablename__ for t in (m.ArSystem, m.ArRole, m.ArRoleItem, m.ArUserRole, m.ArCycle, m.ArReview,
                                           m.ArReviewLine, m.ArReviewLineItem, m.ArReviewLineSnapshot,
-                                          m.ArReviewApprover)}
+                                          m.ArReviewLineRequest, m.ArReviewApprover)}
 
 
 def _tables(sql):
@@ -22,7 +22,7 @@ def _columns(sql, table):
             if line.strip() and not line.strip().startswith(("CONSTRAINT", "PRIMARY KEY"))}
 
 
-def test_full_migration_has_the_10_model_tables_and_columns():
+def test_full_migration_has_the_11_model_tables_and_columns():
     assert _tables(FULL) == MODEL_TABLES
     for t in MODEL_TABLES:
         model_cols = set(m.Base.metadata.tables[t].columns.keys())
@@ -65,3 +65,15 @@ def test_snapshot_migration_is_additive():
     assert _columns(SNAP, "ar_review_line_snapshot") == set(
         m.Base.metadata.tables["ar_review_line_snapshot"].columns.keys())
     assert "ON DELETE CASCADE" in SNAP
+
+
+REQ = (MIGRATIONS / "2026-11-05_access_review_requests.sql").read_text(encoding="utf-8")
+
+
+def test_requests_migration_is_additive():
+    assert "BEGIN;" in REQ and REQ.rstrip().endswith("COMMIT;")
+    assert "DROP" not in REQ.upper() and "ALTER" not in REQ.upper()
+    assert _tables(REQ) == {"ar_review_line_requests"}
+    assert _columns(REQ, "ar_review_line_requests") == set(
+        m.Base.metadata.tables["ar_review_line_requests"].columns.keys())
+    assert "ON DELETE CASCADE" in REQ

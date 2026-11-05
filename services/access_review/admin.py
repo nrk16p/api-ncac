@@ -442,9 +442,11 @@ def review_changes(db: Session, review_id: int) -> dict:
     rows = {ur.id: (ur, role, system) for ur, role, system in
             repo.assignments_by_ids(db, [line.user_role_id for line in lines])}
     unchecked = repo.unchecked_by_line(db, [line.id for line in lines])
+    requested = repo.requested_by_line(db, [line.id for line in lines])
     snapshots = repo.snapshot_by_line(db, [line.id for line in lines]) if review.status != DRAFT else {}
     live = repo.items_for_roles(db, [role.id for _, role, _ in rows.values()])
-    items = repo.items_by_ids(db, [i for ids in list(snapshots.values()) + list(unchecked.values()) for i in ids])
+    items = repo.items_by_ids(db, [i for ids in list(snapshots.values()) + list(unchecked.values())
+                                   + list(requested.values()) for i in ids])
     for role_items in live.values():
         items.update({i.id: i for i in role_items})
     users = repo.users_by_employee_ids(db, [review.employee_id, review.decided_by])
@@ -473,6 +475,8 @@ def review_changes(db: Session, review_id: int) -> dict:
             "before_count": len(before),
             "after_count": 0 if whole_role else len(before) - len(removed),
             "removed": dicts(removed),
+            # "ต้องการเพิ่มสิทธิ์" — menus asked to be added to this role
+            "requested": dicts(requested.get(line.id, [])),
             "added_since": dicts([i for i in live_ids if i not in set(before)]) if has_snapshot else [],
             "retired_since": dicts([i for i in before if i in items and not items[i].is_active]),
             "note": line.note,

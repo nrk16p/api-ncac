@@ -18,6 +18,8 @@ class LineIn(BaseModel):
     for item-less roles (Email group); for roles with items it is derived (all unticked → remove)."""
     user_role_id: int
     unchecked_item_ids: List[int] = Field(default_factory=list, max_length=5000)
+    # "ต้องการเพิ่มสิทธิ์": items of other roles (same system) to add; omitted = leave the stored set as is
+    requested_item_ids: Optional[List[int]] = Field(default=None, max_length=500)
     decision: Optional[Decision] = None
     note: Optional[str] = Field(default=None, max_length=1000)
 

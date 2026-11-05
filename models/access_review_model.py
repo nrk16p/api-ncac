@@ -125,6 +125,16 @@ class ArReviewLineItem(Base):
     role_item_id = Column(Integer, ForeignKey("ar_role_items.id"), primary_key=True)
 
 
+class ArReviewLineRequest(Base):
+    """An item the requester ASKED TO ADD on that line ("ต้องการเพิ่มสิทธิ์") — a menu the role doesn't have, picked
+    from another role of the same system (the lowest item id per category/item/permission label)."""
+    __tablename__ = "ar_review_line_requests"
+    __table_args__ = (Index("ix_ar_review_line_requests_role_item_id", "role_item_id"),)
+
+    review_line_id = Column(Integer, ForeignKey("ar_review_lines.id", ondelete="CASCADE"), primary_key=True)
+    role_item_id = Column(Integer, ForeignKey("ar_role_items.id"), primary_key=True)
+
+
 class ArReviewLineSnapshot(Base):
     """"Before": every active item the role had when the review was submitted, so later role edits don't
     rewrite what the requester actually saw."""

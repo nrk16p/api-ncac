@@ -7,8 +7,8 @@ from sqlalchemy import func, inspect, or_
 from sqlalchemy.orm import Session, joinedload
 
 from models.access_review_model import (
-    ArCycle, ArReview, ArReviewApprover, ArReviewLine, ArReviewLineItem, ArReviewLineSnapshot, ArRole, ArRoleItem,
-    ArSystem, ArUserRole,
+    ArCycle, ArReview, ArReviewApprover, ArReviewLine, ArReviewLineItem, ArReviewLineRequest, ArReviewLineSnapshot,
+    ArRole, ArRoleItem, ArSystem, ArUserRole,
 )
 from models.form_approver_division import FormApproverDivision
 from models.user_model import Department, Position, User
@@ -315,9 +315,75 @@ def set_unchecked(db: Session, line_id: int, item_ids: Iterable[int]) -> None:
 
 def delete_line(db: Session, line: ArReviewLine) -> None:
     db.query(ArReviewLineItem).filter(ArReviewLineItem.review_line_id == line.id).delete(synchronize_session=False)
+    db.query(ArReviewLineRequest).filter(ArReviewLineRequest.review_line_id == line.id).delete(
+        synchronize_session=False)
     db.query(ArReviewLineSnapshot).filter(ArReviewLineSnapshot.review_line_id == line.id).delete(
         synchronize_session=False)
     db.delete(line)
+
+
+def requested_by_line(db: Session, line_ids: Iterable[int]) -> Dict[int, List[int]]:
+    """line_id → item ids the requester asked to add ("ต้องการเพิ่มสิทธิ์")."""
+    ids = list(set(line_ids))
+    out: Dict[int, List[int]] = {i: [] for i in ids}
+    if ids:
+        for line_id, item_id in (db.query(ArReviewLineRequest.review_line_id, ArReviewLineRequest.role_item_id)
+                                 .filter(ArReviewLineRequest.review_line_id.in_(ids))
+                                 .order_by(ArReviewLineRequest.role_item_id).all()):
+            out[line_id].append(item_id)
+    return out
+
+
+def set_requested(db: Session, line_id: int, item_ids: Iterable[int]) -> None:
+    db.query(ArReviewLineRequest).filter(ArReviewLineRequest.review_line_id == line_id).delete(
+        synchronize_session=False)
+    for iid in sorted(set(item_ids)):
+        db.add(ArReviewLineRequest(review_line_id=line_id, role_item_id=iid))
+
+
+def requested_counts(db: Session, review_ids: Iterable[int]) -> Dict[int, int]:
+    """review_id → number of items asked to be added."""
+    ids = list(set(review_ids))
+    if not ids:
+        return {}
+    rows = (
+        db.query(ArReviewLine.review_id, func.count(ArReviewLineRequest.role_item_id))
+        .join(ArReviewLineRequest, ArReviewLineRequest.review_line_id == ArReviewLine.id)
+        .filter(ArReviewLine.review_id.in_(ids))
+        .group_by(ArReviewLine.review_id)
+        .all()
+    )
+    return {r[0]: int(r[1]) for r in rows}
+
+
+def catalog_items(db: Session, system_code: str) -> List[ArRoleItem]:
+    """Every active item of the system's active roles, one per (category, item, permission) label — the lowest id
+    wins, so the same menu held by several roles is offered once."""
+    first = (
+        db.query(func.min(ArRoleItem.id))
+        .join(ArRole, ArRole.id == ArRoleItem.role_id)
+        .join(ArSystem, ArSystem.id == ArRole.system_id)
+        .filter(ArSystem.code == system_code, ArSystem.is_active.is_(True), ArRole.is_active.is_(True),
+                ArRoleItem.is_active.is_(True))
+        .group_by(ArRoleItem.category, ArRoleItem.item, ArRoleItem.permission)
+    )
+    return (db.query(ArRoleItem).filter(ArRoleItem.id.in_(first))
+            .order_by(ArRoleItem.category, ArRoleItem.item, ArRoleItem.permission, ArRoleItem.id).all())
+
+
+def item_systems(db: Session, item_ids: Iterable[int]) -> Dict[int, Tuple[ArRoleItem, str]]:
+    """item_id → (item, system code), active items of active roles only."""
+    ids = list(set(item_ids))
+    if not ids:
+        return {}
+    rows = (
+        db.query(ArRoleItem, ArSystem.code)
+        .join(ArRole, ArRole.id == ArRoleItem.role_id)
+        .join(ArSystem, ArSystem.id == ArRole.system_id)
+        .filter(ArRoleItem.id.in_(ids), ArRoleItem.is_active.is_(True), ArRole.is_active.is_(True))
+        .all()
+    )
+    return {item.id: (item, code) for item, code in rows}
 
 
 def set_snapshot(db: Session, line_id: int, item_ids: Iterable[int]) -> None:
@@ -366,4 +432,6 @@ def referenced_item_ids(db: Session, item_ids: Iterable[int]) -> set:
     return ({r[0] for r in db.query(ArReviewLineItem.role_item_id)
              .filter(ArReviewLineItem.role_item_id.in_(ids)).distinct().all()}
             | {r[0] for r in db.query(ArReviewLineSnapshot.role_item_id)
-               .filter(ArReviewLineSnapshot.role_item_id.in_(ids)).distinct().all()})
+               .filter(ArReviewLineSnapshot.role_item_id.in_(ids)).distinct().all()}
+            | {r[0] for r in db.query(ArReviewLineRequest.role_item_id)
+               .filter(ArReviewLineRequest.role_item_id.in_(ids)).distinct().all()})
