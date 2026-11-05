@@ -46,9 +46,18 @@ def put_expense_type(code: str, payload: ExpenseTypeUpdate, db: Session = Depend
     return _type_dict(row)
 
 
+def _is_super(employee_id) -> bool:
+    """ผู้ดูแลทดสอบ: เห็นและกดได้ทุกขั้นของเงินสดย่อยเหมือนเป็นทุกบทบาท — เปิดด้วย env PETTY_SUPERUSERS
+    (รหัสพนักงานคั่นด้วย ,) ตั้งเฉพาะเครื่องทดสอบ (ผู้ใช้สั่ง 5/11/2026 "เฉพาะใน local") บน prod ไม่ตั้ง = ไม่มีผล"""
+    eid = str(employee_id or "").strip()
+    return bool(eid) and eid in adv_logic.parse_id_list(os.getenv("PETTY_SUPERUSERS"))
+
+
 @router.get("/funds")
 def list_funds(holder: Optional[str] = Query(default=None), active: bool = True,
                db: Session = Depends(get_db)):
+    if holder and _is_super(holder):
+        holder = None  # ผู้ดูแลทดสอบเห็นทุกวงเงินในหน้าเจ้าของเงินสด
     rows = repo.list_funds(db, holder=holder, active_only=active)
     names = repo.employee_names(db, [f.holder_employee_id for f in rows])
     return [_fund_dict(f, names) for f in rows]
@@ -182,11 +191,12 @@ def list_claims(employee_id: Optional[str] = None, holder: Optional[str] = None,
         people, mappings = repo.line_context(db, fresh=False)
         holders = {f.id: f.holder_employee_id for f in repo.list_funds(db, active_only=False)}
         roles: dict = {}  # สิทธิ์ขึ้นกับผู้ขอเบิก + เจ้าของเงินสดของวงเงิน ไม่ใช่ตัวใบ คิดครั้งเดียวต่อคู่
+        is_super = _is_super(head_approver)
         mine = []
         for c in pending:
             key = (c.created_by, holders.get(c.fund_id))
             if key not in roles:
-                roles[key] = _head_roles_in(people, mappings, c.created_by, key[1], head_approver)
+                roles[key] = (True, True) if is_super else _head_roles_in(people, mappings, c.created_by, key[1], head_approver)
             if roles[key][0]:
                 mine.append((c, roles[key][1]))
         page = mine[offset:offset + limit]
@@ -198,7 +208,7 @@ def list_claims(employee_id: Optional[str] = None, holder: Optional[str] = None,
             items.append(body)
         return {"total": len(mine), "items": items}
 
-    fund_ids = [f.id for f in repo.list_funds(db, holder=holder)] if holder else None
+    fund_ids = [f.id for f in repo.list_funds(db, holder=holder)] if holder and not _is_super(holder) else None
     rows, total = repo.list_claims(db, fund_ids=fund_ids, created_by=employee_id, status=status,
                                    month=month, limit=limit, offset=offset, head_approved_by=head_approved_by)
     names = _names(rows)
@@ -307,6 +317,8 @@ def _claim_or_404(db: Session, form_id: str):
 
 def _require_holder(db: Session, claim, employee_id: str):
     fund = repo.get_fund(db, claim.fund_id)
+    if fund is not None and _is_super(employee_id):
+        return fund
     if fund is None or fund.holder_employee_id != employee_id:
         raise HTTPException(status_code=403, detail="เฉพาะผู้อนุมัติของกองทุนนี้เท่านั้น")
     return fund
@@ -335,6 +347,8 @@ def _holder_of(db: Session, claim) -> Optional[str]:
 
 
 def _may_head_approve(db: Session, claim, employee_id: str) -> bool:
+    if _is_super(employee_id):
+        return True
     people, mappings = repo.line_context(db, fresh=True)  # ตัดสินสิทธิ์ต้องใช้สายงานล่าสุด
     return _head_roles_in(people, mappings, claim.created_by, _holder_of(db, claim), employee_id)[0]
 
@@ -652,7 +666,7 @@ def _may_see_bank_account(db: Session, holder_id: Optional[str], employee_id: Op
     eid = str(employee_id or "").strip()
     if not eid:
         return False
-    if (holder_id and eid == str(holder_id)) or perms.is_superadmin(eid):
+    if (holder_id and eid == str(holder_id)) or perms.is_superadmin(eid) or _is_super(eid):
         return True
     depts = [int(x) for x in adv_logic.parse_id_list(os.getenv("FINANCE_DEPARTMENT_IDS", "4,6")) if x.isdigit()]
     emps = adv_logic.parse_id_list(os.getenv("FINANCE_EMPLOYEE_IDS"))
@@ -693,6 +707,8 @@ def _clear_roles(db: Session, batch, employee_id: str, fresh: bool = True) -> tu
     """
     if batch.status != L.BATCH_CLEAR_PENDING:
         return False, False
+    if _is_super(employee_id):
+        return True, True
     fund = repo.get_fund(db, batch.fund_id)
     if fund is None:
         return False, False
@@ -720,7 +736,7 @@ def create_round(payload: RoundIn, db: Session = Depends(get_db), background: Ba
     fund = repo.get_fund(db, payload.fund_id)
     if fund is None:
         raise HTTPException(status_code=404, detail="ไม่พบกองทุน")
-    if fund.holder_employee_id != payload.employee_id:
+    if fund.holder_employee_id != payload.employee_id and not _is_super(payload.employee_id):
         raise HTTPException(status_code=403, detail="ส่งเคลียร์ได้เฉพาะเจ้าของเงินสดของกองทุนนี้")
 
     blocked, no_debt_doc = [], []
@@ -775,7 +791,7 @@ def list_rounds(fund_id: Optional[int] = None, status: Optional[str] = None, hol
     """holder = รอบของกองทุนที่คนนั้นถือ · clear_approver = รอบที่คนนั้นอนุมัติเคลียร์ได้ · status คั่นด้วย ,
     cleared_by = รอบที่คนนั้นอนุมัติ/ไม่อนุมัติเคลียร์ไปแล้ว ตัดสินล่าสุดก่อน (แถบ อนุมัติ/ไม่อนุมัติแล้ว ของหัวหน้า)"""
     fund_ids = None
-    if holder:
+    if holder and not _is_super(holder):
         fund_ids = [f.id for f in repo.list_funds(db, holder=holder, active_only=False)]
     if fund_id:
         fund_ids = [fund_id] if fund_ids is None else [x for x in fund_ids if x == fund_id]
@@ -790,6 +806,7 @@ def list_rounds(fund_id: Optional[int] = None, status: Optional[str] = None, hol
     funds = repo.funds_by_id(db, {b.fund_id for b in pending})
     people, mappings = repo.line_context(db, fresh=False)
     roles: dict = {}  # สิทธิ์ขึ้นกับเจ้าของเงินสดกับระดับที่ต้องใช้ ไม่ใช่ตัวรอบ คิดครั้งเดียวต่อคู่
+    is_super = _is_super(clear_approver)
     mine = []
     for b in pending:
         fund = funds.get(b.fund_id)
@@ -797,8 +814,8 @@ def list_rounds(fund_id: Optional[int] = None, status: Optional[str] = None, hol
             continue
         key = (fund.holder_employee_id, b.clear_required_level)
         if key not in roles:
-            roles[key] = _clear_roles_in(people, mappings, fund.holder_employee_id, b.clear_required_level,
-                                         clear_approver)
+            roles[key] = (True, True) if is_super else _clear_roles_in(people, mappings, fund.holder_employee_id,
+                                                                       b.clear_required_level, clear_approver)
         if roles[key][0]:
             mine.append((b, roles[key][1]))
     page = mine[offset:offset + limit]
