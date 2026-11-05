@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+		<meta http-equiv="Content-Security-Policy" content="child-src 'none';" />
+	    <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1,, maximum-scale=1" />
+		
+    		    	    	    		
+	    																<link href="/assets/js/widget/bootstrap/bootstrap-icons/bootstrap-icons.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+<link href="/assets/js/widget/bootstrap/bootstrap-5.1.3/css/bootstrap.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+<link href="/assets/css/jquery_ui/aristo/jquery-ui-1.8.custom.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+<link href="/assets/css/widget/ui.multiselect.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+<link href="/assets/css/widget/datepicker.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+<link href="/assets/css/widget/jquery.fancybox.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+<link href="/assets/css/account/theme/framework.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+<link href="/assets/css/account/theme/style.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+	    																																				
+
+
+
+
+
+
+
+
+
+				<title>เบิก - MENA ATMS</title></head>
+<body class="fluid-body inv-withdraw-index-page ">
+		<nav><a href="/account/user/logout/">ออกจากระบบ</a></nav>
+
+<div class="toast-container">
+	<div id="noti-toast" class="toast noti-toast" role="alert" aria-live="assertive" aria-atomic="true"></div>
+</div>
+
+
+	    <div class="container-fluid content-stage">
+      	<div class="row">
+      		<div class="col-md-12">
+    			
+
+<div class="content-title">
+			ค้นหา เบิก		<div class="search-menu">
+								<a class="link-icon-plus" href="/inv/withdraw/add" title="เพิ่ม รายการ"></a>
+					
+		
+							<a class="link-icon-download export-btn" href="" title="ส่งออกข้อมูล"></a>
+										<a class="link-icon-toggle" id="toggle_search" href="javascript:void(0);" title="แสดง/ซ่อน"></a>
+			</div>
+</div>
+<div id="search-form" class="content-area search-form">
+	<div>
+		<div>
+			<form id="basic-input-form" class="inv-withdraw-index-form" method="get" action="/inv/withdraw/index"><dl class="zend_form">
+<dt id="code-label"><label for="code" class="optional">รหัส</label></dt>
+<dd id="code-element">
+<input type="text" name="code" id="code" value="" /></dd>
+<dt id="pick_to-label"><label for="pick_to" class="optional">จุดประสงค์ในการเบิก</label></dt>
+<dd id="pick_to-element">
+<input type="text" name="pick_to" id="pick_to" value="" /></dd>
+<dt id="user-label"><label for="user" class="optional">ผู้ใช้งาน</label></dt>
+<dd id="user-element">
+<input type="text" name="user" id="user" value="" /></dd>
+<dt id="remark-label"><label for="remark" class="optional">หมายเหตุ</label></dt>
+<dd id="remark-element">
+<input type="text" name="remark" id="remark" value="" /></dd>
+<dt id="inventory_id-label"><label for="inventory_id" class="optional">คลังสินค้า</label></dt>
+<dd id="inventory_id-element">
+<select name="inventory_id" id="inventory_id">
+    <option value="" label="ทั้งหมด">ทั้งหมด</option>
+    <option value="3" label="คลังสระบุรี">คลังสระบุรี</option>
+    <option value="4" label="คลังลาดกระบัง" selected="selected">คลังลาดกระบัง</option>
+    <option value="5" label="คลัง HR กรุงเทพ">คลัง HR กรุงเทพ</option>
+    <option value="6" label="คลัง HR ลาดกระบัง">คลัง HR ลาดกระบัง</option>
+    <option value="7" label="คลัง HR สระบุรี">คลัง HR สระบุรี</option>
+    <option value="8" label="คลัง จป.สระบุรี">คลัง จป.สระบุรี</option>
+    <option value="9" label="คลัง จป.ลาดกระบัง">คลัง จป.ลาดกระบัง</option>
+    <option value="10" label="คลังทรัพย์สินกรุงเทพ">คลังทรัพย์สินกรุงเทพ</option>
+    <option value="11" label="คลังขอนแก่น">คลังขอนแก่น</option>
+    <option value="12" label="คลัง IT">คลัง IT</option>
+    <option value="16" label="คลัง จป. ขอนแก่น">คลัง จป. ขอนแก่น</option>
+    <option value="17" label="คลังทรัพย์สินลาดกระบัง">คลังทรัพย์สินลาดกระบัง</option>
+    <option value="18" label="คลังทรัพย์สินสระบุรี">คลังทรัพย์สินสระบุรี</option>
+    <option value="21" label="คลังไม่มีสต๊อก สระบุรี">คลังไม่มีสต๊อก สระบุรี</option>
+    <option value="24" label="คลัง DIST">คลัง DIST</option>
+    <option value="25" label="คลัง DIST จป.สระบุรี">คลัง DIST จป.สระบุรี</option>
+    <option value="31" label="คลัง DIST จป.ขอนแก่น">คลัง DIST จป.ขอนแก่น</option>
+    <option value="35" label="คลัง OPS">คลัง OPS</option>
+    <option value="36" label="คลังฝ่ายสำนักเลขา">คลังฝ่ายสำนักเลขา</option>
+    <option value="38" label="คลังจัดส่ง (บางปะกง)">คลังจัดส่ง (บางปะกง)</option>
+    <option value="39" label="คลัง บัญชีการเงิน สกท.">คลัง บัญชีการเงิน สกท.</option>
+    <option value="40" label="คลังจัดส่่ง (สระบุรี)">คลังจัดส่่ง (สระบุรี)</option>
+</select></dd>
+<dt id="spare_part_returned-label"><label for="spare_part_returned" class="optional">คืนอะไหล่ครบแล้ว</label></dt>
+<dd id="spare_part_returned-element">
+<select name="spare_part_returned" id="spare_part_returned">
+    <option value="" label="ทั้งหมด" selected="selected">ทั้งหมด</option>
+    <option value="y" label="ใช่">ใช่</option>
+    <option value="n" label="ไม่">ไม่</option>
+</select></dd>
+<dt id="from_created_at-label"><label for="from_created_at" class="optional">บันทึกเมื่อ</label></dt>
+<dd id="from_created_at-element">
+<input type="text" name="from_created_at" id="from_created_at" value="30/10/2026" class="date-pick not-decorate" placeholder="วัน/ชื่อ/ชื่อ (คศ.)" /></dd>
+<dt id="to_created_at-label"><label for="to_created_at" class="optional">ถึงวันที่</label></dt>
+<dd id="to_created_at-element">
+<input type="text" name="to_created_at" id="to_created_at" value="31/10/2026" class="date-pick not-decorate" placeholder="วัน/ชื่อ/ชื่อ (คศ.)" /></dd>
+<dt id="submit-label">&#160;</dt><dd id="submit-element">
+<input type="submit" name="submit" id="submit" value="ค้นหา" /></dd>
+<dt id="order_by-label">&#160;</dt>
+<dd id="order_by-element">
+<input type="hidden" name="order_by" value="" class="form-hidden-field" id="order_by" /></dd></dl></form>			<br class="clear" />
+		</div>
+	</div>
+	<input type="hidden" id="search-toggle-status" value="" />
+	<input type="hidden" id="current-page" value="" />
+	<input type="hidden" id="current-module" value="inv" />
+	<input type="hidden" id="current-controller" value="withdraw" />
+	<input type="hidden" id="current-action" value="index" />
+	<input type="hidden" id="search-params" value="page=1&amp;inventory_id=4&amp;from_created_at=30/10/2026&amp;to_created_at=31/10/2026" />
+	<br class="clear" />
+</div>
+
+<!--
+See http://developer.yahoo.com/ypatterns/pattern.php?pattern=itempagination
+-->
+<div class="pagination">
+<span class="page-summary">
+1 - 25&nbsp;/ 42</span>
+
+<!-- First page link -->
+  <span class="first disabled">หน้าแรก</span>
+
+<!-- Previous page link -->
+  <span class="previous disabled">ก่อนหน้า</span>
+
+<!-- Numbered page links -->
+
+<span class="current">1</span><a href="?page=2&inventory_id=4&from_created_at=30%2F10%2F2026&to_created_at=31%2F10%2F2026" class="page_link">2</a>
+
+
+<!-- Next page link -->
+	<a href="?page=2&inventory_id=4&from_created_at=30%2F10%2F2026&to_created_at=31%2F10%2F2026" class="page_link next">ถัดไป</a>
+<!-- Last page link -->
+  <a href="?page=2&inventory_id=4&from_created_at=30%2F10%2F2026&to_created_at=31%2F10%2F2026" class="page_link last">หน้าสุดท้าย</a>
+  <select class="set-row-per-page not-decorate">
+  	<option  value="10">&nbsp;10 รายการ / หน้า&nbsp;</option>
+  	<option  value="15">&nbsp;15 รายการ / หน้า&nbsp;</option>
+  	<option selected="selected" value="25">&nbsp;25 รายการ / หน้า&nbsp;</option>
+  	<option  value="50">&nbsp;50 รายการ / หน้า&nbsp;</option>
+  	<option  value="100">&nbsp;100 รายการ / หน้า&nbsp;</option>
+  	<option  value="200">&nbsp;200 รายการ / หน้า&nbsp;</option>
+	<option  value="500">&nbsp;500 รายการ / หน้า&nbsp;</option>
+	<option  value="1000">&nbsp;1000 รายการ / หน้า&nbsp;</option>
+  </select>
+</div>
+<br class="clear" />
+
+<div class="content-area table-responsive">
+	<table class="defaultTable" cellpadding="0" cellspacing="0" width="100%">
+	<thead>
+		<tr>
+						<th><a class="order-by" href="gm.created_at">วันที่เบิก</a></th>
+			<th><a class="order-by" href="gm.code">รหัส</a></th>
+			<th width="100"><a class="order-by" href="i.name">คลังสินค้า</a></th>
+			<th width="150"><a class="order-by" href="pt.name">จุดประสงค์ในการเบิก</a></th>
+			<th><a class="order-by" href="v.plate_no">ทะเบียน</a></th>
+			<th><a class="order-by" href="d.name">พจส.</a></th>
+			<th>เลขไมค์แจ้งซ่อม</th>
+			<th>จำนวนเงิน</th>
+			<th>ใบรับสภาพหนี้</th>
+			<th>จำนวนเงินรับสภาพหนี้</th>
+			<th><a class="order-by" href="u2.username">approver</a></th>
+			<th><a class="order-by" href="u.name">ผู้ใช้งาน</a></th>
+			<th><a class="order-by" href="gm.remark">หมายเหตุ</a></th>
+						<th style="width:120px;"></th>
+					</tr>
+	</thead>
+	<tbody>
+		
+				<tr>
+						<td>30/10/2026</td>
+			<td>LBWD26102162</td>
+			<td>คลังลาดกระบัง</td>
+			<td>CM-งานซ่อม</td>
+			<td>สบ.99-0000</td>
+			<td>ชื่อ ทดสอบ</td>
+
+			<td>0</td>
+			<td>26,000.00</td>
+			<td>
+							</td>
+			<td>0.00</td>
+
+			<td>user4.t</td>
+			<td>user2.t</td>
+			<td>LBMR26090100		ลาดกระบัง	Mix ชื่อ ทดสอบ	ME088	สบ.99-0000
+
+LBPR26090089/ชื่อ.99-0000 เลขรถ :ME088/ชื่อ ทดสอบ ชื่อ ทดสอบ จำกัด</td>
+						<td style="text-align:center;">
+									<a class="result-view-link" href="/inv/withdraw/view/id/560439">แสดง</a>
+				
+									<a class="result-edit-link" href="/inv/withdraw/edit/id/560439">แก้ไข</a>
+				
+							</td>
+					</tr>
+			
+				<tr>
+						<td>30/10/2026</td>
+			<td>LBWD26102163</td>
+			<td>คลังลาดกระบัง</td>
+			<td>CM-งานซ่อม</td>
+			<td>สบ.99-0000</td>
+			<td>ชื่อ ทดสอบ</td>
+
+			<td>0</td>
+			<td>48,680.00</td>
+			<td>
+							</td>
+			<td>0.00</td>
+
+			<td>user4.t</td>
+			<td>user2.t</td>
+			<td>LBMR26090150		ลาดกระบัง	Mix ชื่อ ทดสอบ	ME029	สบ.99-0000
+
+LBPR26090154/ชื่อ.99-0000 : ME029 ชื่อ ทดสอบ ชื่อ ทดสอบ จำกัด</td>
+						<td style="text-align:center;">
+									<a class="result-view-link" href="/inv/withdraw/view/id/560441">แสดง</a>
+				
+									<a class="result-edit-link" href="/inv/withdraw/edit/id/560441">แก้ไข</a>
+				
+							</td>
+					</tr>
+			
+				<tr>
+						<td>30/10/2026</td>
+			<td>LBWD26102164</td>
+			<td>คลังลาดกระบัง</td>
+			<td>CM-งานซ่อม</td>
+			<td>สบ.99-0000</td>
+			<td>ชื่อ ทดสอบ</td>
+
+			<td>0</td>
+			<td>14,000.00</td>
+			<td>
+							</td>
+			<td>0.00</td>
+
+			<td>user4.t</td>
+			<td>user2.t</td>
+			<td>LBMR26090150 ลาดกระบัง Mix ชื่อ ทดสอบ ME029 สบ.99-0000
+
+LBPR26090154/ชื่อ.99-0000 : ME029 ชื่อ ทดสอบ ชื่อ ทดสอบ จำกัด</td>
+						<td style="text-align:center;">
+									<a class="result-view-link" href="/inv/withdraw/view/id/560443">แสดง</a>
+				
+									<a class="result-edit-link" href="/inv/withdraw/edit/id/560443">แก้ไข</a>
+				
+							</td>
+					</tr>
+			
+				<tr>
+						<td>30/10/2026</td>
+			<td>LBWD26102165</td>
+			<td>คลังลาดกระบัง</td>
+			<td>CM-งานซ่อม</td>
+			<td>สบ.99-0000</td>
+			<td>ชื่อ ทดสอบ</td>
+
+			<td>-3</td>
+			<td>3,500.00</td>
+			<td>
+							</td>
+			<td>0.00</td>
+
+			<td>user4.t</td>
+			<td>user2.t</td>
+			<td>LBMR26100579		ลาดกระบัง	Mix ใหญ่ CPAC	6465	สบ.99-0000
+
+LBPR26100454/ชื่อ.99-0000 / 6465/ชื่อ ทดสอบ ชื่อ ทดสอบ จำกัด</td>
+						<td style="text-align:center;">
+									<a class="result-view-link" href="/inv/withdraw/view/id/560446">แสดง</a>
+				
+									<a class="result-edit-link" href="/inv/withdraw/edit/id/560446">แก้ไข</a>
+				
+							</td>
+					</tr>
+			
+				<tr>
+						<td>30/10/2026</td>
+			<td>LBWD26102166</td>
+			<td>คลังลาดกระบัง</td>
+			<td>CM-งานซ่อม</td>
+			<td>สบ.99-0000</td>
+			<td>รถว่าง</td>
+
+			<td>0</td>
+			<td>1,500.00</td>
+			<td>
+							</td>
+			<td>0.00</td>
+
+			<td>user4.t</td>
+			<td>user2.t</td>
+			<td>LBMR26090589		ลาดกระบัง	Mix ชื่อ ทดสอบ	ME016	สบ.99-0000
+
+LBPR26090381/ชื่อ.99-0000 : ME016 ชื่อ ทดสอบ ชื่อ ทดสอบ จำกัด</td>
+						<td style="text-align:center;">
+									<a class="result-view-link" href="/inv/withdraw/view/id/560448">แสดง</a>
+				
+									<a class="result-edit-link" href="/inv/withdraw/edit/id/560448">แก้ไข</a>
+				
+							</td>
+					</tr>
+			
+				<tr>
+						<td>30/10/2026</td>
+			<td>LBWD26102167</td>
+			<td>คลังลาดกระบัง</td>
+			<td>CM-งานซ่อม</td>
+			<td>สบ.99-0000</td>
+			<td>ชื่อ ทดสอบ</td>
+
+			<td>0</td>
+			<td>2,600.00</td>
+			<td>
+							</td>
+			<td>0.00</td>
+
+			<td>user4.t</td>
+			<td>user2.t</td>
+			<td>LBMR26101025		ลาดกระบัง	Mix ใหญ่ CPAC	6527	สบ.99-0000
+LBPR26100654/ชื่อ.99-0000 : 6527 ชื่อ ทดสอบ ชื่อ ทดสอบ(หัวหินแอร์)</td>
+						<td style="text-align:center;">
+									<a class="result-view-link" href="/inv/withdraw/view/id/560450">แสดง</a>
+				
+									<a class="result-edit-link" href="/inv/withdraw/edit/id/560450">แก้ไข</a>
+				
+							</td>
+					</tr>
+			
+				<tr>
+						<td>30/10/2026</td>
+			<td>LBWD26102168</td>
+			<td>คลังลาดกระบัง</td>
+			<td>OTH-อื่นๆ</td>
+			<td></td>
+			<td></td>
+
+			<td>0</td>
+			<td>900.00</td>
+			<td>
+							</td>
+			<td>0.00</td>
+
+			<td>user4.t</td>
+			<td>user2.t</td>
+			<td></td>
+						<td style="text-align:center;">
+									<a class="result-view-link" href="/inv/withdraw/view/id/560451">แสดง</a>
+				
+									<a class="result-edit-link" href="/inv/withdraw/edit/id/560451">แก้ไข</a>
+				
+							</td>
+					</tr>
+			
+				<tr>
+						<td>30/10/2026</td>
+			<td>LBWD26102169</td>
+			<td>คลังลาดกระบัง</td>
+			<td>CM-งานซ่อม</td>
+			<td>สบ.99-0000</td>
+			<td>ชื่อ ทดสอบ</td>
+
+			<td>0</td>
+			<td>42,670.00</td>
+			<td>
+							</td>
+			<td>0.00</td>
+
+			<td>user4.t</td>
+			<td>user2.t</td>
+			<td>LBMR26100391		ลาดกระบัง	Mix ชื่อ ทดสอบ	TH1739	สบ.99-0000
+
+LBPR26100433/ชื่อ.99-0000: TH1739/ชื่อ ทดสอบ ชื่อ ทดสอบ จำกัด</td>
+						<td style="text-align:center;">
+									<a class="result-view-link" href="/inv/withdraw/view/id/560453">แสดง</a>
+				
+									<a class="result-edit-link" href="/inv/withdraw/edit/id/560453">แก้ไข</a>
+				
+							</td>
+					</tr>
+			
+				<tr>
+						<td>30/10/2026</td>
+			<td>LBWD26102170</td>
+			<td>คลังลาดกระบัง</td>
+			<td>CM-งานซ่อม</td>
+			<td>สบ.99-0000</td>
+			<td>ชื่อ ทดสอบ</td>
+
+			<td>0</td>
+			<td>3,800.00</td>
+			<td>
+							</td>
+			<td>0.00</td>
+
+			<td>user4.t</td>
+			<td>user2.t</td>
+			<td>LBMR26090015		ลาดกระบัง	Mix ใหญ่ CPAC	6543	สบ.99-0000
+
+
+
+LBPR26090019/99-0000/6543 /ชื่อ ทดสอบ ชื่อ ทดสอบ(หัวหินแอร์)</td>
+						<td style="text-align:center;">
+									<a class="result-view-link" href="/inv/withdraw/view/id/560455">แสดง</a>
+				
+									<a class="result-edit-link" href="/inv/withdraw/edit/id/560455">แก้ไข</a>
+				
+							</td>
+					</tr>
+			
+				<tr>
+						<td>30/10/2026</td>
+			<td>LBWD26102171</td>
+			<td>คลังลาดกระบัง</td>
+			<td>CM-งานซ่อม</td>
+			<td>สบ.99-0000</td>
+			<td>ชื่อ ทดสอบ</td>
+
+			<td>0</td>
+			<td>2,400.00</td>
+			<td>
+							</td>
+			<td>0.00</td>
+
+			<td>user4.t</td>
+			<td>user2.t</td>
+			<td>LBMR26100689		ลาดกระบัง	Mix ชื่อ ทดสอบ	ME096	สบ.99-0000
+
+LBPR26100579 / สบ.99-0000 : ME096
+พจส.รับสภาพหนี้เลขที่ LBAD26100094
+ชื่อ ทดสอบ ชื่อ ทดสอบ
+รถโม่ใหญ่</td>
+						<td style="text-align:center;">
+									<a class="result-view-link" href="/inv/withdraw/view/id/560466">แสดง</a>
+				
+									<a class="result-edit-link" href="/inv/withdraw/edit/id/560466">แก้ไข</a>
+				
+							</td>
+					</tr>
+			
+				<tr>
+						<td>30/10/2026</td>
+			<td>LBWD26102172</td>
+			<td>คลังลาดกระบัง</td>
+			<td>แย็กโม่</td>
+			<td>สบ.99-0000</td>
+			<td>รถว่าง</td>
+
+			<td>183,736</td>
+			<td>960.00</td>
+			<td>
+							</td>
+			<td>0.00</td>
+
+			<td>user4.t</td>
+			<td>user2.t</td>
+			<td>LBMR26090005	ลาดกระบัง	Mix ชื่อ ทดสอบ	ME092	สบ.99-0000
+
+LBPR26100580/ชื่อ.99-0000 : ME092
+พจส.รับสภาพหนี้เลขที่ LBAD26080267
+ชื่อ ทดสอบ ชื่อ ทดสอบ
+รถโม่ใหญ่</td>
+						<td style="text-align:center;">
+									<a class="result-view-link" href="/inv/withdraw/view/id/560468">แสดง</a>
+				
+									<a class="result-edit-link" href="/inv/withdraw/edit/id/560468">แก้ไข</a>
+				
+							</td>
+					</tr>
+			
+				<tr>
+						<td>30/10/2026</td>
+			<td>LBWD26102173</td>
+			<td>คลังลาดกระบัง</td>
+			<td>CM-งานซ่อม</td>
+			<td>สบ.99-0000</td>
+			<td>ชื่อ ทดสอบ</td>
+
+			<td>0</td>
+			<td>3,200.00</td>
+			<td>
+							</td>
+			<td>0.00</td>
+
+			<td>user1.t</td>
+			<td>user2.t</td>
+			<td>LBMR26101105		ลาดกระบัง	Mix ใหญ่ CPAC	F012	สบ.99-0000
+
+สมมาาตร</td>
+						<td style="text-align:center;">
+									<a class="result-view-link" href="/inv/withdraw/view/id/560480">แสดง</a>
+				
+									<a class="result-edit-link" href="/inv/withdraw/edit/id/560480">แก้ไข</a>
+				
+							</td>
+					</tr>
+			
+				
+			
+			</tbody>
+</table>	<br class="clear" />
+</div>
+
+<!--
+See http://developer.yahoo.com/ypatterns/pattern.php?pattern=itempagination
+-->
+<div class="pagination">
+<span class="page-summary">
+1 - 25&nbsp;/ 42</span>
+
+<!-- First page link -->
+  <span class="first disabled">หน้าแรก</span>
+
+<!-- Previous page link -->
+  <span class="previous disabled">ก่อนหน้า</span>
+
+<!-- Numbered page links -->
+
+<span class="current">1</span><a href="?page=2&inventory_id=4&from_created_at=30%2F10%2F2026&to_created_at=31%2F10%2F2026" class="page_link">2</a>
+
+
+<!-- Next page link -->
+	<a href="?page=2&inventory_id=4&from_created_at=30%2F10%2F2026&to_created_at=31%2F10%2F2026" class="page_link next">ถัดไป</a>
+<!-- Last page link -->
+  <a href="?page=2&inventory_id=4&from_created_at=30%2F10%2F2026&to_created_at=31%2F10%2F2026" class="page_link last">หน้าสุดท้าย</a>
+  <select class="set-row-per-page not-decorate">
+  	<option  value="10">&nbsp;10 รายการ / หน้า&nbsp;</option>
+  	<option  value="15">&nbsp;15 รายการ / หน้า&nbsp;</option>
+  	<option selected="selected" value="25">&nbsp;25 รายการ / หน้า&nbsp;</option>
+  	<option  value="50">&nbsp;50 รายการ / หน้า&nbsp;</option>
+  	<option  value="100">&nbsp;100 รายการ / หน้า&nbsp;</option>
+  	<option  value="200">&nbsp;200 รายการ / หน้า&nbsp;</option>
+	<option  value="500">&nbsp;500 รายการ / หน้า&nbsp;</option>
+	<option  value="1000">&nbsp;1000 รายการ / หน้า&nbsp;</option>
+  </select>
+</div>
+<br class="clear" />
+
+    		</div>
+    	</div>
+		    		<footer>
+	<p>&copy; Mena Transport PLC. All Rights Reserved 2026</p>
+</footer>		    	<input type="hidden" id="ROOT_URI" value="" />
+		<input type="hidden" id="page_js" value="inv_withdraw_index" />
+		<input type="hidden" id="session_lang" value="th" />
+	</div>
+
+	
+</body>
+</html>

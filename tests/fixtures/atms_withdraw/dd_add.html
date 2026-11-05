@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+		<meta http-equiv="Content-Security-Policy" content="child-src 'none';" />
+	    <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1,, maximum-scale=1" />
+		
+    		    	    	    		
+	    																<link href="/assets/js/widget/bootstrap/bootstrap-icons/bootstrap-icons.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+<link href="/assets/js/widget/bootstrap/bootstrap-5.1.3/css/bootstrap.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+<link href="/assets/css/jquery_ui/aristo/jquery-ui-1.8.custom.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+<link href="/assets/css/widget/ui.multiselect.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+<link href="/assets/css/widget/datepicker.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+<link href="/assets/css/widget/jquery.fancybox.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+<link href="/assets/css/widget/autocomplete/jquery.autocomplete.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+<link href="/assets/css/widget/autocomplete/thickbox.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+<link href="/assets/css/account/theme/framework.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+<link href="/assets/css/account/theme/style.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+	    																																				
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+				<title>รับ - รับ - MENA ATMS</title></head>
+<body class="fluid-body inv-deposit-add-page ">
+		<nav><a href="/account/user/logout/">ออกจากระบบ</a></nav>
+
+<div class="toast-container">
+	<div id="noti-toast" class="toast noti-toast" role="alert" aria-live="assertive" aria-atomic="true"></div>
+</div>
+
+
+	    <div class="container-fluid content-stage">
+      	<div class="row">
+      		<div class="col-md-12">
+    			
+<div class="content-title">
+			บันทึก รับ	</div>
+
+<div class="content-area" id="add-form-id">
+		<div>
+				<form id="basic-input-form" enctype="application/x-www-form-urlencoded" class="inv-deposit-add-form" method="post" action="/inv/deposit/add"><dl class="zend_form">
+<dt id="type-label"><label for="type" class="required">ประเภท</label></dt>
+<dd id="type-element">
+<input type="hidden" name="type" value="deposit" class="form-hidden-field" id="type" /></dd>
+<dt id="purchase_order_id-label"><label for="purchase_order_id" class="optional">ใบสั่งซื้อ (PO)</label></dt>
+<dd id="purchase_order_id-element">
+<input type="hidden" name="purchase_order_id" value="" class="form-hidden-field" id="purchase_order_id" /></dd>
+<dt id="inventory_id-label"><label for="inventory_id" class="required">คลังสินค้า</label></dt>
+<dd id="inventory_id-element">
+<select name="inventory_id" id="inventory_id" class="force-new-line ">
+    <option value="3" label="คลังสระบุรี">คลังสระบุรี</option>
+    <option value="4" label="คลังลาดกระบัง">คลังลาดกระบัง</option>
+    <option value="5" label="คลัง HR กรุงเทพ">คลัง HR กรุงเทพ</option>
+    <option value="6" label="คลัง HR ลาดกระบัง">คลัง HR ลาดกระบัง</option>
+    <option value="7" label="คลัง HR สระบุรี">คลัง HR สระบุรี</option>
+    <option value="8" label="คลัง จป.สระบุรี">คลัง จป.สระบุรี</option>
+    <option value="9" label="คลัง จป.ลาดกระบัง">คลัง จป.ลาดกระบัง</option>
+    <option value="10" label="คลังทรัพย์สินกรุงเทพ">คลังทรัพย์สินกรุงเทพ</option>
+    <option value="11" label="คลังขอนแก่น">คลังขอนแก่น</option>
+    <option value="12" label="คลัง IT">คลัง IT</option>
+    <option value="16" label="คลัง จป. ขอนแก่น">คลัง จป. ขอนแก่น</option>
+    <option value="17" label="คลังทรัพย์สินลาดกระบัง">คลังทรัพย์สินลาดกระบัง</option>
+    <option value="18" label="คลังทรัพย์สินสระบุรี">คลังทรัพย์สินสระบุรี</option>
+    <option value="21" label="คลังไม่มีสต๊อก สระบุรี">คลังไม่มีสต๊อก สระบุรี</option>
+    <option value="24" label="คลัง DIST">คลัง DIST</option>
+    <option value="25" label="คลัง DIST จป.สระบุรี">คลัง DIST จป.สระบุรี</option>
+    <option value="31" label="คลัง DIST จป.ขอนแก่น">คลัง DIST จป.ขอนแก่น</option>
+    <option value="35" label="คลัง OPS">คลัง OPS</option>
+    <option value="36" label="คลังฝ่ายสำนักเลขา">คลังฝ่ายสำนักเลขา</option>
+    <option value="38" label="คลังจัดส่ง (บางปะกง)">คลังจัดส่ง (บางปะกง)</option>
+    <option value="39" label="คลัง บัญชีการเงิน สกท.">คลัง บัญชีการเงิน สกท.</option>
+    <option value="40" label="คลังจัดส่่ง (สระบุรี)">คลังจัดส่่ง (สระบุรี)</option>
+</select></dd>
+<dt id="supplier_ref_no-label"><label for="supplier_ref_no" class="required">เลขที่ใบส่งของ / ใบแจ้งหนี้</label></dt>
+<dd id="supplier_ref_no-element">
+<input type="text" name="supplier_ref_no" id="supplier_ref_no" value="" class="force-new-line " /></dd>
+<dt id="supplier_inv_date-label"><label for="supplier_inv_date" class="required">วันที่ใบแจ้งหนี้</label></dt>
+<dd id="supplier_inv_date-element">
+<input type="text" name="supplier_inv_date" id="supplier_inv_date" value="" class="date-pick not-decorate" placeholder="วัน/ชื่อ/ชื่อ (คศ.)" /></dd>
+<dt id="extra_cost-label"><label for="extra_cost" class="optional">ค่าใช้จ่ายเสริม</label></dt>
+<dd id="extra_cost-element">
+<input type="text" name="extra_cost" id="extra_cost" value="0.00" class="force-new-line " /></dd>
+<dt id="withdraw-label"><label for="withdraw" class="optional">เบิก</label></dt>
+<dd id="withdraw-element">
+<input type="text" name="withdraw" id="withdraw" value="" /></dd>
+<dt id="withdraw_id-label"><label for="withdraw_id" class="optional">เบิก</label></dt>
+<dd id="withdraw_id-element">
+<input type="hidden" name="withdraw_id" value="" class="form-hidden-field" id="withdraw_id" /></dd>
+<dt id="remark-label"><label for="remark" class="optional">หมายเหตุ</label></dt>
+<dd id="remark-element">
+<textarea name="remark" id="remark" class="force-new-line " rows="24" cols="80"></textarea></dd>
+<dt id="extra_type-label"><label for="extra_type" class="optional">ประเภทพิเศษ</label></dt>
+<dd id="extra_type-element">
+<input type="hidden" name="extra_type" value="" class="form-hidden-field" id="extra_type" /></dd></dl></form>	</div>
+	<dl class="zend_form form-btn" style="margin-top: 5px;">
+		<dt>&nbsp;</dt>
+		<dd>
+							<a class="btn-link submit-link btn-primary" href="">บันทึก</a>
+			
+							<a class="btn-link back-link" href="">ย้อนกลับ</a>
+			
+					</dd>
+	</dl>
+	<br class="clear" />
+</div>
+
+    		</div>
+    	</div>
+		    		<footer>
+	<p>&copy; Mena Transport PLC. All Rights Reserved 2026</p>
+</footer>		    	<input type="hidden" id="ROOT_URI" value="" />
+		<input type="hidden" id="page_js" value="inv_deposit_add" />
+		<input type="hidden" id="session_lang" value="th" />
+	</div>
+
+	
+</body>
+</html>

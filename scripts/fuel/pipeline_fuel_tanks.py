@@ -1,6 +1,6 @@
 """fuel_tanks — tank size per plate and re-stamp of tank_l / tank_from on gps_series (spec §3.4).
 
-Order: ATMS ความจุถังน้ำมัน → calibrated (Besttech % vs Terminus litres in the same minute, both
+Order: analytics.fuel_tank_master (hand-kept, fuel control only) → ATMS ความจุถังน้ำมัน → calibrated (Besttech % vs Terminus litres in the same minute, both
 parked, CALIB_FROM..CALIB_TO, default 2026-06-01..2026-08-31) → observed (p99.5 of the minute-median
 litre readings in the last 30 days, rounded up to 10 L) → 200 L default. Only metadata is updated; columns stay as-is.
 """
@@ -21,6 +21,11 @@ from series_store import SERIES, TANKS  # noqa: E402
 from tanks import fit_tank, high_reading, observed_tank, pair_minutes, parse_capacity, resolve_tank  # noqa: E402
 
 OBSERVED_DAYS = 30
+
+
+def master_capacities(db) -> dict[str, float]:
+    return {d["_id"]: float(d["capacity_l"]) for d in db["fuel_tank_master"].find({}, {"capacity_l": 1})
+            if d.get("capacity_l")}
 
 
 def atms_capacities(atms_db) -> dict[str, float]:
@@ -70,13 +75,14 @@ def main() -> None:
         client = MongoClient(MONGODB_URI)
         db = client["analytics"]
         atms = atms_capacities(client["atms"])
+        master = master_capacities(db)
         pairs = calibration_pairs(db, date_from, date_to)
         observed = observed_maxima(db, (now_bkk().date() - timedelta(days=OBSERVED_DAYS)).isoformat())
         stamp = datetime.now(timezone.utc).replace(tzinfo=None)
         counts: dict[str, int] = defaultdict(int)
         ops = []
         for plate in db[SERIES].distinct("plate"):
-            tank = resolve_tank(atms_l=atms.get(plate), fit=fit_tank(pairs.get(plate, [])),
+            tank = resolve_tank(master_l=master.get(plate), atms_l=atms.get(plate), fit=fit_tank(pairs.get(plate, [])),
                                 observed_l=observed_tank(observed.get(plate)))
             counts[tank["tank_from"]] += 1
             ops.append(ReplaceOne({"_id": plate}, {"_id": plate, **tank, "updated_at": stamp}, upsert=True))

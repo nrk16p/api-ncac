@@ -19,7 +19,7 @@ from models.master_model import FormApprovalLog
 from models.user_model import User
 from schemas.finance_schema import (
     ClearApproveIn, ClearRejectIn, DocNumbersIn,
-    AccountCreate, AccountUpdate, ClearIn, ConfirmIn, OverdueRemindIn, PayIn, RejectVoucherIn, ResubmitIn, ReturnIn, SendBackIn,
+    AccountCreate, AccountUpdate, CancelIn, ClearIn, ConfirmIn, OverdueRemindIn, PayIn, RejectVoucherIn, ResubmitIn, ReturnIn, SendBackIn,
     VoucherIn,
 )
 from services.finance import advance_guard
@@ -261,7 +261,7 @@ RETURN_FIELDS = ("fin_status", "voucher_no", "voucher_date")
 CLEAR_FIELDS = ("clear_date", "amount_actual", "settle_amount", "settle_date", "remark")
 
 _ALREADY_SAVED = "รายการนี้ถูกบันทึกไปแล้ว กรุณารีเฟรชหน้าจอ"
-_SQL_NOT_RUN = "ฐานข้อมูลยังไม่รองรับสถานะนี้ — กรุณารัน SQL finance_advance_v3 ก่อน"
+_SQL_NOT_RUN = "ฐานข้อมูลยังไม่รองรับสถานะนี้ — กรุณารัน SQL migration ของ finance ตัวล่าสุดก่อน"
 _PG_CHECK_VIOLATION = "23514"
 
 
@@ -269,7 +269,7 @@ def _integrity_error(exc: IntegrityError) -> HTTPException:
     """A CHECK violation (fin_status RETURNED/RESUBMITTED before the v3 SQL ran) is a deployment problem, not a
     concurrent write: 500 with a clear message. Anything else (unique conflicts) stays 409."""
     if getattr(getattr(exc, "orig", None), "pgcode", None) == _PG_CHECK_VIOLATION:
-        logger.error("finance advance write hit a CHECK violation (finance_advance_v3 SQL not run?): %s", exc)
+        logger.error("finance advance write hit a CHECK violation (latest finance SQL migration not run?): %s", exc)
         return HTTPException(status_code=500, detail=_SQL_NOT_RUN)
     return HTTPException(status_code=409, detail=_ALREADY_SAVED)
 
@@ -412,6 +412,44 @@ def return_advance(form_id: str, body: ReturnIn, background_tasks: BackgroundTas
                            action_by=finance_user.id, remark=remark))
     detail = _commit_and_return(db, form_id)
     mail.queue_event(background_tasks, db, mail.RETURNED, sub, remark=remark)
+    return detail
+
+
+@router.put("/advances/{form_id}/cancel")
+def cancel_advance(form_id: str, body: CancelIn, background_tasks: BackgroundTasks,
+                   db: Session = Depends(get_db)):
+    """ตีกลับแบบยกเลิก (ผู้ใช้สั่ง 04/11/2026): same gate as ตีกลับ (PERM_RETURN), from รอตั้งเบิกทำจ่าย / รอจ่าย /
+    ตีกลับให้ผู้เบิกแก้ไข, reason required. The fin row goes to CANCELLED (created when there is none yet) with its
+    voucher fields cleared; a CANCEL fin log (with the request snapshot) and a CANCELLED approval-log marker
+    (level_no 0, the Finance user's users.id) record it. The requester is emailed the reason. Terminal: no edit,
+    no resubmit."""
+    finance_user = require_permission(db, body.action_by, perms.PERM_RETURN)
+    sub, adv, status = _load_for_update(db, form_id)
+    try:
+        logic.check_cancel(status, remark=body.remark)
+    except logic.AdvanceRuleError as exc:
+        raise _rule_error(exc)
+    remark = body.remark.strip()
+    values = {"fin_status": logic.FIN_CANCELLED, "voucher_no": None, "voucher_date": None}
+    before = _snapshot(adv, RETURN_FIELDS)
+    if adv is None:  # approved, never vouchered: the fin row starts (and ends) here
+        adv = FinAdvance(submission_id=sub.id, form_id=sub.form_id, fin_status=logic.FIN_CANCELLED)
+        db.add(adv)
+    for field, value in values.items():
+        setattr(adv, field, value)
+    try:
+        db.flush()
+    except IntegrityError as exc:  # concurrent first voucher/return created the row, or the cancel SQL is missing
+        db.rollback()
+        raise _integrity_error(exc)
+    changes = logic.diff_fields(before, values)
+    changes["snapshot"] = _request_snapshot(sub.form, sub.values)
+    db.add(FinAdvanceLog(advance_id=adv.id, action="CANCEL", changes=changes,
+                         remark=remark, action_by=body.action_by))
+    db.add(FormApprovalLog(submission_id=sub.id, level_no=0, action=approval_rules.MARKER_CANCELLED,
+                           action_by=finance_user.id, remark=remark))
+    detail = _commit_and_return(db, form_id)
+    mail.queue_event(background_tasks, db, mail.CANCELLED, sub, remark=remark)
     return detail
 
 

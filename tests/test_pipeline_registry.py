@@ -23,3 +23,89 @@ def test_jobs_tab_pipelines_run_at_their_bangkok_times():
     source = (ROOT / "main.py").read_text(encoding="utf-8")  # CronTrigger hours are UTC (BKK − 7)
     assert 'CronTrigger(hour=21, minute=30), args=["overspeed"]' in source       # 04:30 BKK
     assert 'CronTrigger(hour=2, minute=0), args=["rmc_compensation"]' in source  # 09:00 BKK
+
+
+def test_store_withdraw_drift_is_registered_and_posts_to_wms():
+    assert PIPELINE_SCRIPTS["store-withdraw-drift"].relative_to(SCRIPTS_DIR).as_posix() == "store_withdraw/pipeline_store_withdraw_drift.py"
+    assert PIPELINE_NAMES["store-withdraw-drift"] == "store-withdraw-drift"
+    assert RUN_LOG_LOCATION["store-withdraw-drift"] == ("analytics", "etl_jobs")
+
+
+def test_store_withdraw_drift_script_calls_drift_tick_with_the_key():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("sw_drift", PIPELINE_SCRIPTS["store-withdraw-drift"])
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    seen = {}
+
+    class Resp:
+        def __init__(self, status):
+            self.status_code, self.text = status, "x"
+
+        def json(self):
+            return {"checked": 3, "drifted": 1, "skipped": 0}
+
+    def fake_post(url, headers=None, timeout=None):
+        seen.update(url=url, headers=headers)
+        return Resp(200)
+
+    assert mod.tick("https://wms.test/", "k-1", post=fake_post) == {"checked": 3, "drifted": 1, "skipped": 0}
+    assert seen == {"url": "https://wms.test/api/store-withdraw/drift-tick", "headers": {"x-api-key": "k-1"}}
+    try:
+        mod.tick("https://wms.test", "bad", post=lambda *a, **k: Resp(401))
+    except RuntimeError as e:
+        assert "401" in str(e)
+    else:
+        raise AssertionError("non-2xx must raise")
+
+
+def test_store_withdraw_drift_missing_env_finishes_joblog_as_failed(monkeypatch):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("sw_drift2", PIPELINE_SCRIPTS["store-withdraw-drift"])
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    events = []
+
+    class FakeJob:
+        def __init__(self, *a, **k):
+            events.append(("start", a))
+
+        def finish(self, status="success", **extra):
+            events.append((status, extra))
+
+    monkeypatch.setattr(mod, "JobLog", FakeJob)
+    monkeypatch.delenv("WMS_BASE", raising=False)
+    monkeypatch.delenv("WMS_STORE_WITHDRAW_KEY", raising=False)
+    monkeypatch.delenv("PIPELINE_API_KEY", raising=False)
+    assert mod.main() == 1
+    assert events[0][0] == "start" and events[1][0] == "failed" and "PIPELINE_API_KEY" in events[1][1]["error"]
+
+
+def test_store_withdraw_drift_defaults_to_existing_env(monkeypatch):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("sw_drift3", PIPELINE_SCRIPTS["store-withdraw-drift"])
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    seen = {}
+
+    class FakeJob:
+        def __init__(self, *a, **k):
+            pass
+
+        def finish(self, status="success", **extra):
+            seen["status"] = status
+
+    def fake_tick(base, key, post=None):
+        seen["base"], seen["key"] = base, key
+        return {"checked": 0, "drifted": 0, "skipped": 0}
+
+    monkeypatch.setattr(mod, "JobLog", FakeJob)
+    monkeypatch.setattr(mod, "tick", fake_tick)
+    monkeypatch.delenv("WMS_BASE", raising=False)
+    monkeypatch.delenv("WMS_STORE_WITHDRAW_KEY", raising=False)
+    monkeypatch.setenv("PIPELINE_API_KEY", "pipe-key")
+    assert mod.main() == 0
+    assert seen == {"base": "https://mena-wms.vercel.app", "key": "pipe-key", "status": "success"}

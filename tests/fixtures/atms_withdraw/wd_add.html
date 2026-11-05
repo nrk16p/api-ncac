@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+		<meta http-equiv="Content-Security-Policy" content="child-src 'none';" />
+	    <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1,, maximum-scale=1" />
+		
+    		    	    	    		
+	    																<link href="/assets/js/widget/bootstrap/bootstrap-icons/bootstrap-icons.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+<link href="/assets/js/widget/bootstrap/bootstrap-5.1.3/css/bootstrap.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+<link href="/assets/css/jquery_ui/aristo/jquery-ui-1.8.custom.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+<link href="/assets/css/widget/ui.multiselect.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+<link href="/assets/css/widget/datepicker.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+<link href="/assets/css/widget/jquery.fancybox.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+<link href="/assets/css/account/theme/framework.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+<link href="/assets/css/account/theme/style.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+	    																																				
+
+
+
+
+
+
+
+
+
+				<title>เบิก - เบิก - MENA ATMS</title></head>
+<body class="fluid-body inv-withdraw-add-page ">
+		<nav><a href="/account/user/logout/">ออกจากระบบ</a></nav>
+
+<div class="toast-container">
+	<div id="noti-toast" class="toast noti-toast" role="alert" aria-live="assertive" aria-atomic="true"></div>
+</div>
+
+
+	    <div class="container-fluid content-stage">
+      	<div class="row">
+      		<div class="col-md-12">
+    			
+<div class="content-title">
+			บันทึก เบิก	</div>
+
+<div class="content-area" id="add-form-id">
+		<div>
+				<form id="basic-input-form" enctype="application/x-www-form-urlencoded" class="inv-withdraw-add-form" method="post" action="/inv/withdraw/add"><dl class="zend_form">
+<dt id="type-label"><label for="type" class="required">ประเภท</label></dt>
+<dd id="type-element">
+<input type="hidden" name="type" value="withdraw" class="form-hidden-field" id="type" /></dd>
+<dt id="inventory_id-label"><label for="inventory_id" class="required">คลังสินค้า</label></dt>
+<dd id="inventory_id-element">
+<select name="inventory_id" id="inventory_id" class="force-new-line ">
+    <option value="3" label="คลังสระบุรี">คลังสระบุรี</option>
+    <option value="4" label="คลังลาดกระบัง">คลังลาดกระบัง</option>
+    <option value="5" label="คลัง HR กรุงเทพ">คลัง HR กรุงเทพ</option>
+    <option value="6" label="คลัง HR ลาดกระบัง">คลัง HR ลาดกระบัง</option>
+    <option value="7" label="คลัง HR สระบุรี">คลัง HR สระบุรี</option>
+    <option value="8" label="คลัง จป.สระบุรี">คลัง จป.สระบุรี</option>
+    <option value="9" label="คลัง จป.ลาดกระบัง">คลัง จป.ลาดกระบัง</option>
+    <option value="10" label="คลังทรัพย์สินกรุงเทพ">คลังทรัพย์สินกรุงเทพ</option>
+    <option value="11" label="คลังขอนแก่น">คลังขอนแก่น</option>
+    <option value="12" label="คลัง IT">คลัง IT</option>
+    <option value="16" label="คลัง จป. ขอนแก่น">คลัง จป. ขอนแก่น</option>
+    <option value="17" label="คลังทรัพย์สินลาดกระบัง">คลังทรัพย์สินลาดกระบัง</option>
+    <option value="18" label="คลังทรัพย์สินสระบุรี">คลังทรัพย์สินสระบุรี</option>
+    <option value="21" label="คลังไม่มีสต๊อก สระบุรี">คลังไม่มีสต๊อก สระบุรี</option>
+    <option value="24" label="คลัง DIST">คลัง DIST</option>
+    <option value="25" label="คลัง DIST จป.สระบุรี">คลัง DIST จป.สระบุรี</option>
+    <option value="31" label="คลัง DIST จป.ขอนแก่น">คลัง DIST จป.ขอนแก่น</option>
+    <option value="35" label="คลัง OPS">คลัง OPS</option>
+    <option value="36" label="คลังฝ่ายสำนักเลขา">คลังฝ่ายสำนักเลขา</option>
+    <option value="38" label="คลังจัดส่ง (บางปะกง)">คลังจัดส่ง (บางปะกง)</option>
+    <option value="39" label="คลัง บัญชีการเงิน สกท.">คลัง บัญชีการเงิน สกท.</option>
+    <option value="40" label="คลังจัดส่่ง (สระบุรี)">คลังจัดส่่ง (สระบุรี)</option>
+</select></dd>
+<dt id="pick_to_id-label"><label for="pick_to_id" class="required">จุดประสงค์ในการเบิก</label></dt>
+<dd id="pick_to_id-element">
+<select name="pick_to_id" id="pick_to_id">
+    <option value="" label="เลือก" selected="selected">เลือก</option>
+    <option value="56" label="AC-เคสอุบัติเหตุ">AC-เคสอุบัติเหตุ</option>
+    <option value="57" label="AC-เคสอุบัติเหตุรถร่วม">AC-เคสอุบัติเหตุรถร่วม</option>
+    <option value="58" label="AC-เคสอุบัติเหตุรถร่วมภายนอก">AC-เคสอุบัติเหตุรถร่วมภายนอก</option>
+    <option value="45" label="CM-งานซ่อม">CM-งานซ่อม</option>
+    <option value="46" label="CM-งานซ่อมรถร่วม">CM-งานซ่อมรถร่วม</option>
+    <option value="47" label="CM-งานซ่อมร่วมภายนอก">CM-งานซ่อมร่วมภายนอก</option>
+    <option value="59" label="OTH-อื่นๆ">OTH-อื่นๆ</option>
+    <option value="38" label="PM ความเเย็น">PM ความเเย็น</option>
+    <option value="26" label="PM ช่วงล่าง">PM ช่วงล่าง</option>
+    <option value="3" label="PM น้ำมันเครื่อง">PM น้ำมันเครื่อง</option>
+    <option value="48" label="PM-บำรุงรักษา">PM-บำรุงรักษา</option>
+    <option value="49" label="PM-บำรุงรักษารถร่วม">PM-บำรุงรักษารถร่วม</option>
+    <option value="50" label="PM-บำรุงรักษาร่วมภายนอก">PM-บำรุงรักษาร่วมภายนอก</option>
+    <option value="51" label="T-ยาง">T-ยาง</option>
+    <option value="52" label="T-ยางรถร่วม">T-ยางรถร่วม</option>
+    <option value="53" label="T-ยางรถร่วมภายนอก">T-ยางรถร่วมภายนอก</option>
+    <option value="23" label="การขาย">การขาย</option>
+    <option value="29" label="คืนสินค้าซัพพลายเออร์">คืนสินค้าซัพพลายเออร์</option>
+    <option value="44" label="ค่าชั่งน้ำหนัก">ค่าชั่งน้ำหนัก</option>
+    <option value="25" label="ค่าซ่อม/ชื่อ">ค่าซ่อม/ชื่อ</option>
+    <option value="28" label="ค่าซ่อม/ชื่อ(พจน.)">ค่าซ่อม/ชื่อ(พจน.)</option>
+    <option value="31" label="ค่าซ่อมค่าอะไหล่รถบริหารฟลีท">ค่าซ่อมค่าอะไหล่รถบริหารฟลีท</option>
+    <option value="34" label="ค่าบริการ">ค่าบริการ</option>
+    <option value="21" label="ค่าบริการรายเดือน">ค่าบริการรายเดือน</option>
+    <option value="32" label="ค่ายางรถร่วม">ค่ายางรถร่วม</option>
+    <option value="54" label="ค่าล้างรถ">ค่าล้างรถ</option>
+    <option value="33" label="ค่าล้างรถ">ค่าล้างรถ</option>
+    <option value="43" label="ค่าใช้จ่ายอื่น ๆ">ค่าใช้จ่ายอื่น ๆ</option>
+    <option value="2" label="ซ่อม">ซ่อม</option>
+    <option value="24" label="ซ่อมเคสอุบัติเหตุ">ซ่อมเคสอุบัติเหตุ</option>
+    <option value="22" label="น้ำมันเชื้อเพลิง">น้ำมันเชื้อเพลิง</option>
+    <option value="30" label="ปรับปรุงภูมิทัศน์">ปรับปรุงภูมิทัศน์</option>
+    <option value="7" label="พจส.เก่าเบิก">พจส.เก่าเบิก</option>
+    <option value="6" label="พจส.ใหม่เบิก">พจส.ใหม่เบิก</option>
+    <option value="4" label="ยาง">ยาง</option>
+    <option value="18" label="สวัสดิการพนักงาน">สวัสดิการพนักงาน</option>
+    <option value="20" label="สวัสดิการพนักงาน-ครบปี">สวัสดิการพนักงาน-ครบปี</option>
+    <option value="37" label="สวัสดิการพนักงาน-นครหลวง">สวัสดิการพนักงาน-นครหลวง</option>
+    <option value="5" label="อะไหล่/ชื่อ">อะไหล่/ชื่อ</option>
+    <option value="13" label="เครื่องมือส่วนตัวช่าง">เครื่องมือส่วนตัวช่าง</option>
+    <option value="35" label="เบิกค่าบริการด้านไอที">เบิกค่าบริการด้านไอที</option>
+    <option value="14" label="เบิกตรวจพจส.">เบิกตรวจพจส.</option>
+    <option value="15" label="เบิกประจำตัวช่าง">เบิกประจำตัวช่าง</option>
+    <option value="42" label="เบิกประจำตัวเจ้าหน้าที่">เบิกประจำตัวเจ้าหน้าที่</option>
+    <option value="41" label="เบิกประจำฝ่าย">เบิกประจำฝ่าย</option>
+    <option value="39" label="เบิกประจำฟรีท">เบิกประจำฟรีท</option>
+    <option value="12" label="เบิกประจำรถ">เบิกประจำรถ</option>
+    <option value="40" label="เบิกประจำศูนย์">เบิกประจำศูนย์</option>
+    <option value="9" label="เบิกอุปกรณ์สำนักงาน">เบิกอุปกรณ์สำนักงาน</option>
+    <option value="36" label="เบิกอุปกรณ์ไอที">เบิกอุปกรณ์ไอที</option>
+    <option value="27" label="เบิกเพื่อทำความสะอาด">เบิกเพื่อทำความสะอาด</option>
+    <option value="10" label="เบิกเพื่อเป็นของใช้แม่บ้าน">เบิกเพื่อเป็นของใช้แม่บ้าน</option>
+    <option value="17" label="เบิกเพื่อเป็นแจกให้พนักงาน">เบิกเพื่อเป็นแจกให้พนักงาน</option>
+    <option value="19" label="แยคโม่">แยคโม่</option>
+    <option value="55" label="แย็กโม่">แย็กโม่</option>
+    <option value="8" label="โอนย้ายศูนย์">โอนย้ายศูนย์</option>
+    <option value="11" label="โอนย้ายสต็อค">โอนย้ายสต็อค</option>
+    <option value="16" label="ใฃ้ในการจัดงานกิจกรรม">ใฃ้ในการจัดงานกิจกรรม</option>
+    <option value="1" label="ใช้ดึงรถ">ใช้ดึงรถ</option>
+</select></dd>
+<dt id="extra_cost-label"><label for="extra_cost" class="optional">ค่าใช้จ่ายเสริม</label></dt>
+<dd id="extra_cost-element">
+<input type="text" name="extra_cost" id="extra_cost" value="0.00" class="force-new-line " /></dd>
+<dt id="remark-label"><label for="remark" class="optional">หมายเหตุ</label></dt>
+<dd id="remark-element">
+<textarea name="remark" id="remark" class="force-new-line " rows="24" cols="80"></textarea></dd>
+<dt id="extra_type-label"><label for="extra_type" class="optional">ประเภทพิเศษ</label></dt>
+<dd id="extra_type-element">
+<input type="hidden" name="extra_type" value="" class="form-hidden-field" id="extra_type" /></dd></dl></form>	</div>
+	<dl class="zend_form form-btn" style="margin-top: 5px;">
+		<dt>&nbsp;</dt>
+		<dd>
+							<a class="btn-link submit-link btn-primary" href="">บันทึก</a>
+			
+							<a class="btn-link back-link" href="">ย้อนกลับ</a>
+			
+					</dd>
+	</dl>
+	<br class="clear" />
+</div>
+
+    		</div>
+    	</div>
+		    		<footer>
+	<p>&copy; Mena Transport PLC. All Rights Reserved 2026</p>
+</footer>		    	<input type="hidden" id="ROOT_URI" value="" />
+		<input type="hidden" id="page_js" value="inv_withdraw_add" />
+		<input type="hidden" id="session_lang" value="th" />
+	</div>
+
+	
+</body>
+</html>

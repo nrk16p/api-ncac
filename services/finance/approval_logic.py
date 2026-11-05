@@ -36,6 +36,7 @@ ACTION_APPROVED = "APPROVED"
 ACTION_REJECTED = "REJECTED"
 MARKER_RETURNED = "RETURNED"        # level_no 0, written by Finance (v3 §6)
 MARKER_RESUBMITTED = "RESUBMITTED"  # level_no 0, written by the requester; starts a new approval round
+MARKER_CANCELLED = "CANCELLED"      # level_no 0, written by Finance (ตีกลับแบบยกเลิก)
 
 MSG_NO_TIERS = "ยังไม่ได้ตั้งค่าวงเงินอนุมัติ"
 MSG_BAD_AMOUNT = "จำนวนเงินต้องมากกว่า 0"

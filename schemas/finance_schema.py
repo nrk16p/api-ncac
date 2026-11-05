@@ -92,6 +92,12 @@ class ReturnIn(_Body):
     remark: Optional[str] = Field(default=None, max_length=1000)
 
 
+class CancelIn(_Body):
+    """ตีกลับแบบยกเลิก: same shape as ReturnIn; a blank remark reaches check_cancel's Thai 400."""
+    action_by: str
+    remark: Optional[str] = Field(default=None, max_length=1000)
+
+
 class ResubmitIn(_Body):
     action_by: str
 

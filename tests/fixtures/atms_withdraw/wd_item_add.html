@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+		<meta http-equiv="Content-Security-Policy" content="child-src 'none';" />
+	    <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1,, maximum-scale=1" />
+		
+    		    	    	    		
+	    																<link href="/assets/js/widget/bootstrap/bootstrap-icons/bootstrap-icons.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+<link href="/assets/js/widget/bootstrap/bootstrap-5.1.3/css/bootstrap.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+<link href="/assets/css/jquery_ui/aristo/jquery-ui-1.8.custom.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+<link href="/assets/css/widget/ui.multiselect.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+<link href="/assets/css/widget/datepicker.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+<link href="/assets/css/widget/jquery.fancybox.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+<link href="/assets/css/widget/autocomplete/jquery.autocomplete.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+<link href="/assets/css/widget/autocomplete/thickbox.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+<link href="/assets/css/account/theme/framework.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+<link href="/assets/css/account/theme/style.css?20261022" media="screen" rel="stylesheet" type="text/css" />
+	    																																				
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+				<title>รายการเบิก - รายการเบิก - MENA ATMS</title></head>
+<body class="fluid-body inv-withdraw-item-add-page ">
+		<nav><a href="/account/user/logout/">ออกจากระบบ</a></nav>
+
+<div class="toast-container">
+	<div id="noti-toast" class="toast noti-toast" role="alert" aria-live="assertive" aria-atomic="true"></div>
+</div>
+
+
+	    <div class="container-fluid content-stage">
+      	<div class="row">
+      		<div class="col-md-12">
+    			
+<div class="content-title">
+			บันทึก รายการเบิก	</div>
+
+<div class="content-area" id="add-form-id">
+		<div>
+				<form id="basic-input-form" enctype="application/x-www-form-urlencoded" class="inv-withdraw-item-add-form" method="post" action="/inv/withdraw.item/add/good_movement_id/560724/inventory_id/4"><dl class="zend_form">
+<dt id="inventory_id-label"><label for="inventory_id" class="optional">คลังสินค้า</label></dt>
+<dd id="inventory_id-element">
+<input type="hidden" name="inventory_id" value="4" class="form-hidden-field" id="inventory_id" /></dd>
+<dt id="good_movement_id-label"><label for="good_movement_id" class="required">good_movement</label></dt>
+<dd id="good_movement_id-element">
+<input type="hidden" name="good_movement_id" value="560724" class="form-hidden-field" id="good_movement_id" /></dd>
+<dt id="maintenance_request_item-label"><label for="maintenance_request_item" class="optional">รายการแจ้งซ่อม</label></dt>
+<dd id="maintenance_request_item-element">
+<input type="text" name="maintenance_request_item" id="maintenance_request_item" value="" /></dd>
+<dt id="maintenance_request_item_id-label"><label for="maintenance_request_item_id" class="optional">รายการแจ้งซ่อม</label></dt>
+<dd id="maintenance_request_item_id-element">
+<input type="hidden" name="maintenance_request_item_id" value="" class="form-hidden-field" id="maintenance_request_item_id" /></dd>
+<dt id="sku_tag_id-label"><label for="sku_tag_id" class="optional">กลุ่มสินค้า</label></dt>
+<dd id="sku_tag_id-element">
+<select name="sku_tag_id" id="sku_tag_id" class="force-new-line ">
+    
+</select></dd>
+<dt id="ajax_sku_tag_id-label"><label for="ajax_sku_tag_id" class="optional">ajax sku tag</label></dt>
+<dd id="ajax_sku_tag_id-element">
+<input type="hidden" name="ajax_sku_tag_id" value="" class="form-hidden-field" id="ajax_sku_tag_id" /></dd>
+<dt id="sku-label"><label for="sku" class="required">สินค้า</label></dt>
+<dd id="sku-element">
+<input type="text" name="sku" id="sku" value="" class="force-new-line " /></dd>
+<dt id="sku_id-label"><label for="sku_id" class="required">สินค้า</label></dt>
+<dd id="sku_id-element">
+<input type="hidden" name="sku_id" value="" class="form-hidden-field" id="sku_id" /></dd>
+<dt id="serial_no-label"><label for="serial_no" class="optional">serial no</label></dt>
+<dd id="serial_no-element">
+<input type="text" name="serial_no" id="serial_no" value="" class="force-new-line " /></dd>
+<dt id="serial_no_id-label"><label for="serial_no_id" class="optional">serial no</label></dt>
+<dd id="serial_no_id-element">
+<input type="hidden" name="serial_no_id" value="" class="form-hidden-field" id="serial_no_id" /></dd>
+<dt id="has_serial_no-label"><label for="has_serial_no" class="optional">มีเลขที่เฉพาะ</label></dt>
+<dd id="has_serial_no-element">
+<input type="hidden" name="has_serial_no" value="" class="form-hidden-field" id="has_serial_no" /></dd>
+<dt id="amount-label"><label for="amount" class="required">amount</label></dt>
+<dd id="amount-element">
+<input type="text" name="amount" id="amount" value="" class="force-new-line " /></dd>
+<dt id="remark-label"><label for="remark" class="optional">หมายเหตุ</label></dt>
+<dd id="remark-element">
+<textarea name="remark" id="remark" rows="24" cols="80"></textarea></dd></dl></form>	</div>
+	<dl class="zend_form form-btn" style="margin-top: 5px;">
+		<dt>&nbsp;</dt>
+		<dd>
+							<a class="btn-link submit-link btn-primary" href="">บันทึก</a>
+			
+							<a class="btn-link back-link" href="">ย้อนกลับ</a>
+			
+					</dd>
+	</dl>
+	<br class="clear" />
+</div>
+
+    		</div>
+    	</div>
+		    		<footer>
+	<p>&copy; Mena Transport PLC. All Rights Reserved 2026</p>
+</footer>		    	<input type="hidden" id="ROOT_URI" value="" />
+		<input type="hidden" id="page_js" value="inv_withdraw_item_add" />
+		<input type="hidden" id="session_lang" value="th" />
+	</div>
+
+	
+</body>
+</html>
