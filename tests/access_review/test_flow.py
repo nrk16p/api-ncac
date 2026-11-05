@@ -88,7 +88,7 @@ def test_full_flow(client, world, db):
     assert r.status_code == 400 and "999" in r.json()["detail"]
     assert client.get("/access-review/me", headers=h("R")).json()["review"]["status"] == "draft"
 
-    # submit with all lines → pending to HEAD, mail NOT sent (switch off) but mailed_at stamped
+    # submit with all lines → pending to HEAD, approver mailed + mailed_at stamped
     r = client.post("/access-review/me/submit", headers=h("R"), json={"lines": all_lines(world)})
     assert r.status_code == 200, r.text
     detail = r.json()
@@ -97,7 +97,8 @@ def test_full_flow(client, world, db):
     assert [a["employee_id"] for a in detail["approvers"]] == ["HEAD"]
     assert detail["can_decide"] is False
     assert {l["role_name"]: l["note"] for l in detail["lines"]}["FIN-Officer"] == "ไม่ใช้แล้ว"
-    assert world["calls"] == []
+    assert [c[0] for c in world["calls"]] == ["userHEAD@example.com"]
+    assert "รอการอนุมัติ" in world["calls"][0][1]
     assert db.get(ArReviewApprover, (rid, "HEAD")).mailed_at is not None
 
     # read-only while pending
@@ -165,6 +166,7 @@ def test_executive_bypass(client, world):
     d = r.json()
     assert d["status"] == "approved" and d["route"] == "bypass" and d["decided_by"] == "EXEC"
     assert d["approvers"] == []
+    assert world["calls"] == []  # bypass → no mail
     removals = client.get("/access-review/admin/removals", headers=h("IT")).json()
     assert [(x["employee_id"], x["role_name"], x["system_code"]) for x in removals] == [
         ("EXEC", "ACC-Officer", "ATMS")]
@@ -178,6 +180,7 @@ def test_it_queue_is_decided_by_it_admin(client, world, org, db):
                     json={"lines": [{"user_role_id": link.id, "decision": "keep"}]})
     d = r.json()
     assert d["route"] == "it_queue" and d["approvers"] == []
+    assert world["calls"] == []  # no approvers → no mail
     assert client.get(f"/access-review/{d['id']}", headers=h("IT")).json()["can_decide"] is True
     assert [p["id"] for p in client.get("/access-review/pending", headers=h("IT")).json()] == [d["id"]]
 
@@ -206,13 +209,28 @@ def test_closed_cycle_blocks_saving_and_submit(client, world, db):
 
 def test_mail_preview_and_guard(client, world, db):
     rid = client.post("/access-review/me/submit", headers=h("R"), json={"lines": all_lines(world)}).json()["id"]
-    assert world["calls"] == []  # mail is preview-only — send_email is never called
+    assert [c[0] for c in world["calls"]] == ["userHEAD@example.com"]  # sent once on submit
     prev = client.get(f"/access-review/{rid}/mail-preview", headers=h("HEAD")).json()
     assert prev["to"] == ["userHEAD@example.com"]
     assert "รอการอนุมัติ" in prev["subject"]
     assert f"https://menait-service.vercel.app/access-review/{rid}" in prev["html"]
     assert client.get(f"/access-review/{rid}/mail-preview", headers=h("R")).status_code == 403
     assert client.get(f"/access-review/{rid}/mail-preview", headers=h("IT")).status_code == 200
+
+
+def test_mail_failure_does_not_stop_other_recipients(monkeypatch):
+    import services.email_service as email_service
+    from services.access_review import mail
+    sent = []
+
+    def fake(to, subject, html):
+        if to == "bad@x.co":
+            raise OSError("smtp down")
+        sent.append(to)
+    monkeypatch.setattr(email_service, "send_email", fake)
+    assert mail.dispatch(["bad@x.co", "ok@x.co", "ok@x.co", None, "nope"], "s", "<p></p>", None) is True
+    assert sent == ["ok@x.co"]
+    assert mail.dispatch([None, ""], "s", "<p></p>", None) is False
 
 
 def test_admin_endpoints_require_it_admin(client, world):

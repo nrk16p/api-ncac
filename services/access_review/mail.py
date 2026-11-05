@@ -1,6 +1,6 @@
-"""Access Review — approver email (Thai HTML). Not sent yet (Bew 2026-10-29): dispatch() only logs, and the
-rendered mail is served by GET /access-review/{id}/mail-preview. To start sending, call
-services.email_service.send_email per recipient from dispatch() (on BackgroundTasks).
+"""Access Review — approver email (Thai HTML). Sent on submit to the review's approvers (Bew 2026-11-05):
+dispatch() queues services.email_service.send_email once per recipient on BackgroundTasks. Bypass and it_queue
+reviews have no approvers, so nothing is sent. GET /access-review/{id}/mail-preview renders the same mail.
 The link uses FE_BASE_URL (same env as finance mail), default menait-service.vercel.app.
 """
 from __future__ import annotations
@@ -86,9 +86,23 @@ def pick_recipients(to: Iterable[Optional[str]]) -> List[str]:
     return out[:MAX_RECIPIENTS]
 
 
+def _send_one(to_email: str, subject: str, html: str) -> None:
+    """One recipient; a failure is logged and never stops the other recipients' tasks."""
+    from services import email_service  # looked up at call time so tests can stub send_email
+    try:
+        email_service.send_email(to_email, subject, html)
+        log.info("access review mail sent: %s → %s", subject, to_email)
+    except Exception:  # noqa: BLE001 — SMTP errors must not break the submit
+        log.exception("access review mail failed: %s → %s", subject, to_email)
+
+
 def dispatch(to: Iterable[Optional[str]], subject: str, html: str,
              background_tasks: Optional[BackgroundTasks]) -> bool:
-    """Not sending yet — logs only and returns False (the caller still stamps mailed_at)."""
+    """Queue one mail per recipient (sent after the response). Returns True when anything was queued."""
     recipients = pick_recipients(to)
-    log.info("access review mail not sent (preview only): %s → %d recipient(s)", subject, len(recipients))
-    return False
+    for addr in recipients:
+        if background_tasks is not None:
+            background_tasks.add_task(_send_one, addr, subject, html)
+        else:
+            _send_one(addr, subject, html)
+    return bool(recipients)
