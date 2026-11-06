@@ -109,3 +109,11 @@ def test_store_withdraw_drift_defaults_to_existing_env(monkeypatch):
     monkeypatch.setenv("PIPELINE_API_KEY", "pipe-key")
     assert mod.main() == 0
     assert seen == {"base": "https://mena-wms.vercel.app", "key": "pipe-key", "status": "success"}
+
+
+def test_vehicle_daily_is_registered_and_scheduled():
+    assert PIPELINE_SCRIPTS["vehicle_daily"].relative_to(SCRIPTS_DIR).as_posix() == "vehicle_daily/pipeline_vehicle_daily.py"
+    assert PIPELINE_NAMES["vehicle_daily"] == "vehicle_daily"
+    assert RUN_LOG_LOCATION["vehicle_daily"] == ("analytics", "etl_jobs")
+    source = (ROOT / "main.py").read_text(encoding="utf-8")
+    assert 'CronTrigger(hour=0, minute=40), args=["vehicle_daily"]' in source  # 07:40 BKK

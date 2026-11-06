@@ -300,6 +300,10 @@ async def startup_event():
     #   to CPAC fleetlink + the push API (moved off the Mac launchd job com.cpac.rmc-daily)
     scheduler.add_job(_run, CronTrigger(hour=21, minute=30), args=["overspeed"], id="sched_overspeed")                # 04:30 BKK
     scheduler.add_job(_run, CronTrigger(hour=2, minute=0), args=["rmc_compensation"], id="sched_rmc_compensation")   # 09:00 BKK
+    # vehicle_daily → atms.vehicle_daily_transaction (รายงานรถประจำวัน ATMS ทุกกลุ่มฟลีท เดือนที่แล้ว + เดือนนี้)
+    # 07:40 BKK → 00:40 UTC · ต่อจาก procurement/supplier ช่วง 06:00–06:40 และเลี่ยง :15 ของ atms_pr_quick
+    # งานเบา ~21 requests ห่างกัน 3 วินาที จบในราว 1–2 นาที
+    scheduler.add_job(_run, CronTrigger(hour=0, minute=40), args=["vehicle_daily"], id="sched_vehicle_daily")  # 07:40 BKK
     # finance advance: overdue clearing reminder, daily 09:00 BKK (no-op unless FINANCE_EMAIL_ENABLED=true)
     from database import SessionLocal
     from services.finance.overdue_reminder import run_overdue_reminders
