@@ -1,7 +1,7 @@
 """Draft → submit → approve / reject → resubmit, through the HTTP router on SQLite."""
 import pytest
 
-from models.access_review_model import ArReview, ArReviewApprover
+from models.access_review_model import ArReview, ArReviewApprover, ArReviewLine
 from tests.access_review.conftest import h
 
 
@@ -334,11 +334,15 @@ def test_admin_crud_and_soft_delete(client, world, db):
     assert c.json()["id"] not in [x["id"] for x in client.get("/access-review/admin/cycles", headers=H).json()]
 
 
-def test_cycle_with_reviews_cannot_be_deleted(world, client):
+def test_cycle_delete_resets_its_reviews(world, client, db):
     H = h("IT")
-    client.put("/access-review/me/lines", headers=h("R"), json={"lines": all_lines(world)})
+    rid = client.post("/access-review/me/submit", headers=h("R"), json={"lines": all_lines(world)}).json()["id"]
     r = client.delete(f"/access-review/admin/cycles/{world['cycle'].id}", headers=H)
-    assert r.status_code == 409
+    assert r.status_code == 200 and r.json()["deleted_reviews"] == 1
+    db.expire_all()
+    assert db.get(ArReview, rid) is None
+    assert db.query(ArReviewLine).filter(ArReviewLine.review_id == rid).count() == 0
+    assert db.query(ArReviewApprover).filter(ArReviewApprover.review_id == rid).count() == 0
     assert client.delete("/access-review/admin/cycles/99999", headers=H).status_code == 404
 
 

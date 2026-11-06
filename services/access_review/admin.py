@@ -11,7 +11,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from models.access_review_model import (
-    ArCycle, ArReview, ArReviewLine, ArRole, ArRoleItem, ArSystem, ArUserRole,
+    ArCycle, ArReview, ArReviewApprover, ArReviewLine, ArReviewLineItem, ArReviewLineRequest, ArReviewLineSnapshot,
+    ArReviewRoleRequest, ArRole, ArRoleItem, ArSystem, ArUserRole,
 )
 from services.access_review import repo
 from services.access_review.logic import (
@@ -31,7 +32,6 @@ MSG_USER_ROLE_NOT_FOUND = "ไม่พบสิทธิ์ของผู้�
 MSG_USER_ROLE_EXISTS = "พนักงานคนนี้มีกลุ่มสิทธิ์นี้อยู่แล้ว"
 MSG_CYCLE_NOT_FOUND = "ไม่พบรอบการทบทวน"
 MSG_CYCLE_DATES = "วันสิ้นสุดต้องไม่ก่อนวันเริ่มต้น"
-MSG_CYCLE_HAS_REVIEWS = "รอบนี้มีการทบทวนสิทธิ์แล้ว {n} รายการ ลบไม่ได้ — ให้ปิดรอบแทน"
 
 
 def _get(db: Session, model, obj_id: int, message: str):
@@ -316,12 +316,20 @@ def update_cycle(db: Session, cycle_id: int, changes: dict) -> dict:
 
 
 def delete_cycle(db: Session, cycle_id: int) -> dict:
-    """Hard delete, only while no one has reviewed in the cycle — reviews are the audit trail, so close it instead."""
+    """Hard delete the cycle together with every review in it (reset to start over) — irreversible."""
     c = _get(db, ArCycle, cycle_id, MSG_CYCLE_NOT_FOUND)
-    n = db.query(ArReview).filter(ArReview.cycle_id == cycle_id).count()
-    if n:
-        raise ArConflict(MSG_CYCLE_HAS_REVIEWS.format(n=n))
+    review_ids = [rid for (rid,) in db.query(ArReview.id).filter(ArReview.cycle_id == cycle_id)]
+    if review_ids:
+        line_ids = [lid for (lid,) in db.query(ArReviewLine.id).filter(ArReviewLine.review_id.in_(review_ids))]
+        if line_ids:
+            for model in (ArReviewLineItem, ArReviewLineRequest, ArReviewLineSnapshot):
+                db.query(model).filter(model.review_line_id.in_(line_ids)).delete(synchronize_session=False)
+            db.query(ArReviewLine).filter(ArReviewLine.id.in_(line_ids)).delete(synchronize_session=False)
+        for model in (ArReviewRoleRequest, ArReviewApprover):
+            db.query(model).filter(model.review_id.in_(review_ids)).delete(synchronize_session=False)
+        db.query(ArReview).filter(ArReview.id.in_(review_ids)).delete(synchronize_session=False)
     out = cycle_dict(c)
+    out["deleted_reviews"] = len(review_ids)
     db.delete(c)
     db.commit()
     return out
