@@ -40,6 +40,9 @@ class SubmitIn(BaseModel):
 class DecisionIn(BaseModel):
     action: Literal["approve", "reject"]
     comment: Optional[str] = Field(default=None, max_length=2000)
+    # approve only: the approver's edits of the requester's ticks / add-requests (omitted = approve as submitted)
+    lines: Optional[List[LineIn]] = Field(default=None, max_length=2000)
+    requested_role_ids: Optional[List[int]] = Field(default=None, max_length=500)
 
 
 # ---------------------------- admin ----------------------------

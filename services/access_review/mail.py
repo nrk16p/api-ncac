@@ -21,6 +21,7 @@ DEFAULT_FE_BASE_URL = "https://menait-service.vercel.app"
 MAX_RECIPIENTS = 20
 IT_CC = "itcenter@menatransport.co.th"
 SUBJECT_PREFIX = "[IT ทบทวนสิทธิ์]"
+EMAIL_SYSTEM = "EMAIL"  # whole-role system — the mail lists its group names instead of item counts
 _BASE_URL = re.compile(r"^https?://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?$")
 
 
@@ -37,47 +38,93 @@ def _one_line(text: str) -> str:
     return " ".join(str(text).split())
 
 
+_LABEL_TD = 'style="padding:6px 12px;color:#555;white-space:nowrap;vertical-align:top;width:45%"'
+_VALUE_TD = 'style="padding:6px 12px;color:#111;vertical-align:top"'
+_SECTION_TD = ('colspan="2" style="padding:10px 12px 6px;font-weight:bold;color:#1f4e79;'
+               'border-bottom:1px solid #e3e5e8"')
+
+
 def render_approver_mail(ctx: dict) -> Tuple[str, str]:
     """ctx: review_id, requester_name, requester_employee_id, department, division, cycle_name, total_lines,
     remove_count, unchecked_count, requested_count, requester_note. Every value is HTML-escaped."""
     e = lambda v: escape(str(v), quote=True)  # noqa: E731
-    name = ctx.get("requester_name") or ctx.get("requester_employee_id") or "-"
+    emp_id = ctx.get("requester_employee_id") or "-"
+    raw_name = ctx.get("requester_name")
+    name = raw_name or emp_id
+    polite = f"คุณ{raw_name}" if raw_name else name  # "คุณ" only before a real name, never an employee id
     cycle = ctx.get("cycle_name")
-    subject = _one_line(f"{SUBJECT_PREFIX} {name} ส่งแบบทบทวนสิทธิ์{f' รอบ {cycle}' if cycle else ''} รอการอนุมัติ")
-    rows = [("ผู้ขอ", f"{name} ({ctx.get('requester_employee_id') or '-'})")]
+    cycle_text = f" ประจำรอบ {cycle}" if cycle else ""
+    subject = _one_line(f"{SUBJECT_PREFIX} แบบทบทวนสิทธิ์การใช้งานระบบของ {polite}{cycle_text} รอการพิจารณาอนุมัติ")
+
+    systems = ctx.get("systems") or []
+    red, green, grey = "#b42318", "#067647", "#888"
+
+    def counts_cell(s: dict) -> str:
+        """"ยืนยัน kept/total รายการ" — red when something was dropped; plus "ขอเพิ่ม n รายการ" in green."""
+        kept, total = int(s.get("kept") or 0), int(s.get("total") or 0)
+        color = red if kept < total else "#111"
+        out = f'<span style="font-weight:bold;color:{color}">{kept:,}/{total:,}</span> รายการ'
+        if kept < total:
+            out += f' <span style="color:{red}">(ขอยกเลิก {total - kept:,} รายการ)</span>'
+        if s.get("requested"):
+            out += f'<br><span style="color:{green}">ขอเพิ่ม {int(s["requested"]):,} รายการ</span>'
+        return out
+
+    def groups_cell(s: dict) -> str:
+        """Email groups one per line: kept plain, removed struck through, requested in green."""
+        parts = []
+        for group, state in s.get("groups") or []:
+            if state == "remove":
+                parts.append(f'<span style="color:{red};text-decoration:line-through">{e(group)}</span>'
+                             f' <span style="color:{red}">(ขอยกเลิก)</span>')
+            elif state == "request":
+                parts.append(f'<span style="color:{green}">{e(group)} (ขอเพิ่ม)</span>')
+            else:
+                parts.append(e(group))
+        return "<br>".join(parts) or f'<span style="color:{grey}">-</span>'
+
+    requester_rows = [("ชื่อ-นามสกุล", e(name)), ("รหัสพนักงาน", e(emp_id))]
     if ctx.get("department"):
-        rows.append(("แผนก", ctx["department"]))
+        requester_rows.append(("แผนก", e(ctx["department"])))
     if ctx.get("division"):
-        rows.append(("ฝ่าย", ctx["division"]))
+        requester_rows.append(("ฝ่าย", e(ctx["division"])))
     if cycle:
-        rows.append(("รอบการทบทวน", cycle))
-    rows.append(("จำนวนสิทธิ์ทั้งหมด", f"{int(ctx.get('total_lines') or 0)} รายการ"))
-    rows.append(("ขอยกเลิกทั้งกลุ่มสิทธิ์", f"{int(ctx.get('remove_count') or 0)} กลุ่ม"))
-    rows.append(("รายการสิทธิ์ที่ไม่ติ๊ก (ไม่ขอรับสิทธิ์)", f"{int(ctx.get('unchecked_count') or 0)} รายการ"))
-    if ctx.get("requested_count"):
-        rows.append(("ขอเพิ่มสิทธิ์", f"{int(ctx['requested_count'])} รายการ"))
+        requester_rows.append(("รอบการทบทวน", e(cycle)))
+
+    summary_rows = [("ระบบที่ทบทวน", e(", ".join(s["name"] for s in systems)) or "-")]
+    for s in systems:
+        if s.get("code") == EMAIL_SYSTEM:
+            summary_rows.append((f"{e(s['name'])}", groups_cell(s)))
+        else:
+            summary_rows.append((f"{e(s['name'])}<br><span style=\"font-size:12px;color:{grey}\">"
+                                 "(จำนวนที่ยืนยัน/จำนวนเดิม)</span>", counts_cell(s)))
     if ctx.get("requester_note"):
-        rows.append(("ข้อเสนอแนะ (ผู้แจ้ง)", ctx["requester_note"]))
-    table = "".join(
-        f'<tr><td style="padding:6px 12px;color:#555;white-space:nowrap">{e(k)}</td>'
-        f'<td style="padding:6px 12px;color:#111">{e(v)}</td></tr>'
-        for k, v in rows
-    )
-    link = review_link(ctx["review_id"])
+        summary_rows.append(("ความเห็นเพิ่มเติมจากผู้ขอ", e(ctx["requester_note"]).replace("\n", "<br>")))
+
+    def section(title: str, rows: list) -> str:
+        # Labels are fixed strings in this file (some carry markup); values are escaped above.
+        body = "".join(f"<tr><td {_LABEL_TD}>{k}</td><td {_VALUE_TD}>{v}</td></tr>" for k, v in rows)
+        return f"<tr><td {_SECTION_TD}>{e(title)}</td></tr>{body}"
+
+    table = section("ข้อมูลผู้ขอ", requester_rows) + section("สรุปผลการทบทวนสิทธิ์", summary_rows)
+    link = e(review_link(ctx["review_id"]))
     html = f"""<!DOCTYPE html>
 <html lang="th"><body style="margin:0;padding:24px;background:#f4f5f7;font-family:Tahoma,Arial,sans-serif">
-<div style="max-width:560px;margin:0 auto;background:#fff;border:1px solid #e3e5e8;border-radius:8px;overflow:hidden">
-  <div style="padding:16px 20px;border-bottom:1px solid #e3e5e8;font-size:16px;font-weight:bold;color:#111">
-    แบบทบทวนสิทธิ์ผู้ใช้รอการอนุมัติ
+<div style="max-width:600px;margin:0 auto;background:#fff;border:1px solid #e3e5e8;border-radius:8px;overflow:hidden">
+  <div style="padding:16px 20px;background:#1f4e79;color:#fff">
+    <div style="font-size:16px;font-weight:bold">แบบทบทวนสิทธิ์การใช้งานระบบ</div>
+    <div style="font-size:13px;opacity:.85;margin-top:2px">รอการพิจารณาอนุมัติ</div>
   </div>
-  <div style="padding:16px 20px;font-size:14px;color:#333">
+  <div style="padding:20px;font-size:14px;line-height:1.6;color:#333">
     <p style="margin:0 0 12px">เรียนผู้อนุมัติ</p>
-    <p style="margin:0 0 12px">{e(name)} ได้ส่งแบบทบทวนสิทธิ์การใช้งานระบบ (ATMS / Winspeed / Email Group)
+    <p style="margin:0 0 16px">{e(name)} ได้ส่งแบบทบทวนสิทธิ์การใช้งานระบบ (ATMS / Winspeed / Email Group)
     กรุณาตรวจสอบและพิจารณาอนุมัติ</p>
-    <table style="border-collapse:collapse;font-size:14px;margin:0 0 16px">{table}</table>
-    <a href="{e(link)}" style="display:inline-block;padding:10px 18px;background:#1f4e79;color:#fff;
-    text-decoration:none;border-radius:4px">เปิดแบบทบทวนสิทธิ์</a>
-    <p style="margin:16px 0 0;font-size:12px;color:#888">อีเมลนี้ส่งอัตโนมัติจากระบบ กรุณาอย่าตอบกลับ</p>
+    <table style="border-collapse:collapse;font-size:14px;width:100%;margin:0 0 20px">{table}</table>
+    <a href="{link}" style="display:inline-block;padding:10px 20px;background:#1f4e79;color:#fff;
+    text-decoration:none;border-radius:4px;font-weight:bold">ตรวจสอบและพิจารณาอนุมัติ</a>
+  </div>
+  <div style="padding:12px 20px;border-top:1px solid #e3e5e8;background:#fafbfc;font-size:12px;color:#888">
+    อีเมลฉบับนี้ส่งโดยอัตโนมัติจากระบบ กรุณาอย่าตอบกลับ หากมีข้อสงสัยกรุณาติดต่อ {e(IT_CC)}
   </div>
 </div>
 </body></html>"""

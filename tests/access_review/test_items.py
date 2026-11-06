@@ -86,7 +86,10 @@ def test_unticked_items_round_trip_and_derive_decision(client, w, db):
     assert client.get(f"/access-review/{d['id']}/items", headers=h("OTHER")).status_code == 403
 
     prev = client.get(f"/access-review/{d['id']}/mail-preview", headers=h("HEAD")).json()
-    assert "ไม่ติ๊ก" in prev["html"] and "2 รายการ" in prev["html"]
+    html = prev["html"]
+    # per system: ATMS 2 of 3 kept, Winspeed 1 of 2, Email group listed by name (struck through = removed)
+    assert ">2/3</span> รายการ" in html and ">1/2</span> รายการ" in html
+    assert 'line-through">acc@menatransport.co.th</span>' in html
 
 
 def test_foreign_or_unknown_item_ids_are_rejected(client, w, db):
@@ -101,7 +104,7 @@ def test_foreign_or_unknown_item_ids_are_rejected(client, w, db):
     assert db.query(ArReviewLineItem).count() == 0
 
 
-def test_approver_cannot_change_ticks(client, w, db):
+def test_approver_cannot_edit_through_me_lines_and_plain_approve_keeps_ticks(client, w, db):
     L, acc = w["links"], w["acc_items"]
     rid = client.post("/access-review/me/submit", headers=h("R"), json={
         "lines": [{"user_role_id": L["acc"], "unchecked_item_ids": [acc[0]]}]}).json()["id"]
@@ -110,9 +113,8 @@ def test_approver_cannot_change_ticks(client, w, db):
     r = client.put("/access-review/me/lines", headers=h("HEAD"),
                    json={"lines": [{"user_role_id": L["acc"], "unchecked_item_ids": []}]})
     assert r.status_code == 400
-    # the decision endpoint takes no lines (extra fields are ignored) and keeps the ticks
-    r = client.post(f"/access-review/{rid}/decision", headers=h("HEAD"),
-                    json={"action": "approve", "comment": "ok", "lines": [{"user_role_id": L["acc"]}]})
+    # approving without lines keeps the requester's ticks (edits go through the decision's lines — see below)
+    r = client.post(f"/access-review/{rid}/decision", headers=h("HEAD"), json={"action": "approve", "comment": "ok"})
     assert r.status_code == 200 and r.json()["comment"] == "ok"
     db.expire_all()
     assert sorted((x.review_line_id, x.role_item_id) for x in db.query(ArReviewLineItem)) == before
@@ -287,3 +289,39 @@ def test_removals_can_include_pending(client, w):
     assert client.get("/access-review/admin/removals", headers=h("IT")).json() == []
     rows = client.get("/access-review/admin/removals?include_pending=true", headers=h("IT")).json()
     assert [(x["status"], x["removal_type"], x["item"]) for x in rows] == [("pending", "item", "คลัง IT")]
+
+
+def test_approver_edits_ticks_then_approves(client, w, db):
+    L, acc, gl = w["links"], w["acc_items"], w["gl_items"]
+    client.put("/access-review/me/lines", headers=h("R"), json={
+        "lines": [{"user_role_id": L["acc"], "unchecked_item_ids": [acc[1]]}]})
+    d = client.post("/access-review/me/submit", headers=h("R"), json={}).json()
+
+    # the approver re-ticks acc[1], unticks gl[0] and drops the Email group, then approves in one call
+    body = {"action": "approve", "lines": [
+        {"user_role_id": L["acc"], "unchecked_item_ids": []},
+        {"user_role_id": L["gl"], "unchecked_item_ids": [gl[0]]},
+        {"user_role_id": L["grp"], "decision": "remove"}]}
+    # the requester can't use it on their own review
+    assert client.post(f"/access-review/{d['id']}/decision", headers=h("R"), json=body).status_code == 403
+    # an item outside the role is refused, nothing approved
+    bad = {"action": "approve", "lines": [{"user_role_id": L["acc"], "unchecked_item_ids": [w["foreign_item"]]}]}
+    assert client.post(f"/access-review/{d['id']}/decision", headers=h("HEAD"), json=bad).status_code == 400
+    assert client.get(f"/access-review/{d['id']}", headers=h("HEAD")).json()["status"] == "pending"
+
+    r = client.post(f"/access-review/{d['id']}/decision", headers=h("HEAD"), json=body)
+    assert r.status_code == 200, r.text
+    out = r.json()
+    assert out["status"] == "approved" and out["comment"] == "[ผู้อนุมัติแก้ไขสิทธิ์]"
+    lines = {l["role_name"]: l for l in out["lines"]}
+    assert lines["ACC-Officer"]["unchecked_item_ids"] == []
+    assert (lines["GL ACC"]["unchecked_item_ids"], lines["GL ACC"]["decision"]) == ([gl[0]], "keep")
+    assert lines["acc@menatransport.co.th"]["decision"] == "remove"
+
+
+def test_approve_with_unchanged_lines_has_no_marker(client, w, db):
+    L = w["links"]
+    d = client.post("/access-review/me/submit", headers=h("R"), json={}).json()
+    same = {"action": "approve", "comment": "ok", "lines": [{"user_role_id": L["acc"], "unchecked_item_ids": []}]}
+    out = client.post(f"/access-review/{d['id']}/decision", headers=h("HEAD"), json=same).json()
+    assert (out["status"], out["comment"]) == ("approved", "ok")

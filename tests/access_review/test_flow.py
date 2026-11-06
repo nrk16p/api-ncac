@@ -98,7 +98,7 @@ def test_full_flow(client, world, db):
     assert detail["can_decide"] is False
     assert {l["role_name"]: l["note"] for l in detail["lines"]}["FIN-Officer"] == "ไม่ใช้แล้ว"
     assert [c[0] for c in world["calls"]] == ["userHEAD@example.com"]
-    assert "รอการอนุมัติ" in world["calls"][0][1]
+    assert "รอการพิจารณาอนุมัติ" in world["calls"][0][1]
     assert db.get(ArReviewApprover, (rid, "HEAD")).mailed_at is not None
 
     # read-only while pending
@@ -215,7 +215,7 @@ def test_mail_preview_and_guard(client, world, db):
     assert world["calls"][0][1].startswith("[IT ทบทวนสิทธิ์] ")
     prev = client.get(f"/access-review/{rid}/mail-preview", headers=h("HEAD")).json()
     assert prev["to"] == ["userHEAD@example.com"] and prev["cc"] == cc
-    assert prev["subject"].startswith("[IT ทบทวนสิทธิ์] ") and "รอการอนุมัติ" in prev["subject"]
+    assert prev["subject"].startswith("[IT ทบทวนสิทธิ์] ") and "รอการพิจารณาอนุมัติ" in prev["subject"]
     assert f"https://menait-service.vercel.app/access-review/{rid}" in prev["html"]
     assert client.get(f"/access-review/{rid}/mail-preview", headers=h("R")).status_code == 403
     assert client.get(f"/access-review/{rid}/mail-preview", headers=h("IT")).status_code == 200

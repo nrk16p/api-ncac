@@ -302,7 +302,8 @@ def get_review_items(review_id: int, caller: Caller = Depends(get_caller), db: S
 @router.post("/{review_id:int}/decision")
 def post_decision(review_id: int, body: s.DecisionIn, caller: Caller = Depends(get_caller),
                   db: Session = Depends(get_db)):
-    return logic.decide(db, caller, review_id, body.action, body.comment)
+    extra = {"requested_role_ids": body.requested_role_ids} if "requested_role_ids" in body.model_fields_set else {}
+    return logic.decide(db, caller, review_id, body.action, body.comment, _lines(body.lines), **extra)
 
 
 @router.get("/{review_id:int}/mail-preview")

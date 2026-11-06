@@ -65,7 +65,7 @@ def test_requested_items_round_trip_submit_and_show_to_approver(client, w):
     seen = _acc_role(client.get(f"/access-review/{d['id']}/items", headers=h("HEAD")).json())
     assert len(seen["requested_items"]) == 2
     preview = client.get(f"/access-review/{d['id']}/mail-preview", headers=h("HEAD")).json()
-    assert "ขอเพิ่มสิทธิ์" in preview["html"]
+    assert "ขอเพิ่ม 2 รายการ" in preview["html"]
 
 
 def test_requested_items_must_belong_to_the_same_system(client, w):
