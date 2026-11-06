@@ -713,7 +713,8 @@ def catalog_roles(db: Session, system_code: str) -> dict:
 
 # ---------------------------- mail ----------------------------
 
-def _mail_context(db: Session, review: ArReview) -> Tuple[List[str], dict]:
+def _mail_context(db: Session, review: ArReview) -> Tuple[List[str], List[str], dict]:
+    """(approver emails, cc = the requester's email, render ctx)."""
     approver_ids = [a.employee_id for a in repo.approver_rows(db, review.id)]
     users = repo.users_by_employee_ids(db, approver_ids + [review.employee_id])
     owner = users.get(review.employee_id)
@@ -724,7 +725,8 @@ def _mail_context(db: Session, review: ArReview) -> Tuple[List[str], dict]:
                  + len(repo.requested_role_ids(db, [review.id])[review.id]))
     p = person(owner, review.employee_id)
     cycle = review.cycle or repo.get_cycle(db, review.cycle_id)
-    return to, {
+    cc = [owner.email] if owner is not None and owner.email else []
+    return to, cc, {
         "review_id": review.id, "requester_name": p["name"], "requester_employee_id": review.employee_id,
         "department": p["department"], "division": p["division"], "cycle_name": cycle.name if cycle else None,
         "total_lines": total, "remove_count": removes, "unchecked_count": unchecked, "requested_count": requested,
@@ -736,15 +738,16 @@ def mail_preview(db: Session, caller: Caller, review_id: int) -> dict:
     review, approver_ids = _load_visible(db, caller, review_id)
     if not (caller.is_admin or caller.employee_id in approver_ids):
         raise ArForbidden(MSG_FORBIDDEN_VIEW)
-    to, ctx = _mail_context(db, review)
+    to, cc, ctx = _mail_context(db, review)
     subject, html = mail.render_approver_mail(ctx)
-    return {"to": to, "subject": subject, "html": html}
+    to = mail.pick_recipients(to)
+    return {"to": to[:1], "cc": mail.mail_cc(to, cc) if to else [], "subject": subject, "html": html}
 
 
 def notify_approvers(db: Session, review: ArReview, background_tasks: Optional[BackgroundTasks]) -> None:
-    to, ctx = _mail_context(db, review)
+    to, cc, ctx = _mail_context(db, review)
     subject, html = mail.render_approver_mail(ctx)
-    mail.dispatch(to, subject, html, background_tasks)
+    mail.dispatch(to, subject, html, background_tasks, cc)
     now = utcnow()
     for row in repo.approver_rows(db, review.id):
         row.mailed_at = now

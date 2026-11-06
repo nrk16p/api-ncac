@@ -1,6 +1,7 @@
 """Access Review — approver email (Thai HTML). Sent on submit to the review's approvers (Bew 2026-11-05):
-dispatch() queues services.email_service.send_email once per recipient on BackgroundTasks. Bypass and it_queue
-reviews have no approvers, so nothing is sent. GET /access-review/{id}/mail-preview renders the same mail.
+dispatch() queues ONE services.email_service.send_email on BackgroundTasks, shaped like the IT form mail
+(Bew 2026-11-06): To = first approver, Cc = the other approvers + the requester + itcenter@. Bypass and it_queue reviews have no
+approvers, so nothing is sent. GET /access-review/{id}/mail-preview renders the same mail.
 The link uses FE_BASE_URL (same env as finance mail), default menait-service.vercel.app.
 """
 from __future__ import annotations
@@ -18,6 +19,8 @@ log = logging.getLogger(__name__)
 
 DEFAULT_FE_BASE_URL = "https://menait-service.vercel.app"
 MAX_RECIPIENTS = 20
+IT_CC = "itcenter@menatransport.co.th"
+SUBJECT_PREFIX = "[IT ทบทวนสิทธิ์]"
 _BASE_URL = re.compile(r"^https?://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?$")
 
 
@@ -40,7 +43,7 @@ def render_approver_mail(ctx: dict) -> Tuple[str, str]:
     e = lambda v: escape(str(v), quote=True)  # noqa: E731
     name = ctx.get("requester_name") or ctx.get("requester_employee_id") or "-"
     cycle = ctx.get("cycle_name")
-    subject = _one_line(f"[ทบทวนสิทธิ์ผู้ใช้] {name} ส่งแบบทบทวนสิทธิ์{f' รอบ {cycle}' if cycle else ''} รอการอนุมัติ")
+    subject = _one_line(f"{SUBJECT_PREFIX} {name} ส่งแบบทบทวนสิทธิ์{f' รอบ {cycle}' if cycle else ''} รอการอนุมัติ")
     rows = [("ผู้ขอ", f"{name} ({ctx.get('requester_employee_id') or '-'})")]
     if ctx.get("department"):
         rows.append(("แผนก", ctx["department"]))
@@ -86,23 +89,38 @@ def pick_recipients(to: Iterable[Optional[str]]) -> List[str]:
     return out[:MAX_RECIPIENTS]
 
 
-def _send_one(to_email: str, subject: str, html: str) -> None:
-    """One recipient; a failure is logged and never stops the other recipients' tasks."""
+def mail_cc(to: List[str], extra: Iterable[Optional[str]] = ()) -> List[str]:
+    """Cc for a mail whose To is to[0]: the other approvers, then `extra` (the requester), then itcenter@ —
+    valid addresses only, none twice (case-insensitive)."""
+    seen = {to[0].lower()}
+    out = []
+    for a in to[1:] + pick_recipients(extra) + [IT_CC]:
+        if a.lower() not in seen:
+            seen.add(a.lower())
+            out.append(a)
+    return out
+
+
+def _send(to_email: str, subject: str, html: str, cc: List[str]) -> None:
+    """A failure is logged and never breaks the submit."""
     from services import email_service  # looked up at call time so tests can stub send_email
     try:
-        email_service.send_email(to_email, subject, html)
-        log.info("access review mail sent: %s → %s", subject, to_email)
+        email_service.send_email(to_email, subject, html, cc)
+        log.info("access review mail sent: %s → %s cc %s", subject, to_email, cc)
     except Exception:  # noqa: BLE001 — SMTP errors must not break the submit
-        log.exception("access review mail failed: %s → %s", subject, to_email)
+        log.exception("access review mail failed: %s → %s cc %s", subject, to_email, cc)
 
 
 def dispatch(to: Iterable[Optional[str]], subject: str, html: str,
-             background_tasks: Optional[BackgroundTasks]) -> bool:
-    """Queue one mail per recipient (sent after the response). Returns True when anything was queued."""
+             background_tasks: Optional[BackgroundTasks], cc: Iterable[Optional[str]] = ()) -> bool:
+    """Queue one mail to every approver, Cc `cc` + itcenter@ (sent after the response).
+    Returns True when it was queued; no approver address → nothing is sent."""
     recipients = pick_recipients(to)
-    for addr in recipients:
-        if background_tasks is not None:
-            background_tasks.add_task(_send_one, addr, subject, html)
-        else:
-            _send_one(addr, subject, html)
-    return bool(recipients)
+    if not recipients:
+        return False
+    cc = mail_cc(recipients, cc)
+    if background_tasks is not None:
+        background_tasks.add_task(_send, recipients[0], subject, html, cc)
+    else:
+        _send(recipients[0], subject, html, cc)
+    return True

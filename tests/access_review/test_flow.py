@@ -10,7 +10,7 @@ def world(org, monkeypatch):
     """R (Lv3, dept 1) holds 2 ATMS roles + 1 email group; HEAD (Lv5, same division) approves."""
     calls = []
     import services.email_service as email_service
-    monkeypatch.setattr(email_service, "send_email", lambda *a, **k: calls.append(a))
+    monkeypatch.setattr(email_service, "send_email", lambda *a, **k: calls.append(a))  # (to, subject, html, cc)
     org.user("R", 3, 1, username="r.user", email="r.user@menatransport.co.th")
     org.user("HEAD", 5, 2)
     org.user("OTHER", 3, 1)
@@ -209,28 +209,39 @@ def test_closed_cycle_blocks_saving_and_submit(client, world, db):
 
 def test_mail_preview_and_guard(client, world, db):
     rid = client.post("/access-review/me/submit", headers=h("R"), json={"lines": all_lines(world)}).json()["id"]
-    assert [c[0] for c in world["calls"]] == ["userHEAD@example.com"]  # sent once on submit
+    # sent once on submit, Cc the requester + itcenter@ like the IT form mail
+    cc = ["r.user@menatransport.co.th", "itcenter@menatransport.co.th"]
+    assert [(c[0], c[3]) for c in world["calls"]] == [("userHEAD@example.com", cc)]
+    assert world["calls"][0][1].startswith("[IT ทบทวนสิทธิ์] ")
     prev = client.get(f"/access-review/{rid}/mail-preview", headers=h("HEAD")).json()
-    assert prev["to"] == ["userHEAD@example.com"]
-    assert "รอการอนุมัติ" in prev["subject"]
+    assert prev["to"] == ["userHEAD@example.com"] and prev["cc"] == cc
+    assert prev["subject"].startswith("[IT ทบทวนสิทธิ์] ") and "รอการอนุมัติ" in prev["subject"]
     assert f"https://menait-service.vercel.app/access-review/{rid}" in prev["html"]
     assert client.get(f"/access-review/{rid}/mail-preview", headers=h("R")).status_code == 403
     assert client.get(f"/access-review/{rid}/mail-preview", headers=h("IT")).status_code == 200
 
 
-def test_mail_failure_does_not_stop_other_recipients(monkeypatch):
+def test_mail_is_one_message_to_first_approver_cc_others_requester_and_itcenter(monkeypatch):
     import services.email_service as email_service
     from services.access_review import mail
     sent = []
+    monkeypatch.setattr(email_service, "send_email", lambda to, subject, html, cc=None: sent.append((to, cc)))
+    assert mail.dispatch(["a@x.co", None, "b@x.co", "a@x.co", "nope", "ITCENTER@menatransport.co.th"],
+                         "s", "<p></p>", None, ["req@x.co", "B@x.co", None]) is True
+    assert sent == [("a@x.co", ["b@x.co", "ITCENTER@menatransport.co.th", "req@x.co"])]
+    assert mail.dispatch([None, ""], "s", "<p></p>", None, ["req@x.co"]) is False  # no approver → no mail
+    assert len(sent) == 1
+    assert mail.mail_cc(["itcenter@menatransport.co.th"]) == []  # itcenter@ as the approver: not Cc'd to itself
 
-    def fake(to, subject, html):
-        if to == "bad@x.co":
-            raise OSError("smtp down")
-        sent.append(to)
+
+def test_mail_failure_does_not_break_dispatch(monkeypatch):
+    import services.email_service as email_service
+    from services.access_review import mail
+
+    def fake(*a, **k):
+        raise OSError("smtp down")
     monkeypatch.setattr(email_service, "send_email", fake)
-    assert mail.dispatch(["bad@x.co", "ok@x.co", "ok@x.co", None, "nope"], "s", "<p></p>", None) is True
-    assert sent == ["ok@x.co"]
-    assert mail.dispatch([None, ""], "s", "<p></p>", None) is False
+    assert mail.dispatch(["a@x.co"], "s", "<p></p>", None) is True
 
 
 def test_admin_endpoints_require_it_admin(client, world):
