@@ -20,6 +20,12 @@ def _person(eid, uid, level, dept=30, division=7, site=3, active=True):
             "division_id": division, "site_id": site, "active": active}
 
 
+def _toa(monkeypatch):
+    """ชั้น TOA ชุด prod: ไม่เกิน 2,000 → ระดับ 2 · ไม่เกิน 5,000 → ระดับ 3"""
+    from tests.finance.test_petty_head_logic import TOA
+    monkeypatch.setattr(repo, "toa_tiers", lambda db: TOA)
+
+
 def _line(monkeypatch, holder_dept=99):
     """holder_dept=30 = เจ้าของเงินสดอยู่แผนกเดียวกับผู้ขอเบิก และระดับสูงพอเป็นหัวหน้าได้"""
     people = {p["employee_id"]: p for p in (
@@ -119,26 +125,72 @@ class TestCashOwnerWaitsForTheHead:
         out = _owner_approve(db_session, claim)
         assert out["status"] == "APPROVED" and out["head_approved_by"] == "600050"
 
-    def test_owner_who_is_the_head_cannot_approve_or_pay_before_the_next_level(self, db_session, claim, monkeypatch, mails):
-        """คนอนุมัติกับคนโอนต้องเป็นคนละคน (ผู้ใช้สั่ง 30/10/2026) — เจ้าของเงินสด (ระดับ 4 แผนกเดียวกัน) ไม่ใช่หัวหน้า
-        ข้ามไปอีกระดับ: ต้องระดับ 5 ขึ้นไป หัวหน้าแผนกระดับ 3 ก็กดไม่ได้"""
+    def test_owner_covered_by_toa_pays_at_once_without_a_head(self, db_session, fund, weigh_type, claim_payload,
+                                                              weigh_items, seq_stub, frozen_bkk, monkeypatch, mails):
+        """TOA ให้เจ้าของเงินสด (ระดับ 4 แผนกเดียวกัน) อนุมัติ 1,640 ได้เอง → ใบไปรอเขาเลย ไม่มีขั้นหัวหน้า (7/11/2026)"""
         _line(monkeypatch, holder_dept=30)
-        with pytest.raises(HTTPException) as exc:
-            _owner_approve(db_session, claim)
-        assert exc.value.status_code == 409
-        for who in ("12345", "600050"):
-            with pytest.raises(HTTPException) as exc:
-                R.head_approve_claim(claim.form_id, HeadApproveIn(employee_id=who), db_session)
-            assert exc.value.status_code == 403
-        R.head_approve_claim(claim.form_id, HeadApproveIn(employee_id="600090"), db_session)
-        out = _owner_approve(db_session, claim)
-        assert out["status"] == "APPROVED" and out["head_approved_by"] == "600090" and out["approved_by"] == "12345"
+        _toa(monkeypatch)
+        out = R.create_claim(ClaimIn(**{**claim_payload(), "expense_date": "2026-09-25", "items": weigh_items}), db_session)
+        assert out["status"] == "PENDING_APPROVAL" and out["head_skipped"] is True and out["head_approved_by"] is None
+        assert mails and mails[0][0] == ["12345@x"]  # อีเมลไปหาเจ้าของเงินสดเลย ไม่ใช่หัวหน้า
+        paid = _owner_approve(db_session, repo.get_claim(db_session, out["form_id"]))
+        assert paid["status"] == "APPROVED" and paid["head_approved_by"] == "12345" and paid["head_skipped"] is True
 
-    def test_email_skips_the_owner_and_goes_one_level_up(self, db_session, fund, weigh_type, claim_payload,
-                                                         weigh_items, seq_stub, frozen_bkk, monkeypatch, mails):
+    def test_owner_without_toa_cover_still_waits_for_the_head(self, db_session, fund, weigh_type, claim_payload,
+                                                              weigh_items, seq_stub, frozen_bkk, monkeypatch, mails):
+        """เจ้าของเงินสดคนละสายงาน → ยังรอหัวหน้าระดับตาม TOA (1,640 → ระดับ 2 ขึ้นไป สูงกว่าผู้ขอ)"""
+        _line(monkeypatch)
+        _toa(monkeypatch)
+        out = R.create_claim(ClaimIn(**{**claim_payload(), "expense_date": "2026-09-25", "items": weigh_items}), db_session)
+        assert out["status"] == "PENDING_HEAD" and out["head_skipped"] is False
+        assert mails and mails[0][0] == ["700000@x"]  # ชั้นต่ำสุดที่กดได้ = ระดับ 2 ในแผนก
+        with pytest.raises(HTTPException) as exc:
+            _owner_approve(db_session, repo.get_claim(db_session, out["form_id"]))
+        assert exc.value.status_code == 409
+
+    def test_old_pending_head_claim_can_be_paid_by_a_covered_owner(self, db_session, claim, monkeypatch, mails):
+        """ใบที่เปิดไว้ก่อนกติกานี้ (ค้างรอหัวหน้า) เจ้าของเงินสดที่ TOA ครอบกดอนุมัติจ่ายได้เลย"""
         _line(monkeypatch, holder_dept=30)
-        R.create_claim(ClaimIn(**{**claim_payload(), "expense_date": "2026-09-25", "items": weigh_items}), db_session)
-        assert mails and mails[0][0] == ["600090@x"]
+        _toa(monkeypatch)
+        out = _owner_approve(db_session, claim)
+        assert out["status"] == "APPROVED" and out["head_approved_by"] == "12345"
+        assert "HEAD_SKIP_TOA" in _actions(db_session, claim)
+
+    def test_resubmit_after_a_return_goes_straight_to_a_covered_owner(self, db_session, claim, claim_payload,
+                                                                      weigh_items, monkeypatch, mails):
+        _line(monkeypatch, holder_dept=30)
+        _toa(monkeypatch)
+        R.return_claim(claim.form_id, ReturnIn(employee_id="12345", reason="แก้ยอด"), db_session)
+        out = R.update_claim(claim.form_id, ClaimIn(**{**claim_payload(), "items": weigh_items}), db_session)
+        assert out["status"] == "PENDING_APPROVAL" and out["head_skipped"] is True
+
+    def test_transfer_date_may_be_in_the_past_but_not_in_the_future(self, db_session, claim, monkeypatch, mails):
+        from datetime import date
+        _line(monkeypatch, holder_dept=30)
+        _toa(monkeypatch)
+        with pytest.raises(HTTPException) as exc:
+            R.approve_claim(claim.form_id, ApproveIn(employee_id="12345", attachments=FULL, dup_override_reason="x",
+                                                    transfer_date=date(2099, 1, 1)), db_session)
+        assert exc.value.status_code == 422 and "วันข้างหน้า" in str(exc.value.detail)
+        out = R.approve_claim(claim.form_id, ApproveIn(employee_id="12345", attachments=FULL, dup_override_reason="x",
+                                                       transfer_date=date(2026, 9, 20)), db_session)
+        assert out["status"] == "APPROVED" and out["transfer_date"] == "2026-09-20"
+
+    def test_claim_over_two_thousand_is_refused(self, db_session, fund, weigh_type, claim_payload, weigh_items,
+                                                seq_stub, frozen_bkk, monkeypatch, mails):
+        _line(monkeypatch)
+        big = [dict(weigh_items[0], rate="2500")]
+        with pytest.raises(HTTPException) as exc:
+            R.create_claim(ClaimIn(**{**claim_payload(), "items": big}), db_session)
+        assert exc.value.status_code == 422 and "2,000" in str(exc.value.detail)
+
+    def test_weigh_claim_with_both_driver_roles_is_refused(self, db_session, fund, weigh_type, claim_payload,
+                                                           weigh_items, seq_stub, frozen_bkk, monkeypatch, mails):
+        _line(monkeypatch)
+        rows = [dict(weigh_items[0], driver_role="พจส."), dict(weigh_items[1], driver_role="พจร.")]
+        with pytest.raises(HTTPException) as exc:
+            R.create_claim(ClaimIn(**{**claim_payload(), "items": rows}), db_session)
+        assert exc.value.status_code == 422 and "พจส." in str(exc.value.detail)
 
 
 class TestHeadReturn:

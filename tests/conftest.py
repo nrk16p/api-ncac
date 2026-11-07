@@ -23,14 +23,18 @@ def db_session():
     import models.finance_petty_model as petty
     import models.master_model as master
     import models.user_model as users
+    import models.form_approver_division as fad
 
     engine = create_engine("sqlite://")
     tables = [
         master.FormSubmission.__table__, master.FormSequence.__table__,
-        fin.FinAdvance.__table__,
+        fin.FinAdvance.__table__, fin.FinApprovalTier.__table__,  # ชั้น TOA ที่ petty ใช้ตัดสินขั้นหัวหน้า
         # บัญชีผู้รับเงินของเจ้าของเงินสด (กล่องจ่ายเงินของรอบ) · ตาราง log ใช้ JSONB สร้างบน sqlite ไม่ได้ ไม่ต้องใช้
         fin.FinPayeeAccountRequest.__table__, fin.FinPayeeAccount.__table__,
         users.User.__table__,  # petty_repo.employee_email อ่านอีเมลจากตารางนี้
+        # สายงานที่ petty ใช้ตัดสินขั้นหัวหน้าตาม TOA ตอนเปิดใบ (approval_repo.load_people/load_mappings)
+        users.PositionLevel.__table__, users.Position.__table__, users.Department.__table__,
+        fad.FormApproverDivision.__table__,
         petty.FinPettyFund.__table__, petty.FinPettyExpenseType.__table__,
         petty.FinPettyBatch.__table__, petty.FinPettyClaim.__table__,
         petty.FinPettyClaimItem.__table__, petty.FinPettyLog.__table__,

@@ -99,8 +99,10 @@ def _item_rows(claim_id: int, items: list[dict]) -> list[FinPettyClaimItem]:
     return rows
 
 
-def create_claim(db: Session, payload: dict, items: list[dict], actor: str) -> FinPettyClaim:
-    """เปิดใบ: ออกเลขจาก form_sequences → เขียนหัวใบ → เขียนรายการ → สรุปยอดและช่วงวัน"""
+def create_claim(db: Session, payload: dict, items: list[dict], actor: str,
+                 status: str = L.PENDING_HEAD) -> FinPettyClaim:
+    """เปิดใบ: ออกเลขจาก form_sequences → เขียนหัวใบ → เขียนรายการ → สรุปยอดและช่วงวัน
+    status = PENDING_APPROVAL เมื่อ TOA ให้เจ้าของเงินสดอนุมัติเองได้ (ไม่มีขั้นหัวหน้า)"""
     from routes.forms.form_submission_routes import generate_form_id  # นำเข้าในฟังก์ชัน กัน import วน
 
     fund = get_fund(db, payload["fund_id"])
@@ -110,7 +112,7 @@ def create_claim(db: Session, payload: dict, items: list[dict], actor: str) -> F
     form_id = generate_form_id(db, L.petty_form_code(fund.branch_code, fund.division_code))
     period_from, period_to = L.period_of(items)
     claim = FinPettyClaim(
-        form_id=form_id, status=L.PENDING_HEAD,
+        form_id=form_id, status=status,
         amount=L.claim_total(items), period_from=period_from, period_to=period_to,
         **payload,
     )
@@ -118,7 +120,10 @@ def create_claim(db: Session, payload: dict, items: list[dict], actor: str) -> F
     db.flush()
     for row in _item_rows(claim.id, items):
         db.add(row)
-    log(db, claim.id, "CREATE", actor, changes={"amount": str(claim.amount), "items": len(items)})
+    changes = {"amount": str(claim.amount), "items": len(items)}
+    if status != L.PENDING_HEAD:
+        changes["head_skipped"] = "TOA"  # เจ้าของเงินสดมีอำนาจตาม TOA ไม่ต้องผ่านหัวหน้า
+    log(db, claim.id, "CREATE", actor, changes=changes)
     db.commit()
     db.refresh(claim)
     return claim
@@ -227,11 +232,12 @@ _EDITABLE = ("PENDING_HEAD", "PENDING_APPROVAL", "RETURNED", "SENT_BACK")
 
 
 def update_draft(db: Session, claim: FinPettyClaim, payload: dict, items: list[dict],
-                 actor: str) -> FinPettyClaim:
+                 actor: str, next_status: Optional[str] = None) -> FinPettyClaim:
     """แก้ได้ตอนรออนุมัติ ถูกตีกลับ หรือถูกบัญชีตีกลับ
 
     ใบที่บัญชีตีกลับ แก้แล้วส่งตรงกลับบัญชี ไม่ต้องอนุมัติใหม่ (ผู้ใช้สั่ง 29/10/2026)
-    ที่เหลือกลับไปให้หัวหน้าอนุมัติใหม่ แม้หัวหน้าอนุมัติไปแล้ว เพราะยอด/รายการอาจเปลี่ยน (flow v3)
+    ที่เหลือกลับไปเริ่มอนุมัติใหม่ แม้หัวหน้าอนุมัติไปแล้ว เพราะยอด/รายการอาจเปลี่ยน (flow v3)
+    next_status = จุดเริ่มใหม่ที่ route ตัดสินจาก TOA (รอหัวหน้า หรือรอเจ้าของเงินสดเลย) — ไม่ส่ง = รอหัวหน้า
     """
     if claim.status not in _EDITABLE:
         raise L.PettyRuleError(
@@ -254,11 +260,14 @@ def update_draft(db: Session, claim: FinPettyClaim, payload: dict, items: list[d
         replace_items(db, claim.id, items)
         db.refresh(claim)
     before = claim.status
-    claim.status = L.PENDING_HEAD
+    target = next_status or L.PENDING_HEAD
+    claim.status = target
     claim.head_approved_by = claim.head_approved_at = None
     changes = {"amount": str(claim.amount)}
-    if before != L.PENDING_HEAD:
-        changes.update({"from": before, "to": L.PENDING_HEAD})
+    if before != target:
+        changes.update({"from": before, "to": target})
+    if target != L.PENDING_HEAD:
+        changes["head_skipped"] = "TOA"
     log(db, claim.id, "RESUBMIT" if was_returned else "UPDATE", actor, changes=changes)
     db.commit()
     db.refresh(claim)
@@ -326,6 +335,13 @@ def line_context(db: Session, fresh: bool = True):
     from services.finance import approval_repo
     ctx = approval_repo.load_context(db, fresh=fresh)
     return ctx.people, ctx.mappings
+
+
+def toa_tiers(db: Session) -> list:
+    """ชั้น TOA (fin_approval_tiers) ชุดเดียวกับ Advance (7 แถว อ่านตรง ไม่ผ่านแคช context)
+    ว่าง = เครื่องที่ยังไม่ได้ใส่ตาราง → petty_clear ถอยไปสูตร v3"""
+    from services.finance import approval_repo
+    return approval_repo.load_tiers(db)
 
 
 def _yymm_bkk() -> int:

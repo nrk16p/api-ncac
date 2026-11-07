@@ -4,6 +4,7 @@ auth ยังเป็นแบบเดียวกับ advance_routes (ไ�
 """
 import logging
 import os
+from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
@@ -117,6 +118,9 @@ def _claim_dict(c, items, names: dict | None = None) -> dict:
         "cost_center": c.cost_center,
         "created_by_name": names.get(c.created_by), "approved_by_name": names.get(c.approved_by),
         "head_approved_by": c.head_approved_by, "head_approved_by_name": names.get(c.head_approved_by),
+        # TOA ให้เจ้าของเงินสดอนุมัติเอง ไม่มีขั้นหัวหน้า: ยังไม่อนุมัติ = ไม่มีชื่อหัวหน้า · อนุมัติแล้ว = ชื่อเดียวกับคนโอน
+        "head_skipped": (c.status != L.PENDING_HEAD and c.head_approved_by is None)
+                        or (c.head_approved_by is not None and c.head_approved_by == c.approved_by),
         "head_approved_at": c.head_approved_at.isoformat() if c.head_approved_at else None,
         "approved_by": c.approved_by, "approved_at": c.approved_at.isoformat() if c.approved_at else None,
         "transfer_date": str(c.transfer_date) if c.transfer_date else None,
@@ -146,18 +150,72 @@ def create_claim(payload: ClaimIn, db: Session = Depends(get_db), background: Ba
     body = payload.model_dump()
     items = body.pop("items")
     _reject_incomplete_rows(db, payload.expense_type, items)
+    _check_claim_rules(payload.expense_type, items)
     fund = repo.get_fund(db, payload.fund_id)
     if fund is not None and not L.division_allowed(payload.expense_type, fund.division_code):
         # เดิมคุมแค่ dropdown หน้าเว็บ ยิง API ตรงเปิดค่ายางบนวงเงินบัญชีได้ (เจอตอนทดสอบ 30/10)
         allowed = " ".join(L.EXPENSE_TYPE_DIVISIONS[payload.expense_type])
         raise HTTPException(status_code=422, detail=(
             f"ประเภทนี้เปิดได้เฉพาะวงเงินของแผนก {allowed} แต่วงเงินที่เลือกเป็นแผนก {fund.division_code}"))
+    status = _initial_status(db, payload.created_by, fund.holder_employee_id if fund else None, L.claim_total(items))
     try:
-        claim = repo.create_claim(db, body, items, actor=payload.created_by)
+        claim = repo.create_claim(db, body, items, actor=payload.created_by, status=status)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-    _notify_heads(db, claim, background)
+    _notify_next(db, claim, background)
     return _out(db, claim)
+
+
+def _check_claim_rules(expense_type: str, items: list[dict]) -> None:
+    """กติกาหัวใบที่ไม่ขึ้นกับ spec: เพดาน 2,000/ใบ · ค่าชั่งใบเดียวประเภทคนขับเดียว"""
+    try:
+        L.assert_claim_cap(L.claim_total(items))
+        L.assert_single_driver_role(expense_type, items)
+    except L.PettyRuleError as exc:
+        raise _rule_error(exc)
+
+
+def _initial_status(db: Session, requester_id: str, holder_id: Optional[str], amount) -> str:
+    """ใบเริ่มที่ไหน: TOA ให้เจ้าของเงินสดอนุมัติเองได้ → รอเจ้าของเงินสดเลย · ไม่ได้ → รอหัวหน้าก่อน"""
+    if _holder_covers(db, requester_id, holder_id, amount):
+        return L.PENDING_APPROVAL
+    return L.PENDING_HEAD
+
+
+def _holder_covers(db: Session, requester_id: str, holder_id: Optional[str], amount, fresh: bool = True) -> bool:
+    people, mappings = repo.line_context(db, fresh=fresh)
+    return clear.holder_covers(people, mappings, repo.toa_tiers(db), requester_id, holder_id, amount)
+
+
+def _notify_next(db: Session, claim, background) -> None:
+    """อีเมลคนที่ต้องกดต่อ: รอหัวหน้า → หัวหน้าตามสายงาน · ข้ามหัวหน้า → เจ้าของเงินสด"""
+    if claim.status == L.PENDING_HEAD:
+        _notify_heads(db, claim, background)
+        return
+    fund = repo.get_fund(db, claim.fund_id)
+    holder_email = repo.employee_email(db, fund.holder_employee_id) if fund else None
+    name = repo.employee_names(db, [claim.created_by]).get(claim.created_by)
+    args = (claim.form_id, name, claim.amount, holder_email, True)
+    if background is not None:
+        background.add_task(mail.notify_head_approved, *args)
+    else:
+        mail.notify_head_approved(*args)
+
+
+@router.get("/claims/route-preview")
+def route_preview(created_by: str, fund_id: int, amount: Decimal = Query(ge=0), db: Session = Depends(get_db)):
+    """หน้าเปิดใบถามก่อนส่ง: ใบนี้จะไปหาใคร (เจ้าของเงินสดเลย หรือหัวหน้าระดับไหนก่อน) ตาม TOA"""
+    fund = repo.get_fund(db, fund_id)
+    holder_id = fund.holder_employee_id if fund else None
+    people, mappings = repo.line_context(db, fresh=False)
+    tiers = repo.toa_tiers(db)
+    requester = people.get(created_by) or {}
+    required = clear.toa_required_level(tiers, requester.get("level"), amount) if amount > 0 else None
+    covers = amount > 0 and clear.holder_covers(people, mappings, tiers, created_by, holder_id, amount)
+    holder_name = repo.employee_names(db, [holder_id]).get(holder_id) if holder_id else None
+    return {"head_required": not covers, "required_level": required,
+            "holder_employee_id": holder_id, "holder_name": holder_name,
+            "over_cap": Decimal(str(amount)) > L.CLAIM_MAX_AMOUNT, "cap": float(L.CLAIM_MAX_AMOUNT)}
 
 
 def _out(db: Session, claim) -> dict:
@@ -190,13 +248,14 @@ def list_claims(employee_id: Optional[str] = None, holder: Optional[str] = None,
                                       limit=HEAD_QUEUE_CAP, offset=0, exclude_created_by=head_approver)
         people, mappings = repo.line_context(db, fresh=False)
         holders = {f.id: f.holder_employee_id for f in repo.list_funds(db, active_only=False)}
-        roles: dict = {}  # สิทธิ์ขึ้นกับผู้ขอเบิก + เจ้าของเงินสดของวงเงิน ไม่ใช่ตัวใบ คิดครั้งเดียวต่อคู่
+        tiers = repo.toa_tiers(db)
+        roles: dict = {}  # สิทธิ์ขึ้นกับผู้ขอเบิก + เจ้าของเงินสด + ยอด (ชั้น TOA) คิดครั้งเดียวต่อชุด
         is_super = _is_super(head_approver)
         mine = []
         for c in pending:
-            key = (c.created_by, holders.get(c.fund_id))
+            key = (c.created_by, holders.get(c.fund_id), c.amount)
             if key not in roles:
-                roles[key] = (True, True) if is_super else _head_roles_in(people, mappings, c.created_by, key[1], head_approver)
+                roles[key] = (True, True) if is_super else _head_roles_in(people, mappings, c.created_by, key[1], head_approver, tiers, c.amount)
             if roles[key][0]:
                 mine.append((c, roles[key][1]))
         page = mine[offset:offset + limit]
@@ -329,15 +388,14 @@ def _rule_error(exc: L.PettyRuleError) -> HTTPException:
 
 
 def _head_roles_in(people: dict, mappings: dict, requester_id: Optional[str], holder_id: Optional[str],
-                   employee_id: str) -> tuple[bool, bool]:
+                   employee_id: str, tiers: list = (), amount=None) -> tuple[bool, bool]:
     """(อนุมัติใบนี้ได้ไหม, เป็นคนที่ระบบส่งอีเมลหาไหม) — หัวหน้าของผู้ขอเบิก ใช้ engine เดียวกับ Advance
-    แผนกเดียวกันก่อน · ระดับอย่างน้อยหัวหน้าแผนกและสูงกว่าผู้ขอเบิก · ผู้ขอเบิกกดเองไม่ได้ (flow v3 30/10/2026)
-    · เจ้าของเงินสดของวงเงินไม่ใช่หัวหน้า ถ้าเขาเป็นหัวหน้าของผู้ขอเบิก ข้ามไปอีกระดับ (คนอนุมัติ ≠ คนโอน)"""
+    แผนกเดียวกันก่อน · ระดับตามชั้น TOA ของยอดและสูงกว่าผู้ขอเบิก · ผู้ขอเบิกกดเองไม่ได้ (flow v3.2 7/11/2026)"""
     if not requester_id:
         return False, False
-    if not clear.can_head(people, mappings, requester_id, holder_id, employee_id):
+    if not clear.can_head(people, mappings, requester_id, holder_id, employee_id, tiers, amount):
         return False, False
-    heads = clear.head_notify(people, mappings, requester_id, holder_id)
+    heads = clear.head_notify(people, mappings, requester_id, holder_id, tiers, amount)
     return True, any(str(p.get("employee_id")) == str(employee_id) for p in heads)
 
 
@@ -350,7 +408,8 @@ def _may_head_approve(db: Session, claim, employee_id: str) -> bool:
     if _is_super(employee_id):
         return True
     people, mappings = repo.line_context(db, fresh=True)  # ตัดสินสิทธิ์ต้องใช้สายงานล่าสุด
-    return _head_roles_in(people, mappings, claim.created_by, _holder_of(db, claim), employee_id)[0]
+    return _head_roles_in(people, mappings, claim.created_by, _holder_of(db, claim), employee_id,
+                          repo.toa_tiers(db), claim.amount)[0]
 
 
 def _require_head(db: Session, claim, employee_id: str) -> None:
@@ -362,7 +421,8 @@ def _notify_heads(db: Session, claim, background) -> None:
     """อีเมลหาหัวหน้าชั้นที่ต้องอนุมัติ (สาขาเดียวกันก่อน) — ไม่มีใครก็ข้าม ไม่ทำให้การเปิดใบล้ม"""
     try:
         people, mappings = repo.line_context(db, fresh=False)
-        heads = clear.head_notify(people, mappings, claim.created_by, _holder_of(db, claim))
+        heads = clear.head_notify(people, mappings, claim.created_by, _holder_of(db, claim),
+                                  repo.toa_tiers(db), claim.amount)
         emails = [repo.employee_email(db, p["employee_id"]) for p in heads]
         name = repo.employee_names(db, [claim.created_by]).get(claim.created_by)
     except Exception:  # noqa: BLE001 — อีเมลแจ้งเตือนห้ามทำให้ใบเปิดไม่ได้ (ใบ commit ไปแล้ว)
@@ -411,13 +471,17 @@ def update_claim(form_id: str, payload: ClaimIn, db: Session = Depends(get_db), 
     if body.get("cost_center") is None:
         body.pop("cost_center", None)  # FE เก่าไม่ส่งมา — คงรหัสเดิมไว้ ไม่ล้างทิ้ง
     _reject_incomplete_rows(db, claim.expense_type, items)
+    _check_claim_rules(claim.expense_type, items)
     before = claim.status
+    next_status = None
+    if claim.status != L.SENT_BACK:
+        next_status = _initial_status(db, claim.created_by, _holder_of(db, claim), L.claim_total(items))
     try:
-        out = repo.update_draft(db, claim, body, items, actor=payload.created_by)
+        out = repo.update_draft(db, claim, body, items, actor=payload.created_by, next_status=next_status)
     except L.PettyRuleError as exc:
         raise _rule_error(exc)
-    if out.status == L.PENDING_HEAD and before != L.PENDING_HEAD:
-        _notify_heads(db, out, background)  # ส่งใหม่หลังถูกตีกลับ หรือแก้หลังหัวหน้าอนุมัติแล้ว
+    if out.status in (L.PENDING_HEAD, L.PENDING_APPROVAL) and before != out.status:
+        _notify_next(db, out, background)  # ส่งใหม่หลังถูกตีกลับ หรือแก้แล้วเริ่มอนุมัติใหม่
     return _out(db, out)
 
 
@@ -426,9 +490,12 @@ def approve_claim(form_id: str, payload: ApproveIn, db: Session = Depends(get_db
                   background: BackgroundTasks = None):
     claim = _claim_or_404(db, form_id)
     _require_holder(db, claim, payload.employee_id)
-    # flow v3: หัวหน้าต้องอนุมัติก่อนเสมอ · คนอนุมัติกับคนโอนเป็นคนละคน (ไม่มีกดครั้งเดียวสองขั้น)
+    # flow v3.2: ใบที่ยังรอหัวหน้า เจ้าของเงินสดโอนได้ก็ต่อเมื่อ TOA ให้อำนาจเขาเอง (ใบเก่าก่อนกติกานี้ก็เข้าทางนี้)
+    head_skipped = False
     if claim.status == L.PENDING_HEAD:
-        raise HTTPException(status_code=409, detail="ใบนี้รอหัวหน้าอนุมัติก่อน เจ้าของเงินสดถึงโอนได้")
+        if not _holder_covers(db, claim.created_by, _holder_of(db, claim), claim.amount):
+            raise HTTPException(status_code=409, detail="ใบนี้ยอดเกินอำนาจอนุมัติของเจ้าของเงินสด ต้องรอหัวหน้าอนุมัติก่อน")
+        head_skipped = True
     items = repo.claim_items(db, claim.id)
     gate = _gate(db, claim, items, validate.STAGE_APPROVE, payload.attachments)
 
@@ -451,11 +518,20 @@ def approve_claim(form_id: str, payload: ApproveIn, db: Session = Depends(get_db
                       notify=_notify)
 
     # flow v2: อนุมัติ = จ่ายเงินในจังหวะเดียวกัน (สลิปโอนอยู่ในด่าน APPROVE อยู่แล้ว)
+    # วันที่โอนย้อนหลังได้ (โอนไปก่อนแล้วค่อยกดอนุมัติ) แต่เป็นวันข้างหน้าไม่ได้ — รายงานยึดวันนี้ (ผู้ใช้สั่ง 7/11/2026)
+    if payload.transfer_date and payload.transfer_date > L.bkk_today():
+        raise HTTPException(status_code=422, detail="วันที่โอนเป็นวันข้างหน้าไม่ได้ ใส่วันที่โอนจริง")
     fields = {"approved_by": payload.employee_id, "transfer_date": payload.transfer_date or L.bkk_today(),
               "debt_doc_no": debt_doc_no}
     if payload.dup_override_reason:
         fields["dup_override_reason"] = payload.dup_override_reason
+    if not claim.head_approved_by:
+        # ข้ามขั้นหัวหน้าตาม TOA → เจ้าของเงินสดเป็นหัวหน้าผู้อนุมัติของใบนี้ด้วย (หน้าจอ/ประวัติเห็นชื่อเขา)
+        fields.update({"head_approved_by": payload.employee_id, "head_approved_at": datetime.now(timezone.utc)})
     try:
+        if head_skipped:
+            repo.set_status(db, claim, L.PENDING_APPROVAL, payload.employee_id, "HEAD_SKIP_TOA", commit=False,
+                            log_extra={"head_skipped": "TOA"})
         out = repo.set_status(db, claim, L.APPROVED, payload.employee_id, "APPROVE", fields=fields)
     except L.PettyRuleError as exc:
         db.rollback()

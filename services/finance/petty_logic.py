@@ -47,7 +47,7 @@ STATUS_LABELS = {
 ALLOWED = {
     PENDING_HEAD: (PENDING_APPROVAL, RETURNED),
     PENDING_APPROVAL: (APPROVED, RETURNED),
-    RETURNED: (PENDING_HEAD,),
+    RETURNED: (PENDING_HEAD, PENDING_APPROVAL),  # ส่งใหม่: TOA ให้เจ้าของเงินสดอนุมัติเองได้ → ข้ามหัวหน้า
     APPROVED: (CLEAR_PENDING,),
     CLEAR_PENDING: (AWAITING_REVIEW, APPROVED),  # หัวหน้าไม่อนุมัติ → กลับไปให้เจ้าของเงินสดจัดรอบใหม่
     AWAITING_REVIEW: (REVIEWED, SENT_BACK),
@@ -224,12 +224,32 @@ def missing_debt_doc_text(form_ids: list[str]) -> str:
 MANAGER_LEVEL = 5
 TOP_LEVEL = 9
 
+# เพดานต่อใบ (ผู้ใช้สั่ง 7/11/2026 "เปิดใบเบิก ไม่เกิน 2000 บาท") — เกินนี้ไปเบิก Advance
+CLAIM_MAX_AMOUNT = Decimal("2000")
+
+
+def assert_claim_cap(total) -> None:
+    if Decimal(str(total)) > CLAIM_MAX_AMOUNT:
+        raise PettyRuleError(
+            f"ใบเบิกเงินสดย่อยเปิดได้ไม่เกิน {CLAIM_MAX_AMOUNT:,.0f} บาทต่อใบ (ใบนี้ {Decimal(str(total)):,.2f}) "
+            "ยอดเกินนี้ให้เบิก Advance แทน", 422)
+
+
+def assert_single_driver_role(expense_type: str, items: list) -> None:
+    """ค่าชั่ง 1 ใบ = พจส. หรือ พจร. อย่างเดียว (ผู้ใช้สั่ง 7/11/2026) เพราะลงบัญชีคนละรหัส"""
+    if expense_type != "WEIGH":
+        return
+    roles = {(row.get("driver_role") or "").strip() for row in items if (row.get("driver_role") or "").strip()}
+    if len(roles) > 1:
+        raise PettyRuleError("ใบค่าชั่งหนึ่งใบใส่ได้แค่ พจส. หรือ พจร. อย่างเดียว แยกเปิดคนละใบ", 422)
+
 
 HEAD_MIN_LEVEL = 3  # Supervisor = หัวหน้าแผนก (position_levels)
 
 
 def head_required_level(requester_level: Optional[int]) -> int:
-    """หัวหน้าที่อนุมัติใบก่อนโอน: อย่างน้อยหัวหน้าแผนก และต้องสูงกว่าผู้ขอเบิก (ผู้ใช้สั่ง 30/10/2026)"""
+    """สูตรสำรองเมื่อไม่มีตาราง TOA: อย่างน้อยหัวหน้าแผนก และต้องสูงกว่าผู้ขอเบิก (flow v3 30/10/2026)
+    ปกติ petty_clear.toa_required_level ใช้ fin_approval_tiers ตามยอด (7/11/2026)"""
     return min(max(HEAD_MIN_LEVEL, (requester_level or 0) + 1), TOP_LEVEL)
 
 

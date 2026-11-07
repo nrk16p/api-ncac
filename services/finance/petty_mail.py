@@ -102,7 +102,13 @@ def render_head_pending(form_id: str, requester_name: Optional[str], amount) -> 
                   "อนุมัติแล้วใบจะไปที่เจ้าของเงินสดเพื่อโอนเงิน</p>" + _claim_link(form_id))
 
 
-def render_head_approved(form_id: str, head_name: Optional[str], amount) -> str:
+def render_head_approved(form_id: str, head_name: Optional[str], amount, direct: bool = False) -> str:
+    if direct:
+        # TOA ให้เจ้าของเงินสดอนุมัติเอง ไม่มีขั้นหัวหน้า — head_name ตรงนี้คือชื่อผู้ขอเบิก
+        who = escape(head_name) if head_name else "เจ้าหน้าที่"
+        return _frame("ใบเบิกใหม่ รอคุณอนุมัติจ่าย", form_id,
+                      f"<p style='margin:0'>{who} เปิดใบเบิกเงินสดย่อย ยอด {float(amount):,.2f} บาท "
+                      "ยอดอยู่ในอำนาจอนุมัติของคุณตาม TOA ไม่ต้องผ่านหัวหน้า</p>" + _claim_link(form_id))
     who = escape(head_name) if head_name else "หัวหน้า"
     return _frame("หัวหน้าอนุมัติแล้ว รอคุณอนุมัติจ่าย", form_id,
                   f"<p style='margin:0'>{who} อนุมัติใบนี้แล้ว ยอด {float(amount):,.2f} บาท</p>"
@@ -118,11 +124,12 @@ def notify_head_pending(form_id: str, requester_name, amount, to: list) -> None:
                             render_head_pending(form_id, requester_name, amount))
 
 
-def notify_head_approved(form_id: str, head_name, amount, holder_email=None) -> None:
+def notify_head_approved(form_id: str, head_name, amount, holder_email=None, direct: bool = False) -> None:
+    """direct=True = ใบข้ามขั้นหัวหน้าตาม TOA มาถึงเจ้าของเงินสดเลย (head_name = ชื่อผู้ขอเบิก)"""
     if not holder_email:
         return
     mail.send_finance_email([holder_email], f"[เงินสดย่อย] รออนุมัติจ่าย {form_id}",
-                            render_head_approved(form_id, head_name, amount))
+                            render_head_approved(form_id, head_name, amount, direct=direct))
 
 
 def _round_frame(title: str, batch_no: str, body: str) -> str:
