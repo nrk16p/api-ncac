@@ -95,6 +95,7 @@ def _item_rows(claim_id: int, items: list[dict]) -> list[FinPettyClaimItem]:
             qty=qty, rate=rate, amount=L.line_amount(qty, rate), remark=raw.get("remark"),
             driver_name=raw.get("driver_name"), driver_role=raw.get("driver_role"),
             tire_position=raw.get("tire_position"),
+            fleet=raw.get("fleet"), driver_code=raw.get("driver_code"),
         ))
     return rows
 

@@ -4,6 +4,35 @@
 FE มีรายการเดียวกันที่ lib/finance/petty-cost-centers.ts — แก้ต้องแก้ทั้งสองที่
 """
 
+# รหัสใบสำคัญจ่าย (ข้อ 8 ผู้ใช้สั่ง 7/11/2026): แยกตามประเภทคนขับและฟลีท ไม่ใช่แผนกผู้เบิก
+# พจร. ทุกฟลีท → x500 รถร่วม · พจส. รถโม่ (Mixer L/S) → 3200 บริการ (ศลบ) / 2100 ขนส่ง (สสบ)
+# พจส. Trailer / Side curtain → 3300 บริหารฟลีท (ศลบ) / 2100 (สสบ) — 3300 "ใช้กับสสบ" ตามที่ผู้ใช้ตอบ ตีความว่าฟลีทสายสระบุรี
+# สกท (1) ไม่มีรหัสชุดนี้ → None ใช้รหัสแผนกผู้เบิกแทน · FE มีกติกาเดียวกันที่ lib/finance/petty-expense-code.ts
+EXPENSE_CODES = ("2100", "2500", "3200", "3300", "3500")
+_MIXER = ("Mixer L", "Mixer S")
+
+
+def expense_code_for(cost_center: str | None, items) -> str | None:
+    """รหัสใบสำคัญจ่ายจากแถวรายการ (ประเภทคนขับ + ฟลีท) และสาขาของศูนย์และแผนกผู้เบิก · ไม่รู้พอ = None"""
+    code = (cost_center or "").strip()
+    digit = code[0] if code and code[0] in "23" else None
+    if digit is None:
+        return None
+    roles = {(r.get("driver_role") or "").strip() for r in items if (r.get("driver_role") or "").strip()}
+    fleets = {(r.get("fleet") or "").strip() for r in items if (r.get("fleet") or "").strip()}
+    if "พจร." in roles:
+        return f"{digit}500"
+    if not fleets and not roles:
+        return None
+    if digit == "2":
+        return "2100"
+    if fleets and fleets <= set(_MIXER):
+        return "3200"
+    if fleets:
+        return "3300"
+    return "3200" if "พจส." in roles else None
+
+
 COST_CENTERS: dict[str, str] = {
     "1400": "สกท - ขาย",
     "1A01": "สกท - ฝ่ายบริหาร",

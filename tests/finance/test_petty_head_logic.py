@@ -128,3 +128,54 @@ class TestWeighSingleDriverRole:
     def test_one_role_or_blank_rows_pass_and_other_types_are_ignored(self):
         assert L.assert_single_driver_role("WEIGH", [{"driver_role": "พจส."}, {"driver_role": ""}, {}]) is None
         assert L.assert_single_driver_role("TOLL", [{"driver_role": "พจส."}, {"driver_role": "พจร."}]) is None
+
+
+class TestLockedFund:
+    class F:
+        def __init__(self, id, branch, division, active=True):
+            self.id, self.branch_code, self.division_code, self.is_active = id, branch, division, active
+
+    funds = [F(1, "03", "B02"), F(12, "03", "A04"), F(14, "03", "B04"), F(10, "01", "A04"), F(99, "03", "B01", active=False)]
+
+    def test_own_department_fund_first(self):
+        assert L.locked_fund(self.funds, "3B02", "TOLL").id == 1
+
+    def test_accounting_fund_of_the_branch_when_the_department_has_none(self):
+        assert L.locked_fund(self.funds, "3B01", "TOLL").id == 12  # B01 ปิดอยู่ → บัญชี
+
+    def test_none_when_the_branch_has_neither(self):
+        assert L.locked_fund(self.funds, "2B02", "TOLL") is None
+
+    def test_type_restriction_still_applies(self):
+        assert L.locked_fund(self.funds, "3B04", "TIRE") is None  # ค่ายาง = B02 เท่านั้น บัญชีมาแทนไม่ได้
+        assert L.locked_fund(self.funds, "3B04", "WEIGH").id == 14
+
+    def test_bad_code_is_none(self):
+        assert L.locked_fund(self.funds, "", "TOLL") is None and L.locked_fund(self.funds, "x", "TOLL") is None
+
+
+class TestExpenseCode:
+    """รหัสใบสำคัญจ่าย (ข้อ 8): พจร. → x500 · พจส. โม่ → 3200/2100 · พจส. Trailer/Side curtain → 3300/2100"""
+    @staticmethod
+    def f(cost_center, items):
+        from services.finance.petty_cost_centers import expense_code_for
+        return expense_code_for(cost_center, items)
+
+    def test_pjr_anywhere_is_subcontractor_code(self):
+        assert self.f("3B02", [{"driver_role": "พจส.", "fleet": "Mixer L"}, {"driver_role": "พจร.", "fleet": "Mixer L"}]) == "3500"
+        assert self.f("2B01", [{"driver_role": "พจร."}]) == "2500"
+
+    def test_mixer_company_driver(self):
+        assert self.f("3B02", [{"driver_role": "พจส.", "fleet": "Mixer S"}]) == "3200"
+        assert self.f("3B02", [{"driver_role": "พจส."}]) == "3200"  # ไม่รู้ฟลีท แต่เป็น พจส. → บริการ
+        assert self.f("2B02", [{"driver_role": "พจส.", "fleet": "Mixer L"}]) == "2100"
+
+    def test_trailer_and_side_curtain(self):
+        assert self.f("3B02", [{"fleet": "Trailer"}]) == "3300"
+        assert self.f("3B02", [{"driver_role": "พจส.", "fleet": "Side curtain"}]) == "3300"
+        assert self.f("2B02", [{"fleet": "Trailer"}]) == "2100"
+
+    def test_unknown(self):
+        assert self.f("1B06", [{"driver_role": "พจส."}]) is None
+        assert self.f("3B02", [{"ref_no": "x"}]) is None
+        assert self.f(None, [{"driver_role": "พจส."}]) is None

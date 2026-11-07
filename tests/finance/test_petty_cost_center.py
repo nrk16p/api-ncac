@@ -69,9 +69,30 @@ class TestStoredAndReturned:
         assert R.get_claim(out["form_id"], db=db_session)["cost_center"] == "3B02"
 
     def test_list_returns_it(self, db_session, weigh, claim_payload, seq_stub, frozen_bkk):
-        out = R.create_claim(_payload(claim_payload, cost_center="2A04"), db=db_session)
+        out = R.create_claim(_payload(claim_payload, cost_center="3B02"), db=db_session)
         rows = {c["form_id"]: c for c in R.list_claims(limit=50, offset=0, db=db_session)["items"]}
-        assert rows[out["form_id"]]["cost_center"] == "2A04"
+        assert rows[out["form_id"]]["cost_center"] == "3B02"
+
+    def test_a_department_of_another_branch_cannot_use_this_fund(self, db_session, weigh, claim_payload, seq_stub, frozen_bkk):
+        """วงเงินล็อกตามแผนก+สาขา (ผู้ใช้สั่ง 7/11/2026): ศูนย์ 2A04 (สระบุรี) เบิกจากวงเงินลาดกระบัง B02 ไม่ได้"""
+        from fastapi import HTTPException
+        import pytest
+        with pytest.raises(HTTPException) as exc:
+            R.create_claim(_payload(claim_payload, cost_center="2A04"), db=db_session)
+        assert exc.value.status_code == 422 and "วงเงิน" in str(exc.value.detail)
+
+    def test_a_department_without_its_own_fund_falls_back_to_accounting(self, db_session, weigh, claim_payload, seq_stub, frozen_bkk):
+        """แผนก 3B04 ไม่มีวงเงิน → ต้องใช้วงเงินบัญชี A04 สาขา 03 ไม่ใช่วง B02"""
+        from fastapi import HTTPException
+        from models.finance_petty_model import FinPettyFund
+        import pytest
+        acc = FinPettyFund(branch_code="03", division_code="A04", holder_employee_id="77777")
+        db_session.add(acc); db_session.commit()
+        with pytest.raises(HTTPException) as exc:
+            R.create_claim(_payload(claim_payload, cost_center="3B04"), db=db_session)
+        assert "03/A04" in str(exc.value.detail)
+        out = R.create_claim(_payload(claim_payload, cost_center="3B04", fund_id=acc.id), db=db_session)
+        assert out["fund_id"] == acc.id
 
     def test_edit_can_change_it(self, db_session, weigh, claim_payload, seq_stub, frozen_bkk):
         out = R.create_claim(_payload(claim_payload, cost_center="3B02"), db=db_session)

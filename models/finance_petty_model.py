@@ -107,6 +107,10 @@ class FinPettyClaim(Base):
     dd_snapshot = Column(JSONish)
     receipt_no = Column(String(50))
     wht_applicable = Column(Boolean, nullable=False, default=False, server_default="false")
+    # ยอดหัก ณ ที่จ่าย (บาท) ผู้เบิกใส่เองตอนเปิดใบ มีปุ่มช่วย 1%/3% · ยอดโอนจริง = amount − wht_amount (ผู้ใช้สั่ง 7/11/2026)
+    wht_amount = Column(Numeric(12, 2), nullable=False, default=0, server_default="0")
+    # รหัสใบสำคัญจ่าย (2100/2500/3200/3300/3500) จากประเภทคนขับ+ฟลีท — คนละตัวกับ cost_center (แผนกผู้เบิก ใช้ล็อกวงเงิน) (7/11/2026)
+    expense_code = Column(String(8))
     created_by = Column(String(50), nullable=False)
     source = Column(String(10), nullable=False, default="WEB", server_default="'WEB'")
     dup_override_reason = Column(Text)
@@ -155,6 +159,9 @@ class FinPettyClaimItem(Base):
     driver_name = Column(String(150))  # พจส. ต่อแถว — ใบสรุปรายการ (ผู้ใช้สั่ง 2026-10-13)
     driver_role = Column(String(10))  # "พจส." / "พจร." — มี พจร. ต้องมีเลขที่ใบรับสภาพหนี้ (29/10/2026)
     tire_position = Column(String(120))  # ใบยาง: รหัสตำแหน่งแบบ WMS คั่นด้วย , เช่น "RA1,RA2"
+    # ฟลีท ณ วันทำรายการจากรายงานรถประจำวัน ATMS (Mixer L / Mixer S / Trailer / Side curtain) + รหัสคนขับจาก master (7/11/2026)
+    fleet = Column(String(30))
+    driver_code = Column(String(30))
 
     __table_args__ = (
         Index("ix_fin_petty_items_claim", "claim_id"),

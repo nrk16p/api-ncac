@@ -354,6 +354,24 @@ def division_allowed(expense_type: str | None, division_code: str | None) -> boo
     return True if allowed is None else (division_code or "") in allowed
 
 
+ACCOUNTING_DIVISION = "A04"  # ฝ่ายบัญชีและการเงิน — วงเงินสำรองของสาขา
+
+
+def locked_fund(funds, cost_center: str | None, expense_type: str | None):
+    """วงเงินที่ล็อกให้ผู้เบิก (ผู้ใช้สั่ง 7/11/2026 "Lock master ตามแผนกกับผู้ถือวงเงิน ไม่มีใช้วงเงินของบัญชี ยึดแผนกและสาขา")
+    cost_center เช่น 3B02 = สาขา 03 แผนก B02 · 1) วงเงินสาขา+แผนกเดียวกัน 2) ไม่มี → วงเงิน A04 สาขาเดียวกัน 3) None
+    กติกาเดียวกับ FE lib/finance/petty-cost-centers.ts lockedFundFor — แก้ต้องแก้ทั้งสองที่"""
+    code = (cost_center or "").strip()
+    if len(code) < 4 or not code[0].isdigit():
+        return None
+    branch, division = f"0{code[0]}", code[1:]
+    in_branch = [f for f in funds if f.branch_code == branch and f.is_active and division_allowed(expense_type, f.division_code)]
+    own = next((f for f in in_branch if f.division_code == division), None)
+    if own is not None:
+        return own
+    return next((f for f in in_branch if f.division_code == ACCOUNTING_DIVISION), None)
+
+
 def hard_keys_by_payee(keys) -> bool:
     """spec ตั้ง duplicate_check.hard.keys มี payee_name = เทียบ เลขที่บิล + จ่ายให้ (ค่าใช้จ่ายทั่วไป ไม่มีรถ)"""
     return "payee_name" in (keys or [])

@@ -16,6 +16,7 @@ from schemas.finance_petty_schema import ExpenseTypeUpdate, FundCreate, FundUpda
 from services.finance import advance_logic as adv_logic
 from services.finance import permission_logic as perms
 from services.finance import petty_logic as L
+from services.finance.petty_cost_centers import expense_code_for
 from services.finance import petty_repo as repo
 
 logger = logging.getLogger(__name__)
@@ -95,7 +96,8 @@ def _item_dict(i) -> dict:
             "truck_code": i.truck_code, "truck_plate": i.truck_plate, "truck_type": i.truck_type,
             "ref_no": i.ref_no, "qty": float(i.qty), "rate": float(i.rate),
             "amount": float(i.amount), "remark": i.remark, "driver_name": i.driver_name,
-            "driver_role": i.driver_role, "tire_position": i.tire_position}
+            "driver_role": i.driver_role, "tire_position": i.tire_position,
+            "fleet": i.fleet, "driver_code": i.driver_code}
 
 
 def _needs_debt_doc(claim, items) -> bool:
@@ -113,9 +115,10 @@ def _claim_dict(c, items, names: dict | None = None) -> dict:
         "driver_employee_id": c.driver_employee_id, "driver_name": c.driver_name,
         "payee_name": c.payee_name, "amount": float(c.amount), "dd_no": c.dd_no,
         "receipt_no": c.receipt_no, "wht_applicable": bool(c.wht_applicable),
+        "wht_amount": float(c.wht_amount or 0), "net_amount": float(c.amount) - float(c.wht_amount or 0),
         "detail": c.detail or {}, "status": c.status, "created_by": c.created_by,
         "created_at": c.created_at.isoformat() if c.created_at else None,
-        "cost_center": c.cost_center,
+        "cost_center": c.cost_center, "expense_code": c.expense_code,
         "created_by_name": names.get(c.created_by), "approved_by_name": names.get(c.approved_by),
         "head_approved_by": c.head_approved_by, "head_approved_by_name": names.get(c.head_approved_by),
         # TOA ให้เจ้าของเงินสดอนุมัติเอง ไม่มีขั้นหัวหน้า: ยังไม่อนุมัติ = ไม่มีชื่อหัวหน้า · อนุมัติแล้ว = ชื่อเดียวกับคนโอน
@@ -157,13 +160,30 @@ def create_claim(payload: ClaimIn, db: Session = Depends(get_db), background: Ba
         allowed = " ".join(L.EXPENSE_TYPE_DIVISIONS[payload.expense_type])
         raise HTTPException(status_code=422, detail=(
             f"ประเภทนี้เปิดได้เฉพาะวงเงินของแผนก {allowed} แต่วงเงินที่เลือกเป็นแผนก {fund.division_code}"))
+    _require_locked_fund(db, payload, fund)
     status = _initial_status(db, payload.created_by, fund.holder_employee_id if fund else None, L.claim_total(items))
+    body["expense_code"] = body.get("expense_code") or expense_code_for(body.get("cost_center"), items)
     try:
         claim = repo.create_claim(db, body, items, actor=payload.created_by, status=status)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     _notify_next(db, claim, background)
     return _out(db, claim)
+
+
+def _require_locked_fund(db: Session, payload: ClaimIn, fund) -> None:
+    """วงเงินต้องเป็นวงที่ล็อกให้แผนก+สาขาของผู้เบิก (หรือวงเงินบัญชีสำรอง) — superadmin เครื่องทดสอบเลือกเองได้
+    ใบที่ไม่ส่ง cost_center (ช่องทางเก่า) ไม่บังคับ เพราะไม่รู้แผนก"""
+    if fund is None or not payload.cost_center or _is_super(payload.created_by):
+        return
+    want = L.locked_fund(repo.list_funds(db, active_only=True), payload.cost_center, payload.expense_type)
+    if want is None:
+        raise HTTPException(status_code=422, detail=(
+            f"สาขาของ {payload.cost_center} ไม่มีวงเงินของแผนกนี้และไม่มีวงเงินบัญชีที่เบิกประเภทนี้ได้ ติดต่อฝ่ายบัญชี"))
+    if want.id != fund.id:
+        raise HTTPException(status_code=422, detail=(
+            f"ใบของแผนก {payload.cost_center} ต้องเบิกจากวงเงิน {want.branch_code}/{want.division_code} "
+            f"ที่ระบบล็อกไว้ ไม่ใช่วงเงิน {fund.branch_code}/{fund.division_code}"))
 
 
 def _check_claim_rules(expense_type: str, items: list[dict]) -> None:
@@ -470,6 +490,7 @@ def update_claim(form_id: str, payload: ClaimIn, db: Session = Depends(get_db), 
     items = body.pop("items")
     if body.get("cost_center") is None:
         body.pop("cost_center", None)  # FE เก่าไม่ส่งมา — คงรหัสเดิมไว้ ไม่ล้างทิ้ง
+    body["expense_code"] = body.get("expense_code") or expense_code_for(body.get("cost_center") or claim.cost_center, items)
     _reject_incomplete_rows(db, claim.expense_type, items)
     _check_claim_rules(claim.expense_type, items)
     before = claim.status
@@ -1006,6 +1027,21 @@ def search_trucks(q: str = Query(default=""), limit: int = Query(default=20, le=
     """ค้นรถจาก master ATMS — ค้นได้ทั้งเบอร์รถและทะเบียน · Mongo ล่มคืนลิสต์ว่าง ไม่ทำให้ฟอร์มพัง"""
     from services.finance import petty_master
     return petty_master.search_trucks(q, limit=limit)
+
+
+@router.get("/drivers")
+def search_drivers(q: str = Query(default=""), date: Optional[str] = None, limit: int = Query(default=20, le=50)):
+    """ค้นคนขับจากรายงานรถประจำวัน ATMS (ชื่อหรือรหัส) ในช่วง 45 วันก่อน date — ได้ พจส./พจร. ฟลีท และรถที่ขับเป็นค่าแนะนำ (7/11/2026)"""
+    from services.finance import petty_master
+    return petty_master.search_drivers(q, on_date=date, limit=limit)
+
+
+@router.get("/fleet")
+def fleet_lookup(truck_code: Optional[str] = None, truck_plate: Optional[str] = None,
+                 driver_code: Optional[str] = None, date: Optional[str] = None):
+    """ฟลีทของรถ/คนขับ ณ วันทำรายการ (Mixer L / Mixer S / Trailer / Side curtain) จากรายงานรถประจำวัน ATMS · ไม่พบ = null"""
+    from services.finance import petty_master
+    return petty_master.fleet_at(truck_code=truck_code, truck_plate=truck_plate, driver_code=driver_code, on_date=date)
 
 
 @router.get("/dd/{dd_no}")

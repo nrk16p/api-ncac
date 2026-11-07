@@ -68,6 +68,8 @@ class ClaimItemIn(BaseModel):
     driver_name: Optional[str] = Field(default=None, max_length=150)
     driver_role: Optional[str] = None
     tire_position: Optional[str] = Field(default=None, max_length=120)
+    fleet: Optional[str] = Field(default=None, max_length=30)
+    driver_code: Optional[str] = Field(default=None, max_length=30)
 
     @field_validator("driver_role")
     @classmethod
@@ -100,12 +102,15 @@ class ClaimIn(BaseModel):
     dd_no: Optional[str] = Field(default=None, max_length=50)
     receipt_no: Optional[str] = Field(default=None, max_length=50)
     wht_applicable: bool = False
+    wht_amount: Decimal = Field(default=Decimal("0"), ge=0)
     # ศูนย์และแผนกของผู้เบิก (ผู้ใช้สั่ง 29/10/2026) — FE บังคับเลือก · ช่องทางเก่าที่ไม่ส่งมา = ว่าง
     cost_center: Optional[str] = Field(default=None, max_length=8)
+    # รหัสใบสำคัญจ่าย — FE ตั้งให้จาก พจส./พจร.+ฟลีท (แก้ได้) · ไม่ส่งมา BE คำนวณเอง
+    expense_code: Optional[str] = Field(default=None, max_length=8)
     items: list[ClaimItemIn] = Field(min_length=1)
     created_by: str = Field(min_length=1, max_length=50)
 
-    @field_validator("cost_center", mode="before")
+    @field_validator("cost_center", "expense_code", mode="before")
     @classmethod
     def _known_cost_center(cls, value):
         from services.finance.petty_cost_centers import COST_CENTERS
