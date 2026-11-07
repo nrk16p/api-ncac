@@ -261,3 +261,23 @@ class TestViewerFlags:
             _line(monkeypatch, holder_dept=dept)
             rows = R.list_claims(holder="12345", limit=50, offset=0, db=db_session)["items"]
             assert rows[0]["status"] == "PENDING_HEAD" and not rows[0].get("can_head_approve")
+
+
+class TestPayeeMonthTotal:
+    """ข้อ 13 (7/11/2026): เจ้าเดียวกันจ่ายเกิน 1,000/เดือน ต้องขึ้นเตือนให้หัก ณ ที่จ่าย"""
+
+    def test_sums_claims_of_the_same_payee_in_the_month(self, db_session, fund, weigh_type, claim_payload, weigh_items,
+                                                        seq_stub, frozen_bkk):
+        a = repo.create_claim(db_session, claim_payload(payee_name="ร้านชั่งดี "), weigh_items, actor="55555")  # 1,640
+        repo.create_claim(db_session, claim_payload(payee_name="ร้านชั่งดี"), weigh_items[:1], actor="55555")  # 100
+        out = R.payee_month("ร้านชั่งดี", "2026-09", db=db_session)
+        assert out["count"] == 2 and out["total"] == 1740.0 and out["threshold"] == 1000.0
+        assert R.payee_month("ร้านชั่งดี", "2026-09", exclude_claim_id=a.id, db=db_session)["total"] == 100.0
+        assert R.payee_month("ร้านชั่งดี", "2026-10", db=db_session)["total"] == 0.0
+        assert R.payee_month("", "2026-09", db=db_session)["count"] == 0
+
+    def test_wht_amount_is_stored_and_net_is_returned(self, db_session, fund, weigh_type, claim_payload, weigh_items,
+                                                     seq_stub, frozen_bkk, monkeypatch, mails):
+        _line(monkeypatch)
+        out = R.create_claim(ClaimIn(**{**claim_payload(), "items": weigh_items, "wht_amount": "49.20", "wht_applicable": True}), db_session)
+        assert out["wht_amount"] == 49.2 and out["net_amount"] == 1590.8 and out["wht_applicable"] is True

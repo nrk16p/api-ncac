@@ -130,6 +130,25 @@ def create_claim(db: Session, payload: dict, items: list[dict], actor: str,
     return claim
 
 
+def payee_month_total(db: Session, payee_name: str, month: str, exclude_claim_id: Optional[int] = None) -> dict:
+    """ยอดที่จ่ายให้เจ้านี้ในเดือน (ตามวันที่ขอเบิก ทุกใบที่ไม่ใช่ตีกลับ) — เตือน WHT เมื่อเกิน 1,000/เดือน (ข้อ 13 ผู้ใช้สั่ง 7/11/2026)
+    จับคู่ชื่อแบบตัดช่องว่างหัวท้าย ไม่สนตัวพิมพ์ · payee_name ว่าง = 0"""
+    name = " ".join((payee_name or "").split()).lower()
+    if not name or not month:
+        return {"total": Decimal("0"), "count": 0}
+    year, mon = (int(x) for x in month.split("-"))
+    start = _date(year, mon, 1)
+    end = _date(year + (mon == 12), 1 if mon == 12 else mon + 1, 1)
+    q = (db.query(func.coalesce(func.sum(FinPettyClaim.amount), 0), func.count(FinPettyClaim.id))
+         .filter(func.lower(func.trim(FinPettyClaim.payee_name)) == name,
+                 FinPettyClaim.expense_date >= start, FinPettyClaim.expense_date < end,
+                 FinPettyClaim.status != L.RETURNED))
+    if exclude_claim_id:
+        q = q.filter(FinPettyClaim.id != exclude_claim_id)
+    total, count = q.one()
+    return {"total": Decimal(str(total or 0)), "count": int(count or 0)}
+
+
 def get_claim(db: Session, form_id: str) -> Optional[FinPettyClaim]:
     return db.query(FinPettyClaim).filter(FinPettyClaim.form_id == form_id).first()
 

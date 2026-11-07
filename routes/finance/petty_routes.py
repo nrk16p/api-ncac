@@ -222,6 +222,18 @@ def _notify_next(db: Session, claim, background) -> None:
         mail.notify_head_approved(*args)
 
 
+# เกณฑ์เตือน WHT: เจ้าเดียวกันจ่ายเกินนี้ต่อเดือน (ข้อ 13) — ตัวเลขเดียวกับ FE lib/finance/petty-wht.ts
+WHT_MONTH_THRESHOLD = Decimal("1000")
+
+
+@router.get("/claims/payee-month")
+def payee_month(payee_name: str, month: str, exclude_claim_id: Optional[int] = None, db: Session = Depends(get_db)):
+    """ยอดที่จ่ายให้เจ้านี้ในเดือน (YYYY-MM) — หน้าเปิดใบ/กล่องอนุมัติเตือนว่าควรหัก ณ ที่จ่ายเมื่อรวมแล้วเกิน 1,000"""
+    out = repo.payee_month_total(db, payee_name, month, exclude_claim_id)
+    return {"payee_name": payee_name, "month": month, "total": float(out["total"]), "count": out["count"],
+            "threshold": float(WHT_MONTH_THRESHOLD)}
+
+
 @router.get("/claims/route-preview")
 def route_preview(created_by: str, fund_id: int, amount: Decimal = Query(ge=0), db: Session = Depends(get_db)):
     """หน้าเปิดใบถามก่อนส่ง: ใบนี้จะไปหาใคร (เจ้าของเงินสดเลย หรือหัวหน้าระดับไหนก่อน) ตาม TOA"""
