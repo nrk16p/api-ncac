@@ -57,7 +57,7 @@ def require_finance(db: Session, employee_id: str) -> User:
 def require_permission(db: Session, employee_id: str, permission: str) -> User:
     """ฝ่ายการเงิน/บัญชีก่อน แล้วดูแผนก: จ่ายเงิน = แผนกการเงิน ปุ่มอื่น = แผนกบัญชี (ผู้ใช้สั่ง 21/10/2026)"""
     user = require_finance(db, employee_id)
-    if not perms.allowed(permission, user.employee_id, user.department_id):
+    if not perms.allowed(permission, user.employee_id, user.department_id, perms.position_text(user)):
         raise HTTPException(status_code=403, detail=perms.denied_message(permission))
     return user
 
@@ -122,7 +122,10 @@ def my_permissions(employee_id: str, db: Session = Depends(get_db)):
     return {
         "employee_id": employee_id,
         "is_finance": is_finance,
-        "permissions": perms.permissions_for(user.employee_id, user.department_id) if is_finance else [],
+        "permissions": perms.permissions_for(user.employee_id, user.department_id, perms.position_text(user)) if is_finance else [],
+        # สายการเงิน (จ่าย/รับ) มีความหมายเฉพาะคนแผนกการเงิน — บัญชี/แผนกอื่น = None
+        "finance_line": (perms.finance_line(perms.position_text(user))
+                         if user is not None and perms._dept(user.department_id) == perms.FINANCE_DEPARTMENT_ID else None),
     }
 
 

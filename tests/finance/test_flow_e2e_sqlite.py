@@ -452,7 +452,7 @@ def test_happy_path_refund(api):
                  "สแกนเอกสารการเคลียร์ให้ทางบัญชีก่อน", "ติดต่อคุณเบล", ACCOUNT_BOX, f"{FE}/finance/advance/{fid}"):
         assert text in letter, text
 
-    a.put(fid, "confirm", {"action_by": FP}, expect=403)  # closing is accounting's job
+    a.put(fid, "confirm", {"action_by": FP}, expect=400)  # การเงินไม่ระบุสาย = สายรับด้วย ปิดได้ (7/11/2026) ติดแค่ยังไม่ใส่เลขเอกสาร
     got_today = today().isoformat()
     a.put(fid, "confirm", {"action_by": FC, "clear_doc_no": "CL691000000001"}, expect=400)  # ยังไม่ติ๊กรับเอกสารตัวจริง
     a.put(fid, "confirm", {"action_by": FC, "clear_doc_no": "CL-1", "original_received_date": got_today}, expect=400)  # มีขีด ไม่ใช่ตัวเลข/อักษรอังกฤษล้วน

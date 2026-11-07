@@ -265,17 +265,23 @@ def test_clearing_rows_must_carry_an_amount():
     perms.PERM_CLOSE, perms.PERM_PAYEE_ADMIN, perms.PERM_OVERDUE_REMIND,
 ])
 def test_each_permission_belongs_to_one_department(permission):
-    """จ่ายเงิน + บัญชีรับเงิน = การเงิน (4) · ปุ่มอื่น = บัญชี (6) · แผนกอื่นไม่ได้สักปุ่ม (ผู้ใช้สั่ง 21/10/2026)"""
+    """จ่ายเงิน + บัญชีรับเงิน = การเงิน (4) · ปุ่มอื่น = บัญชี (6) · แผนกอื่นไม่ได้สักปุ่ม (ผู้ใช้สั่ง 21/10/2026)
+    7/11/2026: ปิดรายการ = บัญชี หรือการเงินสายรับ (การเงินไม่ระบุสาย = ได้)"""
     owner, other = (4, 6) if permission in (perms.PERM_PAY, perms.PERM_PAYEE_ADMIN) else (6, 4)
     assert perms.allowed(permission, "STAFF", owner) is True
-    assert perms.allowed(permission, "STAFF", other) is False
+    if permission == perms.PERM_CLOSE:
+        assert perms.allowed(permission, "STAFF", 4) is True
+        assert perms.allowed(permission, "STAFF", 4, "Finance Officer - Payment") is False
+    else:
+        assert perms.allowed(permission, "STAFF", other) is False
     assert perms.allowed(permission, "STAFF", 11) is False
 
 
 def test_permissions_for_lists_what_a_person_may_do():
     got = perms.permissions_for("ACC", 6)
     assert perms.PERM_VOUCHER in got and perms.PERM_PAY not in got
-    assert perms.permissions_for("FIN", 4) == [perms.PERM_PAY, perms.PERM_PAYEE_ADMIN]
+    assert perms.permissions_for("FIN", 4) == [perms.PERM_PAY, perms.PERM_CLOSE, perms.PERM_PAYEE_ADMIN, perms.PERM_RECEIVE]
+    assert perms.permissions_for("FIN", 4, "Finance Supervisor - Payment") == [perms.PERM_PAY, perms.PERM_PAYEE_ADMIN]
 
 
 # ======================= แจ้งเตือน =======================

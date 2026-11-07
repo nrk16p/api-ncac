@@ -12,7 +12,8 @@ from services.finance import permission_logic as pl  # noqa: E402
 
 BOW, NONG, OUTSIDER = "610197", "660548", "570245"
 PEOPLE = {
-    BOW: SimpleNamespace(employee_id=BOW, department_id=4),
+    BOW: SimpleNamespace(employee_id=BOW, department_id=4,
+                         position=SimpleNamespace(position_name_th="", position_name_en="Finance Officer - Payment")),
     NONG: SimpleNamespace(employee_id=NONG, department_id=6),
     OUTSIDER: SimpleNamespace(employee_id=OUTSIDER, department_id=12),
 }
@@ -38,10 +39,10 @@ def test_บัญชีบันทึกจ่ายไม่ได้_403():
     with pytest.raises(HTTPException) as exc:
         r.require_permission(FakeDB(), NONG, pl.PERM_PAY)
     assert exc.value.status_code == 403
-    assert exc.value.detail == "คุณไม่มีสิทธิ์จ่ายเงิน ปุ่มนี้สำหรับแผนกการเงิน"
+    assert exc.value.detail == "คุณไม่มีสิทธิ์จ่ายเงิน ปุ่มนี้สำหรับแผนกการเงิน (สายการเงินจ่าย)"
 
 
-def test_การเงินปิดรายการไม่ได้_ปุ่มอื่นเป็นของบัญชี():
+def test_การเงินสายจ่ายปิดรายการไม่ได้_บัญชีปิดได้():
     with pytest.raises(HTTPException) as exc:
         r.require_permission(FakeDB(), BOW, pl.PERM_CLOSE)
     assert exc.value.status_code == 403

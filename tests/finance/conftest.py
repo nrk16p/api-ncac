@@ -93,3 +93,19 @@ def head_approved_claims(monkeypatch):
     # อีเมลหาหัวหน้าตอนเปิดใบต้องอ่านสายงาน (sqlite ในเทสต์ไม่มีตาราง TOA) — ไม่เกี่ยวกับเทสต์ชุดนี้
     from routes.finance import petty_routes
     monkeypatch.setattr(petty_routes, "_notify_heads", lambda db, claim, background: None)
+
+
+@pytest.fixture(autouse=True)
+def pay_staff(request):
+    """คนทำจ่ายรอบในเทสต์ (90001) ต้องเป็นการเงินจริงในตาราง users ตั้งแต่ 7/11/2026 (ทำจ่าย = สิทธิ์ pay สายจ่าย)
+    ใส่ให้เฉพาะเทสต์ที่ใช้ db_session — แผนก 4 ไม่มีตำแหน่ง = ทำได้ทั้งสองสาย"""
+    if "db_session" not in request.fixturenames:
+        yield
+        return
+    db = request.getfixturevalue("db_session")
+    from models.user_model import User
+    if db.query(User).filter(User.employee_id == "90001").first() is None:
+        db.add(User(username="u90001", password_hash="x", email="90001@test.local", employee_id="90001",
+                    firstname="การเงิน", lastname="ทดสอบ", department_id=4))
+        db.commit()
+    yield

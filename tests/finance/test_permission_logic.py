@@ -4,8 +4,9 @@ import pytest
 from services.finance import permission_logic as pl
 
 FIN, ACC, OPS = 4, 6, 11
-FINANCE_BUTTONS = [pl.PERM_PAY, pl.PERM_PAYEE_ADMIN]
-ACCOUNTING_BUTTONS = [p for p in pl.ALL_PERMISSIONS if p not in FINANCE_BUTTONS]
+FINANCE_BUTTONS = [pl.PERM_PAY, pl.PERM_PAYEE_ADMIN, pl.PERM_RECEIVE]
+# ปิดรายการ = บัญชี หรือการเงินสายรับ (7/11/2026) จึงไม่อยู่ในสองกลุ่มนี้
+ACCOUNTING_BUTTONS = [p for p in pl.ALL_PERMISSIONS if p not in FINANCE_BUTTONS and p != pl.PERM_CLOSE]
 
 
 @pytest.mark.parametrize("perm", FINANCE_BUTTONS)
@@ -30,8 +31,9 @@ def test_department_id_เป็นข้อความก็ได้():
 
 
 def test_permissions_for_ตามแผนก():
-    assert pl.permissions_for("610197", FIN) == FINANCE_BUTTONS
-    assert pl.permissions_for("660548", ACC) == ACCOUNTING_BUTTONS
+    # การเงินไม่ระบุสาย = ทั้งสองสาย: จ่าย ปิดรายการ บัญชีรับเงิน รับเงินคืน · บัญชี = ปุ่มบัญชี + ปิดรายการ
+    assert pl.permissions_for("610197", FIN) == [pl.PERM_PAY, pl.PERM_CLOSE, pl.PERM_PAYEE_ADMIN, pl.PERM_RECEIVE]
+    assert pl.permissions_for("660548", ACC) == [p for p in pl.ALL_PERMISSIONS if p in ACCOUNTING_BUTTONS or p == pl.PERM_CLOSE]
 
 
 def test_superadmin_ได้ทุกปุ่มไม่ว่าอยู่แผนกไหน():
@@ -43,9 +45,45 @@ def test_สิทธิ์ที่ไม่รู้จักไม่ผ่�
 
 
 def test_ข้อความปฏิเสธบอกว่าปุ่มเป็นของแผนกไหน():
-    assert pl.denied_message(pl.PERM_PAY) == "คุณไม่มีสิทธิ์จ่ายเงิน ปุ่มนี้สำหรับแผนกการเงิน"
-    assert pl.denied_message(pl.PERM_CLOSE) == "คุณไม่มีสิทธิ์ปิดรายการ ปุ่มนี้สำหรับแผนกบัญชี"
-    assert pl.denied_message(pl.PERM_PAYEE_ADMIN) == "คุณไม่มีสิทธิ์จัดการบัญชีรับเงิน ปุ่มนี้สำหรับแผนกการเงิน"
+    assert pl.denied_message(pl.PERM_PAY) == "คุณไม่มีสิทธิ์จ่ายเงิน ปุ่มนี้สำหรับแผนกการเงิน (สายการเงินจ่าย)"
+    assert pl.denied_message(pl.PERM_CLOSE) == "คุณไม่มีสิทธิ์ปิดรายการ ปุ่มนี้สำหรับแผนกบัญชี หรือการเงินสายรับ"
+    assert pl.denied_message(pl.PERM_PAYEE_ADMIN) == "คุณไม่มีสิทธิ์จัดการบัญชีรับเงิน ปุ่มนี้สำหรับแผนกการเงิน (สายการเงินจ่าย)"
+    assert pl.denied_message(pl.PERM_RECEIVE) == "คุณไม่มีสิทธิ์รับเงินคืน ปุ่มนี้สำหรับแผนกการเงิน (สายการเงินรับ)"
+    assert pl.denied_message(pl.PERM_VOUCHER) == "คุณไม่มีสิทธิ์ตั้งเบิก ปุ่มนี้สำหรับแผนกบัญชี"
+
+
+# ---- การเงิน 2 สาย จากชื่อตำแหน่งใน master (ผู้ใช้สั่ง 7/11/2026) ----
+PAY_POS = "Finance Supervisor - Payment"
+RCV_POS = "เจ้าหน้าที่การเงิน Administrative and Financial Officer - Receivable"
+MGR_POS = "ผู้จัดการฝ่าย Finance Manager"
+
+
+@pytest.mark.parametrize("name, line", [
+    (PAY_POS, pl.LINE_PAY), ("เจ้าหน้าที่การเงินจ่าย", pl.LINE_PAY), (RCV_POS, pl.LINE_RECEIVE), ("การเงินรับ", pl.LINE_RECEIVE),
+    (MGR_POS, None), ("", None), (None, None), ("Payment and Receivable Officer", None)])
+def test_สายอ่านจากชื่อตำแหน่ง(name, line):
+    assert pl.finance_line(name) == line
+
+
+def test_สายจ่ายจ่ายได้_ปิดรายการไม่ได้():
+    assert pl.permissions_for("680179", FIN, PAY_POS) == [pl.PERM_PAY, pl.PERM_PAYEE_ADMIN]
+    assert not pl.allowed(pl.PERM_CLOSE, "680179", FIN, PAY_POS)
+    assert not pl.allowed(pl.PERM_RECEIVE, "680179", FIN, PAY_POS)
+
+
+def test_สายรับรับเงินคืนและปิดรายการได้_จ่ายไม่ได้():
+    assert pl.permissions_for("690289", FIN, RCV_POS) == [pl.PERM_CLOSE, pl.PERM_RECEIVE]
+    assert not pl.allowed(pl.PERM_PAY, "690289", FIN, RCV_POS)
+    assert not pl.allowed(pl.PERM_PAYEE_ADMIN, "690289", FIN, RCV_POS)
+
+
+def test_ผู้จัดการฝ่ายการเงินทำได้ทั้งสองสาย():
+    assert pl.permissions_for("620331", FIN, MGR_POS) == [pl.PERM_PAY, pl.PERM_CLOSE, pl.PERM_PAYEE_ADMIN, pl.PERM_RECEIVE]
+
+
+def test_บัญชีไม่สนสาย_ปิดรายการได้เหมือนเดิม():
+    assert pl.allowed(pl.PERM_CLOSE, "660548", ACC, PAY_POS)
+    assert not pl.allowed(pl.PERM_RECEIVE, "660548", ACC, RCV_POS)
 
 
 @pytest.mark.parametrize("perm", pl.ALL_PERMISSIONS)

@@ -149,6 +149,12 @@ def payee_month_total(db: Session, payee_name: str, month: str, exclude_claim_id
     return {"total": Decimal(str(total or 0)), "count": int(count or 0)}
 
 
+def user_row(db: Session, employee_id: str):
+    """users ORM ของคนนี้ (พร้อม position) — ใช้ตัดสินสิทธิ์สายการเงิน"""
+    from models.user_model import User
+    return db.query(User).filter(User.employee_id == employee_id).first()
+
+
 def get_claim(db: Session, form_id: str) -> Optional[FinPettyClaim]:
     return db.query(FinPettyClaim).filter(FinPettyClaim.form_id == form_id).first()
 

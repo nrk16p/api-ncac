@@ -108,4 +108,4 @@ def test_permissions_me_outsider_still_gets_nothing(monkeypatch):
     from types import SimpleNamespace as NS
     from routes.finance import advance_routes as ar
     out = ar.my_permissions("680043", _Db(NS(employee_id="680043", department_id=11)))
-    assert out == {"employee_id": "680043", "is_finance": False, "permissions": []}
+    assert out == {"employee_id": "680043", "is_finance": False, "permissions": [], "finance_line": None}

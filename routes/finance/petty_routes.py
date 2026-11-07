@@ -1005,10 +1005,20 @@ def voucher_round(batch_id: int, payload: VoucherIn, db: Session = Depends(get_d
     return _round_out(db, out)
 
 
+def _require_pay_line(db: Session, employee_id: str) -> None:
+    """ทำจ่ายรอบ = สิทธิ์ pay ของ Advance (แผนกการเงิน สายจ่าย) · ผู้ดูแลทดสอบ/superadmin ผ่าน"""
+    if _is_super(employee_id) or perms.is_superadmin(employee_id):
+        return
+    user = repo.user_row(db, employee_id)
+    if user is None or not perms.allowed(perms.PERM_PAY, employee_id, user.department_id, perms.position_text(user)):
+        raise HTTPException(status_code=403, detail=perms.denied_message(perms.PERM_PAY))
+
+
 @router.post("/batches/{batch_id}/pay")
 def pay_round(batch_id: int, payload: PayIn, db: Session = Depends(get_db)):
-    """การเงินทำจ่ายคืนเจ้าของเงินสด → ปิดรอบและทุกใบในรอบ"""
+    """การเงินทำจ่ายคืนเจ้าของเงินสด → ปิดรอบและทุกใบในรอบ · เฉพาะการเงินสายจ่าย (ผู้ใช้สั่ง 7/11/2026) หรือ superadmin"""
     batch = _round_or_404(db, batch_id)
+    _require_pay_line(db, payload.employee_id)
     try:
         out = repo.pay_round(db, batch, payload.employee_id, payload.pay_date, _doc_no(payload.pay_doc_no))
     except L.PettyRuleError as exc:
