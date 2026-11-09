@@ -8,9 +8,9 @@ Pipeline รายวันที่เติมฐานซากอะไห�
 - env: `CORE_RETURN_SYNC_MONTHS` (ค่าเริ่มต้น 3) · `CORE_RETURN_SYNC_DRY_RUN=1` = ไม่เขียน แค่นับ
 - ผลลัพธ์ลง log: `months, fetched, after_filters, inserted, updated, skipped_wms, missing_in_atms, seconds` (ดูที่ `analytics.etl_jobs`, `GET /pipeline/status/core-return-sync`)
 
-## Render cron (ผู้ใช้ตั้งเอง)
+## ตั้งเวลา
 
-รันทุกวัน 02:30 เวลาไทย = UTC `30 19 * * *`
+รันเองทุกวัน 02:30 เวลาไทย (19:30 UTC) จาก scheduler ใน `main.py` (`sched_core_return_sync`) ไม่ต้องตั้ง Render cron แล้ว · สั่งรันมือได้:
 
 ```
 curl -X POST "$API_NCAC_URL/pipeline/run/core-return-sync" -H "x-api-key: $PIPELINE_API_KEY"

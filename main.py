@@ -285,6 +285,13 @@ async def startup_event():
     #   (รอบ light ใช้เวลาจริง ~20 วินาที)
     scheduler.add_job(_run, CronTrigger(hour=22, minute=0), args=["atms_stockmovement"], id="sched_atms_stockmovement")
     scheduler.add_job(_run, CronTrigger(hour="1,5,9,13", minute=30), args=["atms_stockmovement_light"], id="sched_atms_stockmovement_light")
+    # เบิกอะไหล่ WMS (store-withdraw) + ติดตามซาก (core-return) — ย้ายจาก "Render cron ที่ผู้ใช้ต้องตั้งเอง" มาไว้ที่นี่ (2026-11-09)
+    #   store-withdraw-drift: ทุก 30 นาที 07:05–20:35 BKK → UTC 0–13 นาที 5,35 (เยื้อง :00 procurement · :15 pr_quick · :30 stockmovement)
+    #     แค่ปลุก WMS /api/store-withdraw/drift-tick ให้เช็กใบที่ตัด ATMS แล้วว่าถูกแก้ทีหลังไหม · WMS อ่าน ATMS เอง งานเบา
+    #   core-return-sync: 02:30 BKK → 19:30 UTC · เติมรายการรอคืนซากจาก atms.stockmovement_v5 3 เดือนล่าสุด (ไม่ยิง ATMS)
+    #     หลัง maintenance 19:00 UTC ที่เติมข้อมูลอู่ของ MR · upsert อย่างเดียว ไม่ทับสถานะที่บันทึกแล้ว
+    scheduler.add_job(_run, CronTrigger(hour="0-13", minute="5,35"), args=["store-withdraw-drift"], id="sched_store_withdraw_drift")
+    scheduler.add_job(_run, CronTrigger(hour=19, minute=30), args=["core-return-sync"], id="sched_core_return_sync")  # 02:30 BKK
     # Jobs tab (fuel-control-center spec §10) — BKK→UTC −7:
     # overspeed 04:30 BKK → 21:30 UTC: reads the day engine-on (21:00) has just read, done before
     #   atms_stockmovement's heavy writes at 22:00; rmc_compensation 09:00 BKK → 02:00 UTC: talks only
