@@ -402,6 +402,18 @@ def check_doc_numbers(status, current: Mapping, new: Mapping, *, remark) -> dict
     return changes
 
 
+def check_use_date_edit(status, current, new, today) -> date:
+    """บัญชี (สิทธิ์ตั้งเบิก) แก้วันที่ใช้เงินได้เฉพาะตอนรอตั้งเบิกทำจ่าย (ผู้ใช้สั่ง 12/11/2026)
+    วันใหม่ใช้กฎเดียวกับตอนผู้เบิกยื่น = วันนี้หรือหลังจากนี้ · `current`/`new`: date | datetime | None · คืนวันใหม่ (date)"""
+    _require_status(status, (AWAITING_VOUCHER,), "แก้ไขวันที่ใช้เงิน")
+    _require(new is not None, "กรุณาระบุวันที่ใช้เงิน")
+    day = new.date() if isinstance(new, datetime) else new
+    check_use_date(day, today)
+    old = current.date() if isinstance(current, datetime) else current
+    _require(old != day, "วันที่ใช้เงินไม่ได้เปลี่ยน")
+    return day
+
+
 def check_original_received(received_date, today) -> date:
     """ปิดรายการได้เมื่อรับเอกสารตัวจริงแล้ว พร้อมวันที่รับ (ผู้ใช้สั่ง 21/10/2026)"""
     _require(received_date is not None, "กรุณาติ๊กรับเอกสารตัวจริงแล้ว และใส่วันที่รับเอกสารตัวจริง")

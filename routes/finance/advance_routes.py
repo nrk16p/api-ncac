@@ -5,7 +5,7 @@
 """
 import logging
 import os
-from datetime import date
+from datetime import date, datetime
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
@@ -18,7 +18,7 @@ from models.finance_model import FinClearApprovalLog, FinAccount, FinAdvance, Fi
 from models.master_model import FormApprovalLog
 from models.user_model import User
 from schemas.finance_schema import (
-    ClearApproveIn, ClearRejectIn, DocNumbersIn,
+    ClearApproveIn, ClearRejectIn, DocNumbersIn, UseDateIn,
     AccountCreate, AccountUpdate, CancelIn, ClearIn, ConfirmIn, OverdueRemindIn, PayIn, RejectVoucherIn, ResubmitIn, ReturnIn, SendBackIn,
     VoucherIn,
 )
@@ -529,6 +529,50 @@ def edit_doc_numbers(form_id: str, body: DocNumbersIn, db: Session = Depends(get
     for field, value in changes.items():
         setattr(adv, field, value)
     db.add(FinAdvanceLog(advance_id=adv.id, action="DOC_NO_EDIT", changes=logic.diff_fields(current, changes),
+                         remark=(body.remark or "").strip() or None, action_by=body.action_by))
+    return _commit_and_return(db, form_id)
+
+
+def _use_date_row(sub):
+    """The stored answer row of the use-date question (adv_use_date by name, else the first date/datetime question,
+    same pick as advance_logic.find_use_date), or None."""
+    ordered = sorted(sub.form.questions, key=lambda q: q.sort_order or 0)
+    question = next((q for q in ordered if q.question_name == "adv_use_date"), None)
+    if question is None:
+        question = next((q for q in ordered if q.question_type in ("datetime", "date")), None)
+    if question is None:
+        return None
+    return next((v for v in sub.values if v.question_id == question.id), None)
+
+
+@router.put("/advances/{form_id}/use-date")
+def edit_use_date(form_id: str, body: UseDateIn, db: Session = Depends(get_db)):
+    """บัญชี (สิทธิ์ตั้งเบิก) แก้วันที่ใช้เงินได้เฉพาะตอนรอตั้งเบิกทำจ่าย (ผู้ใช้สั่ง 12/11/2026) · วันใหม่ต้องเป็นวันนี้หรือหลังจากนี้
+    ไม่เปลี่ยนสถานะ ไม่ส่งอีเมล · บันทึก USE_DATE_EDIT (วันเดิม → วันใหม่ + เหตุผลถ้ามี)
+    ใบที่ยังไม่มีแถวการเงิน สร้างแถวไว้เก็บประวัติด้วย fin_status RESUBMITTED (= รอตั้งเบิกทำจ่าย, ตั้งเบิกแล้วใช้แถวเดิมต่อ)"""
+    require_permission(db, body.action_by, perms.PERM_VOUCHER)
+    sub, adv, status = _load_for_update(db, form_id)
+    sub = repo.lock_submission_with_values(db, sub.id)
+    row = _use_date_row(sub)
+    if row is None:
+        raise HTTPException(status_code=409, detail="ใบนี้ไม่มีวันที่ใช้เงินให้แก้ไข")
+    old = row.value_date
+    try:
+        new = logic.check_use_date_edit(status, old, body.use_date, repo.today_bkk())
+    except logic.AdvanceRuleError as exc:
+        raise _rule_error(exc)
+    row.value_date = datetime(new.year, new.month, new.day)
+    if adv is None:
+        adv = FinAdvance(submission_id=sub.id, form_id=sub.form_id, fin_status=logic.FIN_RESUBMITTED)
+        db.add(adv)
+    try:
+        db.flush()
+    except IntegrityError as exc:  # a concurrent first voucher/return created the row
+        db.rollback()
+        raise _integrity_error(exc)
+    old_day = old.date() if isinstance(old, datetime) else old
+    db.add(FinAdvanceLog(advance_id=adv.id, action="USE_DATE_EDIT",
+                         changes={"use_date": [logic.jsonable(old_day), new.isoformat()]},
                          remark=(body.remark or "").strip() or None, action_by=body.action_by))
     return _commit_and_return(db, form_id)
 
