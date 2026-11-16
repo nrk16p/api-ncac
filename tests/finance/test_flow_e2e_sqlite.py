@@ -595,6 +595,42 @@ def test_finance_edits_wrong_doc_numbers_even_after_close(api):
     assert a.mails() == {}  # แก้เลขไม่ส่งอีเมล
 
 
+def test_accounting_edits_use_date_only_while_awaiting_voucher(api):
+    """ผู้ใช้สั่ง 12/11/2026: เฉพาะสถานะรอตั้งเบิก บัญชี (สิทธิ์ตั้งเบิก) แก้วันที่ใช้เงินได้ · วันใหม่ต้องวันนี้หรือหลังจากนี้
+    ไม่เปลี่ยนสถานะ ไม่ส่งอีเมล เก็บประวัติวันเดิม → วันใหม่"""
+    a = api
+    fid = a.submit(3000)
+    old = (today() + timedelta(days=3)).isoformat()
+    new = (today() + timedelta(days=5)).isoformat()
+
+    def edit(day, who=FV, expect=200, remark="ผู้เบิกเลื่อนวัน"):
+        return a.put(fid, "use-date", {"action_by": who, "use_date": day, "remark": remark}, expect)
+
+    edit(new, expect=409)  # ยังรออนุมัติ
+    assert a.approve(fid, ASM)["status"] == "Approved"
+    a.outbox.take()
+    edit(new, who=REQ, expect=403)  # ผู้เบิกแก้เองไม่ได้
+    edit(new, who=FP, expect=403)  # การเงิน (จ่ายเงิน) ไม่ใช่บัญชี
+    edit((today() - timedelta(days=1)).isoformat(), expect=400)  # ย้อนหลังไม่ได้
+    edit(old, expect=400)  # ไม่ได้เปลี่ยน
+    d = edit(new, remark="  ")
+    assert d["status"] == "AWAITING_VOUCHER"
+    assert d["request"]["use_date"].startswith(new)
+    log = d["fin_logs"][-1]
+    assert (log["action"], log["remark"], log["action_by"]) == ("USE_DATE_EDIT", None, FV)
+    assert log["changes"] == {"use_date": [old, new]}
+    d = edit(today().isoformat())  # วันนี้ได้ แก้ซ้ำได้ ใช้แถวการเงินเดิม
+    assert [x["action"] for x in d["fin_logs"]] == ["USE_DATE_EDIT", "USE_DATE_EDIT"]
+    assert a.mails() == {}
+
+    d = a.voucher(fid)  # ตั้งเบิกต่อได้ตามปกติ
+    assert d["status"] == "AWAITING_PAYMENT" and d["fin"]["voucher_no"] == "PV-1"
+    edit(new, expect=409)  # ตั้งเบิกแล้วแก้ไม่ได้
+    a.put(fid, "reject-voucher", {"action_by": FP, "remark": "ย้อนให้บัญชี"})
+    d = edit(new)  # ถูกส่งกลับมารอตั้งเบิก แก้ได้อีก
+    assert d["status"] == "AWAITING_VOUCHER" and d["fin"]["fin_status"] == "VOUCHER_REJECTED"
+
+
 def test_return_resubmit_reapprove_with_superadmin(api):
     a = api
     fid = a.submit(4000)

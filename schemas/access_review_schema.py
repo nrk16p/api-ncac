@@ -18,23 +18,31 @@ class LineIn(BaseModel):
     for item-less roles (Email group); for roles with items it is derived (all unticked → remove)."""
     user_role_id: int
     unchecked_item_ids: List[int] = Field(default_factory=list, max_length=5000)
+    # "ต้องการเพิ่มสิทธิ์": items of other roles (same system) to add; omitted = leave the stored set as is
+    requested_item_ids: Optional[List[int]] = Field(default=None, max_length=500)
     decision: Optional[Decision] = None
     note: Optional[str] = Field(default=None, max_length=1000)
 
 
 class LinesIn(BaseModel):
     requester_note: Optional[str] = Field(default=None, max_length=2000)
+    # "ต้องการเพิ่มอีเมลกลุ่ม": whole roles to ask for; omitted = leave the stored set as is
+    requested_role_ids: Optional[List[int]] = Field(default=None, max_length=500)
     lines: List[LineIn] = Field(default_factory=list, max_length=2000)
 
 
 class SubmitIn(BaseModel):
     requester_note: Optional[str] = Field(default=None, max_length=2000)
+    requested_role_ids: Optional[List[int]] = Field(default=None, max_length=500)
     lines: Optional[List[LineIn]] = Field(default=None, max_length=2000)
 
 
 class DecisionIn(BaseModel):
     action: Literal["approve", "reject"]
     comment: Optional[str] = Field(default=None, max_length=2000)
+    # approve only: the approver's edits of the requester's ticks / add-requests (omitted = approve as submitted)
+    lines: Optional[List[LineIn]] = Field(default=None, max_length=2000)
+    requested_role_ids: Optional[List[int]] = Field(default=None, max_length=500)
 
 
 # ---------------------------- admin ----------------------------

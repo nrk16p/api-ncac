@@ -119,6 +119,13 @@ class DocNumbersIn(_Body):
     remark: Optional[str] = Field(default=None, max_length=1000)
 
 
+class UseDateIn(_Body):
+    """บัญชีแก้วันที่ใช้เงินตอนรอตั้งเบิก (12/11/2026) · เหตุผลไม่บังคับ"""
+    action_by: str
+    use_date: date
+    remark: Optional[str] = Field(default=None, max_length=1000)
+
+
 class ClearApproveIn(_Body):
     action_by: str
     remark: Optional[str] = Field(default=None, max_length=500)

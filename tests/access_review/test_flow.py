@@ -1,7 +1,7 @@
 """Draft → submit → approve / reject → resubmit, through the HTTP router on SQLite."""
 import pytest
 
-from models.access_review_model import ArReview, ArReviewApprover
+from models.access_review_model import ArReview, ArReviewApprover, ArReviewLine
 from tests.access_review.conftest import h
 
 
@@ -10,7 +10,7 @@ def world(org, monkeypatch):
     """R (Lv3, dept 1) holds 2 ATMS roles + 1 email group; HEAD (Lv5, same division) approves."""
     calls = []
     import services.email_service as email_service
-    monkeypatch.setattr(email_service, "send_email", lambda *a, **k: calls.append(a))
+    monkeypatch.setattr(email_service, "send_email", lambda *a, **k: calls.append(a))  # (to, subject, html, cc)
     org.user("R", 3, 1, username="r.user", email="r.user@menatransport.co.th")
     org.user("HEAD", 5, 2)
     org.user("OTHER", 3, 1)
@@ -88,7 +88,7 @@ def test_full_flow(client, world, db):
     assert r.status_code == 400 and "999" in r.json()["detail"]
     assert client.get("/access-review/me", headers=h("R")).json()["review"]["status"] == "draft"
 
-    # submit with all lines → pending to HEAD, mail NOT sent (switch off) but mailed_at stamped
+    # submit with all lines → pending to HEAD, approver mailed + mailed_at stamped
     r = client.post("/access-review/me/submit", headers=h("R"), json={"lines": all_lines(world)})
     assert r.status_code == 200, r.text
     detail = r.json()
@@ -97,7 +97,8 @@ def test_full_flow(client, world, db):
     assert [a["employee_id"] for a in detail["approvers"]] == ["HEAD"]
     assert detail["can_decide"] is False
     assert {l["role_name"]: l["note"] for l in detail["lines"]}["FIN-Officer"] == "ไม่ใช้แล้ว"
-    assert world["calls"] == []
+    assert [c[0] for c in world["calls"]] == ["userHEAD@example.com"]
+    assert "รอการพิจารณาอนุมัติ" in world["calls"][0][1]
     assert db.get(ArReviewApprover, (rid, "HEAD")).mailed_at is not None
 
     # read-only while pending
@@ -165,6 +166,7 @@ def test_executive_bypass(client, world):
     d = r.json()
     assert d["status"] == "approved" and d["route"] == "bypass" and d["decided_by"] == "EXEC"
     assert d["approvers"] == []
+    assert world["calls"] == []  # bypass → no mail
     removals = client.get("/access-review/admin/removals", headers=h("IT")).json()
     assert [(x["employee_id"], x["role_name"], x["system_code"]) for x in removals] == [
         ("EXEC", "ACC-Officer", "ATMS")]
@@ -178,6 +180,7 @@ def test_it_queue_is_decided_by_it_admin(client, world, org, db):
                     json={"lines": [{"user_role_id": link.id, "decision": "keep"}]})
     d = r.json()
     assert d["route"] == "it_queue" and d["approvers"] == []
+    assert world["calls"] == []  # no approvers → no mail
     assert client.get(f"/access-review/{d['id']}", headers=h("IT")).json()["can_decide"] is True
     assert [p["id"] for p in client.get("/access-review/pending", headers=h("IT")).json()] == [d["id"]]
 
@@ -206,13 +209,39 @@ def test_closed_cycle_blocks_saving_and_submit(client, world, db):
 
 def test_mail_preview_and_guard(client, world, db):
     rid = client.post("/access-review/me/submit", headers=h("R"), json={"lines": all_lines(world)}).json()["id"]
-    assert world["calls"] == []  # mail is preview-only — send_email is never called
+    # sent once on submit, Cc the requester + itcenter@ like the IT form mail
+    cc = ["r.user@menatransport.co.th", "itcenter@menatransport.co.th"]
+    assert [(c[0], c[3]) for c in world["calls"]] == [("userHEAD@example.com", cc)]
+    assert world["calls"][0][1].startswith("[IT ทบทวนสิทธิ์] ")
     prev = client.get(f"/access-review/{rid}/mail-preview", headers=h("HEAD")).json()
-    assert prev["to"] == ["userHEAD@example.com"]
-    assert "รอการอนุมัติ" in prev["subject"]
+    assert prev["to"] == ["userHEAD@example.com"] and prev["cc"] == cc
+    assert prev["subject"].startswith("[IT ทบทวนสิทธิ์] ") and "รอการพิจารณาอนุมัติ" in prev["subject"]
     assert f"https://menait-service.vercel.app/access-review/{rid}" in prev["html"]
     assert client.get(f"/access-review/{rid}/mail-preview", headers=h("R")).status_code == 403
     assert client.get(f"/access-review/{rid}/mail-preview", headers=h("IT")).status_code == 200
+
+
+def test_mail_is_one_message_to_first_approver_cc_others_requester_and_itcenter(monkeypatch):
+    import services.email_service as email_service
+    from services.access_review import mail
+    sent = []
+    monkeypatch.setattr(email_service, "send_email", lambda to, subject, html, cc=None: sent.append((to, cc)))
+    assert mail.dispatch(["a@x.co", None, "b@x.co", "a@x.co", "nope", "ITCENTER@menatransport.co.th"],
+                         "s", "<p></p>", None, ["req@x.co", "B@x.co", None]) is True
+    assert sent == [("a@x.co", ["b@x.co", "ITCENTER@menatransport.co.th", "req@x.co"])]
+    assert mail.dispatch([None, ""], "s", "<p></p>", None, ["req@x.co"]) is False  # no approver → no mail
+    assert len(sent) == 1
+    assert mail.mail_cc(["itcenter@menatransport.co.th"]) == []  # itcenter@ as the approver: not Cc'd to itself
+
+
+def test_mail_failure_does_not_break_dispatch(monkeypatch):
+    import services.email_service as email_service
+    from services.access_review import mail
+
+    def fake(*a, **k):
+        raise OSError("smtp down")
+    monkeypatch.setattr(email_service, "send_email", fake)
+    assert mail.dispatch(["a@x.co"], "s", "<p></p>", None) is True
 
 
 def test_admin_endpoints_require_it_admin(client, world):
@@ -305,11 +334,15 @@ def test_admin_crud_and_soft_delete(client, world, db):
     assert c.json()["id"] not in [x["id"] for x in client.get("/access-review/admin/cycles", headers=H).json()]
 
 
-def test_cycle_with_reviews_cannot_be_deleted(world, client):
+def test_cycle_delete_resets_its_reviews(world, client, db):
     H = h("IT")
-    client.put("/access-review/me/lines", headers=h("R"), json={"lines": all_lines(world)})
+    rid = client.post("/access-review/me/submit", headers=h("R"), json={"lines": all_lines(world)}).json()["id"]
     r = client.delete(f"/access-review/admin/cycles/{world['cycle'].id}", headers=H)
-    assert r.status_code == 409
+    assert r.status_code == 200 and r.json()["deleted_reviews"] == 1
+    db.expire_all()
+    assert db.get(ArReview, rid) is None
+    assert db.query(ArReviewLine).filter(ArReviewLine.review_id == rid).count() == 0
+    assert db.query(ArReviewApprover).filter(ArReviewApprover.review_id == rid).count() == 0
     assert client.delete("/access-review/admin/cycles/99999", headers=H).status_code == 404
 
 

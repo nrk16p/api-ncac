@@ -306,7 +306,9 @@ class AtmsWithdrawClient(AtmsClient):
                data={"username": self.username, "password": self.password,
                      "submit": "login", "next": "", "forgotPasswd": "ลืมรหัสผ่าน"})
         self._pause()
-        if "account/user/login" in s.get(JOB_ADD_URL, timeout=self.timeout).url:
+        # เช็กกับหน้า profile ที่ทุกบัญชีเปิดได้ — เดิมเช็กหน้าเปิดใบแจ้งซ่อม คนที่ไม่มีสิทธิ์เปิด MR
+        # (เช่น สโตร์) โดนเด้งไปหน้า login แล้วถูกนับว่ารหัสผ่านผิด
+        if "account/user/login" in s.get(PROFILE_URL, timeout=self.timeout).url:
             raise AtmsAuthError("ATMS login ไม่ผ่าน — เช็ค username / password")
         return s
 

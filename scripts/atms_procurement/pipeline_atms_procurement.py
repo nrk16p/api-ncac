@@ -215,6 +215,11 @@ def _parse_dmy(v):
 
 def find_missing_prs(db, from_date, seen, run_started):
     """PR ในหน้าต่าง from_date ที่รอบนี้ไม่เจอใน ATMS → (codes, stats, skip_reason) · อ่านอย่างเดียว"""
+    return _find_missing(db, "purchase_requests", PR_KEY, from_date, seen, run_started, PRUNE_MAX)
+
+
+def _find_missing(db, coll, key, from_date, seen, run_started, max_missing):
+    """ใบใน `coll` ที่วันที่อยู่ในหน้าต่าง from_date แต่รอบนี้ไม่เจอใน ATMS · อ่านอย่างเดียว"""
     since = _parse_dmy(from_date)
     if since is None or not seen:
         return [], {}, "no-window"
@@ -228,18 +233,18 @@ def find_missing_prs(db, from_date, seen, run_started):
             m, y = 1, y + 1
     rx = "/(" + "|".join(re.escape(x) for x in months) + ")$"
     in_window, missing = 0, []
-    for d in db["purchase_requests"].find({"วันที่": {"$regex": rx}}, {PR_KEY: 1, "วันที่": 1, "scraped_at": 1}):
+    for d in db[coll].find({"วันที่": {"$regex": rx}}, {key: 1, "วันที่": 1, "scraped_at": 1}):
         dt = _parse_dmy(d.get("วันที่"))
         if dt is None or dt < since:
             continue
         in_window += 1
         # scraped_at < run_started กันใบที่เพิ่งถูกเขียนระหว่างรอบ (เช่นรอบอื่นรันซ้อน)
-        if d.get(PR_KEY) not in seen and (d.get("scraped_at") or datetime.min) < run_started:
-            missing.append(d[PR_KEY])
+        if d.get(key) not in seen and (d.get("scraped_at") or datetime.min) < run_started:
+            missing.append(d[key])
     stats = {"in_window": in_window, "seen": len(seen), "missing": len(missing)}
     if in_window and len(seen) < PRUNE_MIN_COVERAGE * in_window:
         return missing, stats, "low-coverage"
-    if len(missing) > PRUNE_MAX:
+    if len(missing) > max_missing:
         return missing, stats, "too-many"
     return missing, stats, None
 
@@ -262,13 +267,48 @@ def prune_missing_prs(db, from_date, seen, run_started):
     return {**stats, "deleted": hdr, "deleted_items": items, "codes": missing}
 
 
-def scrape_po(session, from_date, db):
+def scrape_po(session, from_date, db, seen=None):
     params = {"code": "", "purchase_request": "", "supplier": "", "vehicle": "",
               "inventory_id": "", "department_id": "", "received_status": "",
               "from_t_date": from_date, "to_t_date": "", "related_party_transaction": "",
               "submit": "ค้นหา", "order_by": "po.code desc"}
     return _scrape_list(session, f"{BASE}/inv/purchase.order/index", params, PO_KEY,
-                        db, "purchase_orders", approval=False)
+                        db, "purchase_orders", approval=False, seen=seen)
+
+
+# ── PO ย้อนหลังลึก + ลบ PO ที่ถูกลบใน ATMS ─────────────────────────────────────
+# ทำไมต้องมี: หน้าต่างปกติเริ่มวันที่ 1 ของ 2 เดือนก่อน ใบที่เก่ากว่านั้นไม่ถูกดึงอีกเลย
+# ใบที่ลบใน ATMS จึงค้างใน Mongo และใบที่รับของครบแล้วก็ค้างสถานะ "ยังไม่ได้รับ" ตลอดไป
+# แล้วไปโผล่เป็น "กำลังสั่งซื้อ" ใน /safety-stock ของ mena-wms (นับ PO ย้อนหลัง 90 วัน)
+# เคสจริง 13/11/2026: LBPO26080510 (15/08) ลบใน ATMS แล้วแต่ยังโชว์ไฟหลังคาวอลโว่กำลังมา 6 ชิ้น
+# และ PO ค้างรับที่ลงวันที่ก่อน 01/09 อีก 235 ใบไม่ถูกดึงใหม่ตั้งแต่ 1/11
+# วิธี: รอบเต็ม (วันละครั้ง) ดึงหัวใบ PO ย้อนหลัง ATMS_PO_DEEP_DAYS วัน (หน้า list อย่างเดียว ไม่เปิดรายใบ)
+# ได้สถานะการรับของล่าสุดของใบเก่าด้วย แล้วใบในหน้าต่างนั้นที่ ATMS ไม่มีแล้ว → เก็บสำเนาไว้ใน
+# purchase_orders_pruned / purchase_order_items_pruned ก่อนลบ (กู้คืนได้) ด่านกันพลาดเดียวกับ PR
+PO_DEEP_DAYS = int(os.getenv("ATMS_PO_DEEP_DAYS", "120"))   # ครอบ 90 วันที่ /safety-stock นับ + เผื่อ
+PO_PRUNE_MAX = int(os.getenv("ATMS_PO_PRUNE_MAX", "50"))
+
+
+def po_deep_from(ict_now):
+    return (ict_now - timedelta(days=PO_DEEP_DAYS)).strftime("%d/%m/%Y")
+
+
+def prune_missing_pos(db, from_date, seen, run_started, dry_run=False):
+    missing, stats, skip = _find_missing(db, "purchase_orders", PO_KEY, from_date, seen, run_started, PO_PRUNE_MAX)
+    if skip:
+        log("PO prune ข้าม:", skip, stats, missing[:20])
+        return {**stats, "skipped": skip, "sample": missing[:20]}
+    if dry_run or not missing:
+        return {**stats, "deleted": 0, "codes": missing, "dry_run": dry_run}
+    now_utc = datetime.utcnow()
+    for coll, key in (("purchase_orders", PO_KEY), ("purchase_order_items", "po_code")):
+        arch = [{**d, "pruned_at": now_utc} for d in db[coll].find({key: {"$in": missing}}, {"_id": 0})]
+        if arch:
+            db[f"{coll}_pruned"].insert_many(arch, ordered=False)
+    items = db["purchase_order_items"].delete_many({"po_code": {"$in": missing}}).deleted_count
+    hdr = db["purchase_orders"].delete_many({PO_KEY: {"$in": missing}}).deleted_count
+    log("PO prune ลบ", hdr, "ใบ", items, "รายการ:", missing)
+    return {**stats, "deleted": hdr, "deleted_items": items, "codes": missing}
 
 
 # ── deposit_header + deposit_items ────────────────────────────────────────────
@@ -851,7 +891,16 @@ def main():
         # ปิดได้ด้วย ATMS_PR_PRUNE=0
         if os.getenv("ATMS_PR_PRUNE", "1") != "0":
             counts["pr_pruned"] = prune_missing_prs(db, from_date, pr_seen, started)
-        counts["purchase_orders"]   = scrape_po(s, from_date, db);   log("PO", counts["purchase_orders"])
+        # รอบเต็มเท่านั้น (ไม่ใช่ light/override) ดึงหัวใบ PO ย้อนลึกแล้วลบใบที่ ATMS ไม่มี — ดูเหตุผลที่ prune_missing_pos
+        full_run = os.getenv("ATMS_RUN_LABEL", "atms_procurement") == "atms_procurement" and not os.getenv("ATMS_FROM_DATE")
+        po_from = po_deep_from(ict) if full_run and os.getenv("ATMS_PO_DEEP", "1") != "0" else from_date
+        if _parse_dmy(po_from) and _parse_dmy(from_date) and _parse_dmy(po_from) > _parse_dmy(from_date):
+            po_from = from_date                                 # ไม่ดึงแคบกว่าหน้าต่างปกติเด็ดขาด
+        po_seen = set()
+        counts["purchase_orders"]   = scrape_po(s, po_from, db, po_seen); log("PO", po_from, counts["purchase_orders"])
+        if po_from != from_date:
+            counts["po_from"] = po_from
+            counts["po_pruned"] = prune_missing_pos(db, po_from, po_seen, started)
         dep_ids = []
         counts["deposit_header"]    = scrape_deposit(s, from_date, db, dep_ids); log("DD", counts["deposit_header"])
         # รายการสินค้าของใบ DD — เฉพาะใบที่ยังไม่มีใน deposit_items (ดูเหตุผลใน scrape_deposit_items)

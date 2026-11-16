@@ -205,3 +205,27 @@ def test_concurrent_lists_do_not_interleave_rows_per_page():
     for t in ts:
         t.join()
     assert events == [("set", 1000), ("get",), ("set", 25)] * 2
+
+
+def test_login_check_uses_profile_page_not_mr_add(monkeypatch):
+    """บัญชีที่ไม่มีสิทธิ์เปิดใบแจ้งซ่อม (เช่น สโตร์) ต้อง login ผ่าน — เช็กกับหน้า profile ที่ทุกคนเปิดได้"""
+    import services.atms_withdraw_service as svc
+
+    seen = []
+
+    class FakeSess:
+        def __init__(self):
+            self.verify, self.headers, self.cookies = True, {}, None
+
+        def get(self, url, **kw):
+            seen.append(url)
+            # หน้าเปิด MR เด้งไป login (ไม่มีสิทธิ์) แต่หน้า profile เปิดได้
+            return type("R", (), {"url": svc.LOGIN_URL if url == svc.JOB_ADD_URL else url})()
+
+        def post(self, url, **kw):
+            return type("R", (), {"url": url})()
+
+    monkeypatch.setattr(svc.requests, "Session", FakeSess)
+    c = svc.AtmsWithdrawClient(username="store1", password="pw", pace=0)
+    c._new_session()
+    assert svc.PROFILE_URL in seen and svc.JOB_ADD_URL not in seen

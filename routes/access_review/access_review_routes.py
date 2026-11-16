@@ -61,8 +61,10 @@ def _lines(items) -> Optional[List[dict]]:
 
 
 def _note(body) -> dict:
-    """requester_note only when the client sent the field (absent = leave as is, null/"" = clear)."""
-    return {"requester_note": body.requester_note} if body is not None and "requester_note" in body.model_fields_set else {}
+    """requester_note / requested_role_ids only when the client sent the field (absent = leave as is)."""
+    if body is None:
+        return {}
+    return {k: getattr(body, k) for k in ("requester_note", "requested_role_ids") if k in body.model_fields_set}
 
 
 # ---------------------------- user ----------------------------
@@ -75,6 +77,18 @@ def get_me(caller: Caller = Depends(get_caller), db: Session = Depends(get_db)):
 @router.get("/role-items")
 def get_role_items(role_id: int = Query(...), caller: Caller = Depends(get_caller), db: Session = Depends(get_db)):
     return logic.role_items_view(db, role_id)
+
+
+@router.get("/catalog")
+def get_catalog(system: str = Query(..., max_length=30), caller: Caller = Depends(get_caller),
+                db: Session = Depends(get_db)):
+    return logic.catalog(db, system)
+
+
+@router.get("/catalog/roles")
+def get_catalog_roles(system: str = Query(..., max_length=30), caller: Caller = Depends(get_caller),
+                      db: Session = Depends(get_db)):
+    return logic.catalog_roles(db, system)
 
 
 @router.get("/me/items")
@@ -288,7 +302,8 @@ def get_review_items(review_id: int, caller: Caller = Depends(get_caller), db: S
 @router.post("/{review_id:int}/decision")
 def post_decision(review_id: int, body: s.DecisionIn, caller: Caller = Depends(get_caller),
                   db: Session = Depends(get_db)):
-    return logic.decide(db, caller, review_id, body.action, body.comment)
+    extra = {"requested_role_ids": body.requested_role_ids} if "requested_role_ids" in body.model_fields_set else {}
+    return logic.decide(db, caller, review_id, body.action, body.comment, _lines(body.lines), **extra)
 
 
 @router.get("/{review_id:int}/mail-preview")
