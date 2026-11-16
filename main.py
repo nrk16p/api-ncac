@@ -3,6 +3,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
+import os
 
 from database import engine, Base
 import models
@@ -213,10 +214,31 @@ app.include_router(form_master_router)
 # ------------------------------
 # Startup
 # ------------------------------
+def scheduler_enabled() -> bool:
+    """SCHEDULER_ENABLED=false turns off every timed job in this process.
+
+    Needed while moving hosts (Render -> AWS): two servers running at once
+    must not both run the nightly pipelines, or every job runs twice.
+    Defaults to on, so a server with no setting behaves as before."""
+    return os.getenv("SCHEDULER_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")
+
+
+@app.get("/health", include_in_schema=False)
+def health():
+    # No DB call on purpose: the Postgres cluster allows only 25 connections,
+    # and a health check every few seconds should not take one.
+    return {"ok": True, "scheduler": scheduler_enabled()}
+
+
 @app.on_event("startup")
 async def startup_event():
     from routes.leave_booking.system_status import periodic_broadcast
     asyncio.create_task(periodic_broadcast())
+
+    if not scheduler_enabled():
+        import logging
+        logging.getLogger(__name__).warning("SCHEDULER_ENABLED=false — timed jobs are off on this server")
+        return
 
     # Schedule pipelines at 02:00 Bangkok time (Asia/Bangkok = UTC+7)
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
