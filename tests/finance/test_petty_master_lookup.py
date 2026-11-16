@@ -124,3 +124,14 @@ def test_mongo_failure_returns_empty(monkeypatch):
 def test_truck_by_code_matches_exactly(monkeypatch):
     _patch(monkeypatch, [TH1093, {**TH1093, "truck_no": "TH10930"}])
     assert petty_master.truck_by_code("TH1093")["truck_plate"] == "สบ.71-1325"
+
+
+def test_fleet_freshness_guard_16_11_2026():
+    """ฟลีทเก่ากว่า 7 วันจากวันทำรายการ = ไม่รู้ (กันใช้ข้อมูลค้างตอน pipeline ไม่อัปเดต)"""
+    from datetime import datetime
+    from services.finance.petty_master import is_fresh
+    assert is_fresh(datetime(2026, 11, 13), "2026-11-13")
+    assert is_fresh(datetime(2026, 11, 6), "2026-11-13")
+    assert not is_fresh(datetime(2026, 11, 5), "2026-11-13")
+    assert not is_fresh(None, "2026-11-13")
+    assert is_fresh("2026-11-10", "2026-11-13")

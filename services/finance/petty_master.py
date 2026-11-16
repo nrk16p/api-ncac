@@ -134,7 +134,9 @@ def truck_by_code(code: str) -> Optional[dict]:
 
 _DAILY_PROJECTION = {"_id": 0, "date": 1, "เบอร์รถ": 1, "ทะเบียน": 1, "plate_norm": 1, "fleet_group_name": 1, "ฟลีท": 1,
                      "คนขับ_รหัส": 1, "คนขับ_ชื่อ": 1, "คนขับ_สถานะ": 1}
-_LOOKBACK_DAYS = 45  # รถ/คนขับที่ไม่วิ่งมานานกว่านี้ถือว่าไม่รู้ฟลีท
+_LOOKBACK_DAYS = 45  # ค้นคนขับ: ย้อนหาได้ 45 วัน
+# ฟลีทของใบ: แถวล่าสุดต้องห่างวันทำรายการไม่เกินนี้ ไม่งั้นถือว่าไม่รู้ — กันใช้ฟลีทเก่าตอนข้อมูลไม่อัปเดต (16/11/2026)
+_FLEET_FRESH_DAYS = 7
 
 # กลุ่มฟลีทของ ATMS → ชื่อฟลีทที่บัญชีใช้ (ผู้ใช้ให้ 4 ชื่อ: Mixer L / Mixer S / Trailer / Side curtain)
 # โม่ใหญ่/โม่เล็ก ชัดจากข้อมูล 7/11/2026 · SCCC (ปูนผง) = Trailer · BTG/TFG (อาหารสัตว์) = Side curtain = ที่ผมตีความ รอผู้ใช้ยืนยัน
@@ -252,4 +254,18 @@ def fleet_at(truck_code=None, truck_plate=None, driver_code=None, on_date=None) 
     except Exception as exc:
         logger.warning("fleet lookup failed for %r/%r: %s", truck_code, truck_plate, exc)
         return None
-    return _row_out(row) if row else None
+    if not row or not is_fresh(row.get("date"), on_date):
+        return None
+    return _row_out(row)
+
+
+def is_fresh(row_date, on_date, days: int = _FLEET_FRESH_DAYS) -> bool:
+    """แถว ATMS ใหม่พอสำหรับวันทำรายการไหม (ห่างไม่เกิน days วัน) · ไม่รู้วันที่ = ไม่ใช้"""
+    from datetime import date, datetime
+    if row_date is None:
+        return False
+    rd = row_date.date() if isinstance(row_date, datetime) else date.fromisoformat(str(row_date)[:10])
+    target = date.fromisoformat(on_date[:10]) if isinstance(on_date, str) and on_date else (on_date or date.today())
+    if isinstance(target, datetime):
+        target = target.date()
+    return (target - rd).days <= days
