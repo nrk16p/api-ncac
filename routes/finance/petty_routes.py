@@ -174,7 +174,8 @@ def create_claim(payload: ClaimIn, db: Session = Depends(get_db), background: Ba
 def _require_locked_fund(db: Session, payload: ClaimIn, fund) -> None:
     """วงเงินต้องเป็นวงที่ล็อกให้แผนก+สาขาของผู้เบิก (หรือวงเงินบัญชีสำรอง) — superadmin เครื่องทดสอบเลือกเองได้
     ใบที่ไม่ส่ง cost_center (ช่องทางเก่า) ไม่บังคับ เพราะไม่รู้แผนก"""
-    if fund is None or not payload.cost_center or _is_super(payload.created_by):
+    # superadmin (670108) เลือกวงเงินเองได้บน prod ด้วย (ผู้ใช้สั่ง 16/11/2026 "ยกเว้นฉันที่เป็น superadmin")
+    if fund is None or not payload.cost_center or _is_super(payload.created_by) or perms.is_superadmin(payload.created_by):
         return
     want = L.locked_fund(repo.list_funds(db, active_only=True), payload.cost_center, payload.expense_type)
     if want is None:

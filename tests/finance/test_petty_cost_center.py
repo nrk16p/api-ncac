@@ -94,6 +94,11 @@ class TestStoredAndReturned:
         out = R.create_claim(_payload(claim_payload, cost_center="3B04", fund_id=acc.id), db=db_session)
         assert out["fund_id"] == acc.id
 
+    def test_superadmin_670108_may_pick_any_fund(self, db_session, weigh, claim_payload, seq_stub, frozen_bkk):
+        """ผู้ใช้สั่ง 16/11/2026 "ยกเว้นฉันที่เป็น superadmin" — 670108 เปิดใบศูนย์ 2A04 บนวงเงิน B02 ได้ (คนอื่นโดนล็อก)"""
+        out = R.create_claim(_payload(claim_payload, cost_center="2A04", created_by="670108"), db=db_session)
+        assert out["cost_center"] == "2A04"
+
     def test_edit_can_change_it(self, db_session, weigh, claim_payload, seq_stub, frozen_bkk):
         out = R.create_claim(_payload(claim_payload, cost_center="3B02"), db=db_session)
         edited = R.update_claim(out["form_id"], _payload(claim_payload, cost_center="3B04"), db=db_session)
