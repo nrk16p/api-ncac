@@ -524,7 +524,11 @@ def queue_event(background_tasks, db, event: str, submission, **extra) -> None:
             return
         subject, html = render_event_email(event, ctx)
         # งานถึงมือบัญชี: CC กล่องบัญชี · อีเมลขออนุมัติ: CC ผู้เบิกให้รู้ว่าใบไปถึงใครแล้ว (ผู้ใช้สั่ง 20/10/2026)
-        if event in ACCOUNT_CC_EVENTS:
+        # ส่งเคลียร์แล้วแต่ยังรออนุมัติเคลียร์ = ยังไม่ถึงมือบัญชี ไม่ CC (ผู้ใช้สั่ง 17/11/2026)
+        # ส่งเคลียร์ที่ไม่ต้องรออนุมัติ (ไปบัญชีเลย) ยัง CC เหมือนเดิม
+        if event == CLEAR_SUBMITTED and ctx.get("pending"):
+            cc = None
+        elif event in ACCOUNT_CC_EVENTS:
             cc = [account_mailbox()]
         elif event in APPROVER_EVENTS or event == CLEAR_PENDING:
             try:

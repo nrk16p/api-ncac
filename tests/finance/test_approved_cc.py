@@ -161,8 +161,14 @@ def test_clear_email_without_change_shows_no_settle_line():
     assert "คืนบริษัท" not in html and "บริษัทจ่ายเพิ่ม" not in html
 
 
-def test_clear_submitted_goes_to_requester_and_ccs_accounting(monkeypatch, smtp):
+def test_clear_submitted_waiting_for_approval_does_not_cc_accounting(monkeypatch, smtp):
+    # ผู้ใช้สั่ง 17/11/2026: ขั้น "ส่งเคลียร์เงินแล้ว · รออนุมัติเคลียร์" ไม่ต้องส่งถึง accountbkk
     _fire(monkeypatch, fm.CLEAR_SUBMITTED, amount_paid=5000, amount_actual=4600, settle_amount=400, pending=True)
+    assert smtp[0][0] == ["req@x.com"]
+
+
+def test_clear_submitted_straight_to_accounting_still_ccs_accounting(monkeypatch, smtp):
+    _fire(monkeypatch, fm.CLEAR_SUBMITTED, amount_paid=5000, amount_actual=4600, settle_amount=400, pending=False)
     assert smtp[0][0] == ["req@x.com", "accountbkk@menatransport.co.th"]
 
 

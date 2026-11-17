@@ -423,7 +423,8 @@ def test_happy_path_refund(api):
     assert a.detail(fid)["clear_approval"] == {"step": 1, "total_steps": 2, "clause": "6.5", "required_level": 3}
     got = a.mails("6 clear 9,500 (refund 2,500)", fid)
     assert_mails(got, {
-        summary(fid, "ส่งเคลียร์เงินแล้ว"): ([email_of(REQ)], [ACCOUNT_BOX]),
+        # รออนุมัติเคลียร์ยังไม่ถึงบัญชี ไม่ CC accountbkk (ผู้ใช้สั่ง 17/11/2026)
+        summary(fid, "ส่งเคลียร์เงินแล้ว"): ([email_of(REQ)], []),
         summary(fid, "รอท่านอนุมัติการเคลียร์"): ([email_of(LEAD)], [email_of(REQ)]),
     })
     pending_html = got[summary(fid, "รอท่านอนุมัติการเคลียร์")]["html"][0]
