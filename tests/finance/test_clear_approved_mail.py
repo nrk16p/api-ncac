@@ -69,7 +69,7 @@ def test_clear_still_waiting_for_the_leader_has_no_print_steps():
     assert "Expense Claim Form" not in html
 
 
-def test_goes_to_the_requester_and_ccs_accounting(monkeypatch):
+def test_goes_to_the_requester_only_no_accounting_cc(monkeypatch):
     for k in ("FINANCE_ACCOUNT_EMAIL", "FINANCE_EMAIL_TEST_TO"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("FINANCE_EMAIL_ENABLED", "true")
@@ -96,7 +96,7 @@ def test_goes_to_the_requester_and_ccs_accounting(monkeypatch):
     fm.queue_event(bg, NS(query=lambda *a: _Q()), fm.CLEAR_APPROVED, NS(id=1, form_id="ADV-2610-009", created_by="E1"))
     for t in bg.tasks:
         t.func(*t.args, **t.kwargs)
-    assert sent == [["req@x.com", "accountbkk@menatransport.co.th"]]
+    assert sent == [["req@x.com"]]  # ไม่ CC accountbkk (ผู้ใช้สั่ง 17/11/2026)
 
 
 # ---- route: ส่งเฉพาะตอนอนุมัติขั้นสุดท้าย ----

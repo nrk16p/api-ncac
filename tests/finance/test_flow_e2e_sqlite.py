@@ -452,7 +452,7 @@ def test_happy_path_refund(api):
     assert d["status"] == "AWAITING_REVIEW"
     got = a.mails("7b clear-approve step 2 (MGR)", fid)
     letter_subject = "การเคลียร์เงิน Advance ผ่านการอนุมัติครบทุกขั้นแล้ว สมชาย ใจดี"
-    assert_mails(got, {letter_subject: ([email_of(REQ)], [ACCOUNT_BOX])})
+    assert_mails(got, {letter_subject: ([email_of(REQ)], [])})  # ไม่ CC accountbkk (17/11/2026)
     letter = got[letter_subject]["html"][0]
     for text in ("เรียน คุณสมชาย,", f"จากใบคำขอเบิกเงิน {fid} จำนวน 12,000.00 บาท",
                  f"ครบกำหนดชำระในวันที่ {due.strftime('%d/%m/%Y')}", "พิมพ์แบบฟอร์มใบสรุปการเคลียร์เงิน",
