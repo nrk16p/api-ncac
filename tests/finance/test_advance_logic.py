@@ -219,15 +219,41 @@ class TestReview:
             L.check_send_back(L.AWAITING_CLEARING, review_remark="x")
 
     def test_confirm_return_needs_no_date(self):
-        assert L.check_confirm(L.AWAITING_REVIEW, settle_amount=Decimal("200"), settle_date=None) is None
+        assert L.check_confirm(L.AWAITING_REVIEW, settle_amount=Decimal("200"), settle_date=None) == (None, L.FIN_CLOSED)
 
-    def test_confirm_extra_requires_date(self):
-        with pytest.raises(L.AdvanceRuleError):
-            L.check_confirm(L.AWAITING_REVIEW, settle_amount=Decimal("-200"), settle_date=None)
+    def test_confirm_extra_without_date_waits_for_finance_proof(self):
+        # ผู้ใช้สั่ง 17/11/2026: เบิกเพิ่มยังไม่มีวันโอน = ปิด (รอแนบหลักฐานจากการเงิน)
+        assert L.check_confirm(L.AWAITING_REVIEW, settle_amount=Decimal("-200"),
+                               settle_date=None) == (None, L.FIN_CLOSED_PENDING_PROOF)
 
     def test_confirm_extra_returns_date(self):
         assert L.check_confirm(L.AWAITING_REVIEW, settle_amount=Decimal("-200"),
-                               settle_date=date(2026, 7, 20)) == date(2026, 7, 20)
+                               settle_date=date(2026, 7, 20)) == (date(2026, 7, 20), L.FIN_CLOSED)
+
+    def test_pending_proof_status(self):
+        assert L.STATUS_LABELS[L.CLOSED_PENDING_PROOF] == "ปิด (รอแนบหลักฐานจากการเงิน)"
+        assert L.derive_status("Approved", L.FIN_CLOSED_PENDING_PROOF, date(2020, 1, 1), date(2026, 11, 17)) == \
+            (L.CLOSED_PENDING_PROOF, False)
+        assert L.status_condition_spec(L.CLOSED_PENDING_PROOF) == \
+            {"approve": ["Approved"], "fin": [L.FIN_CLOSED_PENDING_PROOF], "fin_null": False}
+        assert L.CLOSED_PENDING_PROOF in L.DOC_NO_EDIT_STATUSES
+
+    def test_pending_proof_not_outstanding(self):
+        s = L.fold_summary([("Approved", L.FIN_CLOSED_PENDING_PROOF, 1, 0, 3000, 0), ("Approved", L.FIN_PAID, 1, 0, 500, 0)])
+        assert s["counts"][L.CLOSED_PENDING_PROOF] == 1
+        assert s["outstanding_amount"] == 500.0
+
+    def test_extra_proof_rules(self):
+        today = date(2026, 11, 17)
+        assert L.check_extra_proof(L.CLOSED_PENDING_PROOF, settle_date=today, file_names=[" a.pdf ", ""],
+                                   today=today) == ["a.pdf"]
+        with pytest.raises(L.InvalidTransition):
+            L.check_extra_proof(L.CLOSED, settle_date=today, file_names=["a.pdf"], today=today)
+        for kw in ({"settle_date": None, "file_names": ["a.pdf"]},
+                   {"settle_date": date(2026, 11, 18), "file_names": ["a.pdf"]},
+                   {"settle_date": today, "file_names": []}):
+            with pytest.raises(L.AdvanceRuleError):
+                L.check_extra_proof(L.CLOSED_PENDING_PROOF, today=today, **kw)
 
     def test_confirm_wrong_status(self):
         with pytest.raises(L.InvalidTransition):

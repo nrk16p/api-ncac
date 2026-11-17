@@ -63,9 +63,10 @@ class FinAdvance(Base):
         CheckConstraint("amount_paid >= 0", name="ck_fin_advances_amount_paid"),
         CheckConstraint("amount_actual IS NULL OR amount_actual >= 0", name="ck_fin_advances_amount_actual"),
         # widened by scripts/migrations/2026-10-05_finance_advance_v3.sql (RETURNED, RESUBMITTED)
-        # ตรงกับ prod (scripts/migrations/2026-10-19_finance_clear_approval.sql)
+        # ตรงกับ prod (2026-11-04_finance_advance_cancel.sql + 2026-11-17_finance_advance_extra_proof.sql)
         CheckConstraint("fin_status IS NULL OR fin_status IN ('VOUCHERED','VOUCHER_REJECTED','RETURNED','RESUBMITTED',"
-                        "'PAID','CLEAR_PENDING','CLEARING_SUBMITTED','SENT_BACK','CLOSED')",
+                        "'PAID','CLEAR_PENDING','CLEARING_SUBMITTED','SENT_BACK','CLOSED','CANCELLED',"
+                        "'CLOSED_PENDING_PROOF')",
                         name="ck_fin_advances_fin_status"),
         Index("ix_fin_advances_fin_status", "fin_status"),
         Index("ix_fin_advances_clear_due_date", "clear_due_date"),

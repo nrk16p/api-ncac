@@ -68,8 +68,13 @@ TABLES = [
     "fin_payee_account_requests", "fin_payee_accounts", "fin_payee_account_logs", "fin_permissions",
     "fin_clear_approval_logs",
 ]
+# ก่อน SQL 2026-11-17 (ไม่มี CLOSED_PENDING_PROOF) — ใช้ทดสอบว่า BE ยังทำงานแบบเดิมถ้า SQL ยังไม่รัน
+OLD_PROD_FIN_STATUS_CHECK = ("fin_status IS NULL OR fin_status IN ('VOUCHERED','VOUCHER_REJECTED','RETURNED',"
+                             "'RESUBMITTED','PAID','CLEAR_PENDING','CLEARING_SUBMITTED','SENT_BACK','CLOSED','CANCELLED')")
+# หลัง SQL 2026-11-17_finance_advance_extra_proof.sql
 PROD_FIN_STATUS_CHECK = ("fin_status IS NULL OR fin_status IN ('VOUCHERED','VOUCHER_REJECTED','RETURNED',"
-                         "'RESUBMITTED','PAID','CLEAR_PENDING','CLEARING_SUBMITTED','SENT_BACK','CLOSED')")
+                         "'RESUBMITTED','PAID','CLEAR_PENDING','CLEARING_SUBMITTED','SENT_BACK','CLOSED','CANCELLED',"
+                         "'CLOSED_PENDING_PROOF')")
 
 # ---------------------------------------------------------------- org
 OPS, IT, EXECS, FIN_DEPT, ACC_DEPT = 11, 12, 99, 4, 6
@@ -161,7 +166,7 @@ def outbox(monkeypatch):
 
 
 @pytest.fixture
-def api(monkeypatch, outbox):
+def api(monkeypatch, outbox, request):
     # belt and braces: the global (prod-config) engine must never be used by this test
     dead = create_engine(_DEAD_DB.replace("postgresql://", "postgresql+psycopg2://"), connect_args={"connect_timeout": 1})
     monkeypatch.setattr(database, "engine", dead)
@@ -175,7 +180,8 @@ def api(monkeypatch, outbox):
     for c in list(fin.constraints):
         if getattr(c, "name", None) == "ck_fin_advances_fin_status":
             fin.constraints.discard(c)
-    fin.append_constraint(CheckConstraint(PROD_FIN_STATUS_CHECK, name="ck_fin_advances_fin_status"))
+    check = OLD_PROD_FIN_STATUS_CHECK if request.node.get_closest_marker("old_prod_check") else PROD_FIN_STATUS_CHECK
+    fin.append_constraint(CheckConstraint(check, name="ck_fin_advances_fin_status"))
     md.create_all(engine)
     Session = sessionmaker(bind=engine, autocommit=False, autoflush=False)
     _seed(Session())
@@ -495,7 +501,7 @@ def test_extra_pay_path_one_click_approval(api):
     assert d["status"] == "AWAITING_REVIEW"
     assert set(a.mails()) == {"การเคลียร์เงิน Advance ผ่านการอนุมัติครบทุกขั้นแล้ว สมชาย ใจดี"}
 
-    a.put(fid, "confirm", {"action_by": FC}, expect=400)  # extra pay needs the transfer date
+    a.put(fid, "confirm", {"action_by": FC}, expect=400)  # ยังไม่ใส่เลขเอกสารเคลียร์ / ยังไม่ติ๊กรับตัวจริง
     extra_day = (today() + timedelta(days=1)).isoformat()
     d = a.put(fid, "confirm", {"action_by": FC, "settle_date": extra_day, "clear_doc_no": "CL691000000002",
                                "original_received_date": today().isoformat()})
@@ -983,3 +989,69 @@ def test_a_later_step_approver_may_stand_in_for_690041(api):
     logs = [l for l in a.detail(fid2)["approval_logs"] if l.get("action") == "APPROVED"]
     assert [l["level_no"] for l in logs] == [1, 2, 3]
     assert "อนุมัติแทน" in (logs[1]["remark"] or "")
+
+
+# ================================================================ เบิกเพิ่ม: ปิดแบบรอการเงินแนบหลักฐาน (17/11/2026)
+
+def _extra_pay_ready(a):
+    fid = a.submit(3000)
+    a.approve(fid, ASM)
+    a.voucher(fid)
+    a.pay(fid, 3000)
+    a.clear(fid, [2000, 1600], settle_date=False)  # บริษัทจ่ายเพิ่ม 600
+    a.put(fid, "clear-approve", {"action_by": LEAD})
+    assert a.status(fid) == "AWAITING_REVIEW"
+    a.mails()
+    return fid
+
+
+def _close_body(**kw):
+    return {"action_by": FC, "clear_doc_no": "CL691000000009", "original_received_date": today().isoformat(), **kw}
+
+
+def test_extra_pay_closes_pending_proof_then_finance_attaches(api):
+    a = api
+    fid = _extra_pay_ready(a)
+    d = a.put(fid, "confirm", _close_body())
+    assert d["status"] == "CLOSED_PENDING_PROOF" and d["fin"]["settle_date"] is None
+    assert a.mails() == {}  # อีเมลปิดรายการรอจนการเงินแนบครบ
+    # ฝ่ายอื่นแนบไม่ได้ · ต้องมีไฟล์ · วันที่ไม่เกินวันนี้
+    a.put(fid, "extra-proof", {"action_by": FC, "settle_date": today().isoformat(), "file_names": ["slip.pdf"]}, expect=403)
+    a.put(fid, "extra-proof", {"action_by": FP, "settle_date": today().isoformat(), "file_names": []}, expect=400)
+    a.put(fid, "extra-proof", {"action_by": FP, "settle_date": (today() + timedelta(days=1)).isoformat(),
+                               "file_names": ["slip.pdf"]}, expect=400)
+    a.put(fid, "extra-proof", {"action_by": FP, "file_names": ["slip.pdf"]}, expect=400)
+    d = a.put(fid, "extra-proof", {"action_by": FP, "settle_date": today().isoformat(), "file_names": ["slip.pdf"]})
+    assert d["status"] == "CLOSED" and d["fin"]["settle_date"] == today().isoformat()
+    assert_mails(a.mails(), {legacy(fid, "รายการเบิกเงินปิดเรียบร้อย"): ([email_of(REQ)], [])})
+    # แนบซ้ำหลังปิดแล้วไม่ได้
+    a.put(fid, "extra-proof", {"action_by": FP, "settle_date": today().isoformat(), "file_names": ["x.pdf"]}, expect=409)
+
+
+def test_extra_pay_with_date_still_closes_straight_away(api):
+    a = api
+    fid = _extra_pay_ready(a)
+    d = a.put(fid, "confirm", _close_body(settle_date=today().isoformat()))
+    assert d["status"] == "CLOSED"
+    a.put(fid, "extra-proof", {"action_by": FP, "settle_date": today().isoformat(), "file_names": ["x.pdf"]}, expect=409)
+
+
+def test_refund_never_goes_pending_proof(api):
+    a = api
+    fid = a.submit(3000)
+    a.approve(fid, ASM)
+    a.voucher(fid)
+    a.pay(fid, 3000)
+    a.clear(fid, [2500])  # คืนบริษัท 500
+    a.put(fid, "clear-approve", {"action_by": LEAD})
+    assert a.put(fid, "confirm", _close_body())["status"] == "CLOSED"
+
+
+@pytest.mark.old_prod_check
+def test_before_sql_runs_extra_pay_still_needs_the_date(api):
+    a = api
+    fid = _extra_pay_ready(a)
+    r = a.c.put(f"/finance/advances/{fid}/confirm", json=_close_body())
+    assert r.status_code == 422 and "วันที่การเงินโอนเงินเพิ่ม" in r.text
+    assert a.status(fid) == "AWAITING_REVIEW"
+    assert a.put(fid, "confirm", _close_body(settle_date=today().isoformat()))["status"] == "CLOSED"

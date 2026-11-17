@@ -123,7 +123,7 @@ def test_happy_path_small_amount_from_staff():
 
     f.fin_status = L.FIN_CLEARING_SUBMITTED
     assert f.status == L.AWAITING_REVIEW
-    assert L.check_confirm(f.status, settle_amount=f.settle_amount, settle_date=TODAY) is None
+    assert L.check_confirm(f.status, settle_amount=f.settle_amount, settle_date=TODAY) == (None, L.FIN_CLOSED)
     f.fin_status = L.FIN_CLOSED
     assert f.status == L.CLOSED
 
@@ -241,10 +241,10 @@ def test_money_owed_to_the_company_needs_a_transfer_date():
                       clear_date=TODAY, amount_actual=Decimal("7000"), settle_date=None)
 
 
-def test_money_owed_to_the_employee_needs_a_transfer_date_at_close():
-    with pytest.raises(AdvanceRuleError):
-        L.check_confirm(L.AWAITING_REVIEW, settle_amount=Decimal("-2000"), settle_date=None)
-    assert L.check_confirm(L.AWAITING_REVIEW, settle_amount=Decimal("-2000"), settle_date=TODAY) == TODAY
+def test_money_owed_to_the_employee_closes_pending_finance_proof_without_a_date():
+    assert L.check_confirm(L.AWAITING_REVIEW, settle_amount=Decimal("-2000"), settle_date=None) == \
+        (None, L.FIN_CLOSED_PENDING_PROOF)
+    assert L.check_confirm(L.AWAITING_REVIEW, settle_amount=Decimal("-2000"), settle_date=TODAY) == (TODAY, L.FIN_CLOSED)
 
 
 def test_only_the_requester_can_submit_the_clearing():

@@ -110,6 +110,14 @@ class ConfirmIn(_Body):
     expected_clear_submitted_at: Optional[datetime] = None
 
 
+class ExtraProofIn(_Body):
+    """การเงินแนบหลักฐานโอนเงินเพิ่ม (เบิกเพิ่ม) หลังบัญชีปิดรายการ → ปิดแล้ว (ผู้ใช้สั่ง 17/11/2026)"""
+    action_by: str
+    settle_date: Optional[date] = None
+    file_names: list[str] = Field(default_factory=list, max_length=20)
+    remark: Optional[str] = Field(default=None, max_length=500)
+
+
 class DocNumbersIn(_Body):
     """การเงินแก้เลขเอกสารที่กรอกผิด (26/10/2026): ส่งเฉพาะช่องที่จะแก้ · เหตุผลไม่บังคับ"""
     action_by: str

@@ -21,6 +21,8 @@ AWAITING_CLEARING = "AWAITING_CLEARING"
 SENT_BACK = "SENT_BACK"
 AWAITING_REVIEW = "AWAITING_REVIEW"
 CLOSED = "CLOSED"
+# บัญชีปิดแล้วแต่บริษัทต้องโอนเงินเพิ่ม (เบิกเพิ่ม) รอการเงินแนบหลักฐานการโอน (ผู้ใช้สั่ง 17/11/2026)
+CLOSED_PENDING_PROOF = "CLOSED_PENDING_PROOF"
 CLEARING_APPROVAL = "CLEARING_APPROVAL"  # ผู้เบิกส่งเคลียร์แล้ว รอหัวหน้าอนุมัติก่อนถึงบัญชี
 RETURNED = "RETURNED"  # v3 §6: Finance sent it back to the requester to edit + resubmit
 CANCELLED = "CANCELLED"  # ตีกลับแบบยกเลิก: บัญชียกเลิกใบก่อนจ่ายเงิน จบใบ ผู้เบิกแก้/ส่งใหม่ไม่ได้ (ผู้ใช้สั่ง 04/11/2026)
@@ -33,6 +35,7 @@ STATUS_LABELS = {
     AWAITING_CLEARING: "จ่ายแล้วรอเคลียร์",
     SENT_BACK: "ส่งกลับแก้ไข",
     AWAITING_REVIEW: "รอบัญชีตรวจ",
+    CLOSED_PENDING_PROOF: "ปิด (รอแนบหลักฐานจากการเงิน)",
     CLOSED: "ปิดแล้ว",
     CLEARING_APPROVAL: "รออนุมัติเคลียร์",
     RETURNED: "ตีกลับให้ผู้เบิกแก้ไข",
@@ -48,6 +51,7 @@ FIN_CLEAR_PENDING = "CLEAR_PENDING"   # รออนุมัติการเ�
 FIN_CLEARING_SUBMITTED = "CLEARING_SUBMITTED"
 FIN_SENT_BACK = "SENT_BACK"
 FIN_CLOSED = "CLOSED"
+FIN_CLOSED_PENDING_PROOF = "CLOSED_PENDING_PROOF"  # เบิกเพิ่ม: ปิดแล้ว รอการเงินแนบหลักฐานโอนเพิ่ม
 FIN_CANCELLED = "CANCELLED"  # ตีกลับแบบยกเลิก (terminal, like CLOSED)
 
 _FIN_TO_STATUS = {
@@ -59,6 +63,7 @@ _FIN_TO_STATUS = {
     FIN_SENT_BACK: SENT_BACK,
     FIN_CLEAR_PENDING: CLEARING_APPROVAL,
     FIN_CLEARING_SUBMITTED: AWAITING_REVIEW,
+    FIN_CLOSED_PENDING_PROOF: CLOSED_PENDING_PROOF,
     FIN_CLOSED: CLOSED,
     FIN_CANCELLED: CANCELLED,
 }
@@ -175,7 +180,7 @@ def fold_summary(rows):
         overdue_amount += Decimal(amount_overdue or 0)
         overdue_count_by[status] += n_overdue or 0
         overdue_amount_by[status] += Decimal(amount_overdue or 0)
-        if fin is not None and fin not in (FIN_CLOSED, FIN_CANCELLED):
+        if fin is not None and fin not in (FIN_CLOSED, FIN_CLOSED_PENDING_PROOF, FIN_CANCELLED):
             by_status[status] += Decimal(amount or 0)
     outstanding = sum(by_status.values(), Decimal(0))
     return {
@@ -378,7 +383,8 @@ def check_clear_doc_no(value) -> str:
 
 
 DOC_NO_LABELS = {"voucher_no": "เลขที่ตั้งเบิก", "payment_doc_no": "เลขที่ทำจ่าย", "clear_doc_no": "เลขที่เอกสารเคลียร์เงิน"}
-DOC_NO_EDIT_STATUSES = (AWAITING_PAYMENT, AWAITING_CLEARING, SENT_BACK, CLEARING_APPROVAL, AWAITING_REVIEW, CLOSED)
+DOC_NO_EDIT_STATUSES = (AWAITING_PAYMENT, AWAITING_CLEARING, SENT_BACK, CLEARING_APPROVAL, AWAITING_REVIEW,
+                        CLOSED_PENDING_PROOF, CLOSED)
 
 
 def check_doc_numbers(status, current: Mapping, new: Mapping, *, remark) -> dict:
@@ -421,12 +427,27 @@ def check_original_received(received_date, today) -> date:
     return received_date
 
 
+EXTRA_DATE_REQUIRED = "มียอดเบิกเพิ่ม กรุณาระบุวันที่การเงินโอนเงินเพิ่ม"
+
+
 def check_confirm(status, *, settle_amount, settle_date):
+    """→ (วันที่โอนเพิ่ม | None, fin_status ปลายทาง) · เบิกเพิ่มที่ยังไม่ใส่วันโอน = ปิดแบบรอการเงินแนบหลักฐาน (17/11/2026)"""
     _require_status(status, (AWAITING_REVIEW,), "ยืนยันปิดรายการ")
     if settle_amount is not None and Decimal(settle_amount) < 0:
-        _require(settle_date is not None, "มียอดเบิกเพิ่ม กรุณาระบุวันที่การเงินโอนเงินเพิ่ม")
-        return settle_date
-    return None
+        if settle_date is None:
+            return None, FIN_CLOSED_PENDING_PROOF
+        return settle_date, FIN_CLOSED
+    return None, FIN_CLOSED
+
+
+def check_extra_proof(status, *, settle_date, file_names, today):
+    """การเงินแนบหลักฐานโอนเงินเพิ่ม → ปิดแล้ว · ต้องมีไฟล์อย่างน้อยหนึ่งไฟล์ และวันที่โอนไม่เกินวันนี้"""
+    _require_status(status, (CLOSED_PENDING_PROOF,), "แนบหลักฐานโอนเงินเพิ่ม")
+    _require(settle_date is not None, "กรุณาระบุวันที่โอนเงินเพิ่ม")
+    _require(settle_date <= today, "วันที่โอนเงินเพิ่มต้องไม่เกินวันนี้")
+    names = [str(n).strip() for n in (file_names or []) if str(n or "").strip()]
+    _require(len(names) > 0, "แนบหลักฐานการโอนเงินเพิ่มอย่างน้อย 1 ไฟล์")
+    return names
 
 
 def parse_id_list(raw):

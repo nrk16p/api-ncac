@@ -19,7 +19,7 @@ from models.master_model import FormApprovalLog
 from models.user_model import User
 from schemas.finance_schema import (
     ClearApproveIn, ClearRejectIn, DocNumbersIn, UseDateIn,
-    AccountCreate, AccountUpdate, CancelIn, ClearIn, ConfirmIn, OverdueRemindIn, PayIn, RejectVoucherIn, ResubmitIn, ReturnIn, SendBackIn,
+    AccountCreate, AccountUpdate, CancelIn, ClearIn, ConfirmIn, ExtraProofIn, OverdueRemindIn, PayIn, RejectVoucherIn, ResubmitIn, ReturnIn, SendBackIn,
     VoucherIn,
 )
 from services.finance import advance_guard
@@ -276,6 +276,12 @@ def _integrity_error(exc: IntegrityError) -> HTTPException:
         logger.error("finance advance write hit a CHECK violation (latest finance SQL migration not run?): %s", exc)
         return HTTPException(status_code=500, detail=_SQL_NOT_RUN)
     return HTTPException(status_code=409, detail=_ALREADY_SAVED)
+
+
+def _is_fin_status_check(exc: IntegrityError) -> bool:
+    """CHECK ck_fin_advances_fin_status ไม่ยอมรับค่า (Postgres 23514 · SQLite บอกชื่อ constraint)"""
+    orig = getattr(exc, "orig", None)
+    return getattr(orig, "pgcode", None) == _PG_CHECK_VIOLATION or "ck_fin_advances_fin_status" in str(orig)
 
 
 def _snapshot(adv, fields):
@@ -927,8 +933,8 @@ def confirm_advance(form_id: str, body: ConfirmIn, background_tasks: BackgroundT
     sub, adv, status = _load_for_update(db, form_id)
     try:
         logic.check_fresh(body.expected_clear_submitted_at, adv.clear_submitted_at if adv is not None else None)
-        extra_paid_on = logic.check_confirm(status, settle_amount=adv.settle_amount if adv is not None else None,
-                                            settle_date=body.settle_date)
+        extra_paid_on, next_fin = logic.check_confirm(status, settle_amount=adv.settle_amount if adv is not None else None,
+                                                      settle_date=body.settle_date)
         clear_doc_no = logic.check_clear_doc_no(body.clear_doc_no)
         received_on = logic.check_original_received(body.original_received_date, repo.today_bkk())
     except logic.AdvanceRuleError as exc:
@@ -943,10 +949,44 @@ def confirm_advance(form_id: str, body: ConfirmIn, background_tasks: BackgroundT
         {"clear_doc_no": clear_doc_no, "original_received_date": received_on})}
     adv.clear_doc_no = clear_doc_no
     adv.original_received_date = received_on
-    adv.fin_status = logic.FIN_CLOSED
+    # เบิกเพิ่มที่ยังไม่มีวันโอน = ปิดแบบรอการเงินแนบหลักฐาน (17/11/2026) · อีเมลปิดรายการส่งตอนการเงินแนบครบ
+    adv.fin_status = next_fin
     adv.closed_by = body.action_by
     adv.closed_at = func.now()
     db.add(FinAdvanceLog(advance_id=adv.id, action="CONFIRM", changes=changes or None, action_by=body.action_by))
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        if next_fin == logic.FIN_CLOSED_PENDING_PROOF and _is_fin_status_check(exc):
+            # SQL 2026-11-17 ยังไม่รันบน prod → ทำแบบเดิม: ให้บัญชีใส่วันที่การเงินโอนเพิ่มก่อนปิด
+            logger.warning("CLOSED_PENDING_PROOF not allowed by ck_fin_advances_fin_status yet (SQL 2026-11-17 not run)")
+            raise HTTPException(status_code=422, detail=logic.EXTRA_DATE_REQUIRED)
+        raise _integrity_error(exc)
+    detail = repo.get_advance_detail(db, form_id)
+    if next_fin == logic.FIN_CLOSED:
+        mail.queue_event(background_tasks, db, mail.CLOSED, sub)
+    return detail
+
+
+@router.put("/advances/{form_id}/extra-proof")
+def extra_proof_advance(form_id: str, body: ExtraProofIn, background_tasks: BackgroundTasks,
+                        db: Session = Depends(get_db)):
+    """การเงินสายจ่ายแนบหลักฐานโอนเงินเพิ่ม (เบิกเพิ่ม) แล้วปิดรายการจริง (ผู้ใช้สั่ง 17/11/2026)"""
+    require_permission(db, body.action_by, perms.PERM_PAY)
+    sub, adv, status = _load_for_update(db, form_id)
+    try:
+        names = logic.check_extra_proof(status, settle_date=body.settle_date, file_names=body.file_names,
+                                        today=repo.today_bkk())
+    except logic.AdvanceRuleError as exc:
+        raise _rule_error(exc)
+    changes = logic.diff_fields({"settle_date": adv.settle_date, "fin_status": adv.fin_status},
+                                {"settle_date": body.settle_date, "fin_status": logic.FIN_CLOSED})
+    changes["file_names"] = names
+    adv.settle_date = body.settle_date
+    adv.fin_status = logic.FIN_CLOSED
+    db.add(FinAdvanceLog(advance_id=adv.id, action="EXTRA_PROOF", changes=changes,
+                         remark=(body.remark or "").strip() or None, action_by=body.action_by))
     detail = _commit_and_return(db, form_id)
     mail.queue_event(background_tasks, db, mail.CLOSED, sub)
     return detail
