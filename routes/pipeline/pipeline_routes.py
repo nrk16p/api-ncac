@@ -126,6 +126,12 @@ POST_RUN_WEBHOOKS = {
     "atms_pr_quick":            ("SAFETY_STOCK_BUILD_URL", "SAFETY_STOCK_BUILD_TOKEN", "pr-hourly"),
 }
 
+# pipeline ที่ต้อง sync คงเหลือ/min/max จาก ATMS (mena-wms /api/cron/atms-sku-sync) ก่อนยิง build
+# atms_pr_quick รันทุกชั่วโมง 07:15–20:15 — เดิมคงเหลือ/min/max ขยับแค่ 06:00 กับ 10:00 แก้ min ใน ATMS ตอนบ่าย
+# หน้า /safety-stock ยังโชว์ค่าเก่าถึงเช้าวันรุ่งขึ้น (ผู้ใช้ขอให้ถี่ขึ้น 17/11/2026) · sync ล้มก็ยัง build ต่อ
+# เพราะรายการ PR ที่เพิ่งดึงมายังสดอยู่
+SYNC_BEFORE_BUILD = {"atms_pr_quick"}
+
 # build ฝั่ง mena-wms เดินทีละคลังบน stockmovement_v5 (~476k แถว) ภายใต้ maxDuration 300s ของมันเอง
 # ตั้ง timeout ยาวกว่านั้นนิดเดียว เพื่อให้ฝั่งโน้นเป็นคนตัดสินใจหมดเวลาเอง ไม่ใช่เราตัดสายทิ้งกลางคัน
 _WEBHOOK_TIMEOUT_S = 310
@@ -162,6 +168,15 @@ async def _fire_post_run_webhook(pipeline_type: str) -> None:
         url = urlunsplit(parts._replace(query=urlencode(q)))
 
     log = logging.getLogger(__name__)
+    if pipeline_type in SYNC_BEFORE_BUILD:
+        urls = _wms_urls()
+        if urls:
+            try:
+                status, body = await asyncio.to_thread(_call_webhook, urls[0], urls[2])
+                if not 200 <= status < 300:
+                    log.error("Pre-build sku sync %s failed: %s %s", pipeline_type, status, body)
+            except Exception as e:  # noqa: BLE001 - sync ล้มก็ยัง build ต่อ
+                log.error("Pre-build sku sync %s error: %s", pipeline_type, e)
     try:
         # requests เป็น blocking I/O — ต้องออกไปอยู่ thread แยก ไม่งั้น event loop ของ FastAPI
         # ค้างได้นานถึง 310 วินาที (ทั้ง API จะไม่ตอบ request ไหนเลยตลอดช่วงนั้น)
@@ -232,8 +247,11 @@ def _verify_key(x_api_key: str = Header(..., alias="x-api-key")):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
-async def _run(pipeline_type: str, params: dict | None = None):
+async def _run(pipeline_type: str, params: dict | None = None, fire_webhook: bool = True) -> bool:
+    """รัน pipeline เป็น subprocess · คืน True เมื่อ exit 0
+    fire_webhook=False ใช้กับ live sync ที่สั่ง build เองตอนท้าย ไม่ต้องให้ build ทุกคลังซ้ำกลางทาง"""
     script = PIPELINE_SCRIPTS[pipeline_type]
+    ok = False
     _running[pipeline_type] = True
     _last_started[pipeline_type] = datetime.now(timezone.utc).isoformat()
     try:
@@ -257,10 +275,13 @@ async def _run(pipeline_type: str, params: dict | None = None):
                 stderr.decode(errors="replace")[-2000:],
             )
         else:
+            ok = True
             # สำเร็จเท่านั้นจึงปลุกปลายทาง — รันล้มแล้วยิงต่อจะทำให้ปลายทางคำนวณจากข้อมูลที่ยังไม่ครบ
-            await _fire_post_run_webhook(pipeline_type)
+            if fire_webhook:
+                await _fire_post_run_webhook(pipeline_type)
     finally:
         _running[pipeline_type] = False
+    return ok
 
 
 @router.post("/run/{pipeline_type}", status_code=202)
@@ -308,3 +329,159 @@ async def pipeline_status(pipeline_type: str):
         "last_started": _last_started.get(pipeline_type),
         "last_run": last_run,
     }
+
+
+# ── live sync: ปุ่ม "ดึงข้อมูลล่าสุดจาก ATMS" ในหน้า /safety-stock ของ mena-wms ─────────────
+# ผู้ใช้กดแล้วไม่อยากรอรอบถัดไป · ทำต่อกันที่นี่ทั้งสาย (ปิดหน้าเว็บไปก็ยังเดินต่อ) แทนให้เบราว์เซอร์คุมจังหวะ
+#   1. sku    — mena-wms ดึงคงเหลือ/min/max ของคลังนั้นจาก ATMS
+#   2. build1 — คำนวณคลังนั้นทันที ผู้ใช้เห็นคงเหลือใหม่ในราว 1 นาที ไม่ต้องรอขั้นที่เหลือ
+#   3. movement    — atms_stockmovement_light ย้อนพอครอบ N วัน (stockmovement ดึงเป็นรายเดือน)
+#   4. procurement — atms_procurement_light หน้าต่าง N วัน (PR/PO/DD = ตัวเลข "กำลังสั่งซื้อ")
+#   5. build2 — คำนวณคลังนั้นอีกรอบจากข้อมูลครบชุด
+# ทีละขั้น ไม่ยิง ATMS พร้อมกัน (ยิงรายงานพร้อมกันแล้ว ATMS 500) · ทั้งระบบรันได้ทีละรอบ
+# pipeline ที่รอบตั้งเวลากำลังรันอยู่แล้ว = รอให้จบแล้วใช้ผลนั้น ไม่สั่งซ้ำ
+# สถานะเก็บในหน่วยความจำ — Render restart แล้วหาย ยอมรับได้ (ฝั่ง mena-wms เห็นเป็น "ไม่รู้ผล" แล้วกดใหม่ได้)
+LIVE_SYNC_STEPS = ["sku", "build1", "movement", "procurement", "build2"]
+LIVE_SYNC_MAX_DAYS = 31
+_live_sync: dict = {}
+
+
+def _live_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+async def _wait_not_running(pipeline_type: str, max_wait_s: int = 1200) -> bool:
+    """รอบตั้งเวลากำลังรัน pipeline นี้อยู่ → รอจนจบ (คืน True = รอแล้ว ข้อมูลสดพอ ไม่ต้องรันซ้ำ)"""
+    if not _running.get(pipeline_type):
+        return False
+    waited = 0
+    while _running.get(pipeline_type) and waited < max_wait_s:
+        await asyncio.sleep(5)
+        waited += 5
+    return True
+
+
+def _live_windows(days: int, ict_now: datetime) -> tuple[int, str]:
+    """(SM_MONTHS, ATMS_FROM_DATE) ที่ครอบ `days` วันล่าสุด — stockmovement ดึงทั้งเดือน จึงนับจำนวนเดือนที่แตะ"""
+    from datetime import timedelta
+
+    start = ict_now - timedelta(days=days)
+    months = (ict_now.year - start.year) * 12 + (ict_now.month - start.month) + 1
+    return months, start.strftime("%d/%m/%Y")
+
+
+async def run_wms_live_sync(inventory: str, days: int, user: str | None) -> None:
+    import logging
+    from datetime import timedelta
+    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+    log = logging.getLogger(__name__)
+    st = _live_sync
+    urls = _wms_urls()
+
+    def step(name: str, status: str, note: str | None = None) -> None:
+        s = st["steps"][name]
+        s["status"] = status
+        if status == "running":
+            s["startedAt"] = _live_now()
+        else:
+            s["finishedAt"] = _live_now()
+        if note:
+            s["note"] = note
+
+    def with_query(url: str, **q: str) -> str:
+        parts = urlsplit(url)
+        cur = dict(parse_qsl(parts.query))
+        cur.update(q)
+        return urlunsplit(parts._replace(query=urlencode(cur)))
+
+    async def wms(url: str) -> tuple[bool, str]:
+        status, body = await asyncio.to_thread(_call_webhook, url, urls[2])
+        return 200 <= status < 300, f"{status} {body[:200]}"
+
+    try:
+        if not urls:
+            raise RuntimeError("ยังไม่ได้ตั้ง SAFETY_STOCK_BUILD_URL")
+        sync_url, build_url, _ = urls
+        build_url = with_query(build_url, source="live-sync", inventory=inventory)
+        sm_months, from_date = _live_windows(days, datetime.utcnow() + timedelta(hours=7))
+
+        step("sku", "running")
+        ok, info = await wms(with_query(sync_url, inventory=inventory))
+        step("sku", "ok" if ok else "error", None if ok else info)
+
+        step("build1", "running")
+        ok, info = await wms(build_url)
+        step("build1", "ok" if ok else "error", None if ok else info)
+
+        step("movement", "running")
+        if await _wait_not_running("atms_stockmovement_light") or await _wait_not_running("atms_stockmovement"):
+            step("movement", "ok", "ใช้ผลรอบตั้งเวลาที่เพิ่งจบ")
+        else:
+            ok = await _run("atms_stockmovement_light", {"SM_MONTHS": sm_months}, fire_webhook=False)
+            step("movement", "ok" if ok else "error", f"{sm_months} เดือน" if ok else "ดึงความเคลื่อนไหวไม่สำเร็จ")
+
+        step("procurement", "running")
+        if await _wait_not_running("atms_procurement_light") or await _wait_not_running("atms_procurement"):
+            step("procurement", "ok", "ใช้ผลรอบตั้งเวลาที่เพิ่งจบ")
+        else:
+            # ATMS_PR_PRUNE=0: หน้าต่างสั้นกว่ารอบปกติ ไม่ใช้ลบใบที่หาย ปล่อยให้รอบตั้งเวลาทำตามเกณฑ์เดิม
+            ok = await _run(
+                "atms_procurement_light",
+                {"ATMS_FROM_DATE": from_date, "ATMS_PR_PRUNE": "0"},
+                fire_webhook=False,
+            )
+            step("procurement", "ok" if ok else "error", f"ตั้งแต่ {from_date}" if ok else "ดึง PR/PO/DD ไม่สำเร็จ")
+
+        step("build2", "running")
+        ok, info = await wms(build_url)
+        step("build2", "ok" if ok else "error", None if ok else info)
+
+        st["status"] = "ok" if all(s["status"] == "ok" for s in st["steps"].values()) else "error"
+    except Exception as e:  # noqa: BLE001 - ห้ามหลุดออกไปเงียบๆ ต้องลงสถานะให้หน้าเว็บเห็น
+        log.error("wms_live_sync error: %s", e)
+        st["status"] = "error"
+        st["error"] = str(e)[:300]
+        for s in st["steps"].values():
+            if s["status"] == "running":
+                s["status"] = "error"
+                s["finishedAt"] = _live_now()
+    finally:
+        st["finishedAt"] = _live_now()
+        log.info("wms_live_sync %s by %s → %s", inventory, user, st.get("status"))
+
+
+@router.post("/wms-live-sync", status_code=202)
+async def start_wms_live_sync(
+    background_tasks: BackgroundTasks,
+    body: dict = Body(...),
+    _: str = Depends(_verify_key),
+):
+    inventory = str(body.get("inventory") or "").strip()
+    if not inventory.isdigit():
+        raise HTTPException(status_code=400, detail="inventory ต้องเป็นรหัสคลัง (ตัวเลข)")
+    try:
+        days = int(body.get("days") or 14)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="days ต้องเป็นตัวเลข")
+    days = max(1, min(days, LIVE_SYNC_MAX_DAYS))
+    if _live_sync.get("status") == "running":
+        return {"started": False, **_live_sync}
+    _live_sync.clear()
+    _live_sync.update({
+        "status": "running",
+        "inventory": inventory,
+        "days": days,
+        "user": body.get("user"),
+        "startedAt": _live_now(),
+        "finishedAt": None,
+        "error": None,
+        "steps": {k: {"status": "pending", "startedAt": None, "finishedAt": None, "note": None} for k in LIVE_SYNC_STEPS},
+    })
+    background_tasks.add_task(run_wms_live_sync, inventory, days, body.get("user"))
+    return {"started": True, **_live_sync}
+
+
+@router.get("/wms-live-sync")
+async def wms_live_sync_status(_: str = Depends(_verify_key)):
+    return _live_sync or {"status": "idle"}
