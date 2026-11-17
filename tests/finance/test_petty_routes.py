@@ -460,7 +460,9 @@ class TestHolderBankAccountForThePayBox:
         self._account(db_session)
         monkeypatch.setenv("FINANCE_DEPARTMENT_IDS", "30")
         assert self._detail(db_session, sent_round["id"], "30001")["holder_payee"] == self.ACCOUNT
-        assert "holder_payee" not in self._detail(db_session, sent_round["id"], "40001")
+        # แผนกการเงิน 4/36/37 นับเป็นการเงินเสมอไม่ขึ้นกับ env (17/11/2026 ตรงกับ FE ALWAYS_FINANCE_DEPT_IDS)
+        assert self._detail(db_session, sent_round["id"], "40001")["holder_payee"] == self.ACCOUNT
+        assert "holder_payee" not in self._detail(db_session, sent_round["id"], "99999")
 
     def test_named_finance_employees_come_from_the_env(self, db_session, sent_round, staff, monkeypatch):
         self._account(db_session)

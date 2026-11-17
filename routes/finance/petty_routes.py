@@ -779,6 +779,7 @@ def _may_see_bank_account(db: Session, holder_id: Optional[str], employee_id: Op
     if (holder_id and eid == str(holder_id)) or perms.is_superadmin(eid) or _is_super(eid):
         return True
     depts = [int(x) for x in adv_logic.parse_id_list(os.getenv("FINANCE_DEPARTMENT_IDS", "4,6")) if x.isdigit()]
+    depts = sorted(set(depts) | perms.FINANCE_DEPARTMENT_IDS)  # แผนกการเงินรับ/จ่าย นับเป็นการเงินเสมอ
     emps = adv_logic.parse_id_list(os.getenv("FINANCE_EMPLOYEE_IDS"))
     return adv_logic.is_finance_user(repo.employee_department(db, eid), eid, depts, emps)
 

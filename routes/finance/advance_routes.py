@@ -40,6 +40,7 @@ router = APIRouter(prefix="/finance", tags=["Finance - Advance"])
 
 def _finance_ids():
     depts = [int(x) for x in logic.parse_id_list(os.getenv("FINANCE_DEPARTMENT_IDS", "4,6")) if x.isdigit()]
+    depts = sorted(set(depts) | perms.FINANCE_DEPARTMENT_IDS)  # แผนกการเงินรับ/จ่าย (36/37) นับเป็นการเงินเสมอ ไม่ขึ้นกับ env
     emps = logic.parse_id_list(os.getenv("FINANCE_EMPLOYEE_IDS"))
     return depts, emps
 
@@ -124,8 +125,8 @@ def my_permissions(employee_id: str, db: Session = Depends(get_db)):
         "is_finance": is_finance,
         "permissions": perms.permissions_for(user.employee_id, user.department_id, perms.position_text(user)) if is_finance else [],
         # สายการเงิน (จ่าย/รับ) มีความหมายเฉพาะคนแผนกการเงิน — บัญชี/แผนกอื่น = None
-        "finance_line": (perms.finance_line(perms.position_text(user))
-                         if user is not None and perms._dept(user.department_id) == perms.FINANCE_DEPARTMENT_ID else None),
+        "finance_line": (perms.finance_line(perms.position_text(user), user.department_id)
+                         if user is not None and perms.is_finance_department(user.department_id) else None),
     }
 
 

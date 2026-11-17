@@ -89,3 +89,37 @@ def test_บัญชีไม่สนสาย_ปิดรายการไ�
 @pytest.mark.parametrize("perm", pl.ALL_PERMISSIONS)
 def test_ทุกสิทธิ์มีคำอธิบายภาษาไทย(perm):
     assert pl.PERMISSION_LABELS.get(perm)
+
+
+# ---- master แยกแผนกการเงินรับ (36) / จ่าย (37) — ข้อมูลจริงบน prod 17/11/2026 (ผู้ใช้สั่ง "ให้สายดูจากแผนกก่อน") ----
+OFFICER_POS = "เจ้าหน้าที่ธุรการ (การเงิน) Administrative and Financial Officer"
+REAL_FINANCE = [  # employee_id, department_id, ตำแหน่ง th+en, สิทธิ์ที่ต้องได้
+    ("620331", 4, "ผู้จัดการฝ่ายการเงิน Finance Manager", [pl.PERM_PAY, pl.PERM_PAYEE_ADMIN, pl.PERM_CLOSE, pl.PERM_RECEIVE]),
+    ("680179", 37, "หัวหน้าแผนกการเงินจ่าย Finance Supervisor - Payment", [pl.PERM_PAY, pl.PERM_PAYEE_ADMIN]),
+    ("690254", 37, OFFICER_POS, [pl.PERM_PAY, pl.PERM_PAYEE_ADMIN]),
+    ("610197", 37, OFFICER_POS, [pl.PERM_PAY, pl.PERM_PAYEE_ADMIN]),
+    ("690289", 36, "หัวหน้าแผนกการเงินรับ Finance Supervisor - Receivable", [pl.PERM_CLOSE, pl.PERM_RECEIVE]),
+    ("620420", 36, OFFICER_POS, [pl.PERM_CLOSE, pl.PERM_RECEIVE]),
+]
+
+
+@pytest.mark.parametrize("emp, dept, pos, want", REAL_FINANCE, ids=[r[0] for r in REAL_FINANCE])
+def test_การเงิน6คน_สายตามแผนก(emp, dept, pos, want):
+    got = pl.permissions_for(emp, dept, pos)
+    assert sorted(got) == sorted(want)
+
+
+@pytest.mark.parametrize("dept, line", [(37, pl.LINE_PAY), (36, pl.LINE_RECEIVE), ("37", pl.LINE_PAY), (4, None)])
+def test_แผนกบอกสายก่อนชื่อตำแหน่ง(dept, line):
+    assert pl.finance_line(OFFICER_POS, dept) == line
+
+
+def test_แผนก37ชนะคำในตำแหน่ง():
+    # ตำแหน่งเขียนว่า Receivable แต่อยู่แผนกการเงินจ่าย → ยึดแผนก
+    assert pl.finance_line("Finance Supervisor - Receivable", 37) == pl.LINE_PAY
+
+
+def test_แผนกการเงินรับจ่ายนับเป็นการเงิน_บัญชีไม่ใช่():
+    assert pl.is_finance_department(36) and pl.is_finance_department(37) and pl.is_finance_department(4)
+    assert not pl.is_finance_department(6)
+    assert not pl.allowed(pl.PERM_PAY, "x", 6, "")

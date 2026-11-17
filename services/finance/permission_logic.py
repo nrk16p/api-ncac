@@ -41,6 +41,9 @@ PERMISSION_LABELS = {
 }
 
 FINANCE_DEPARTMENT_ID = 4      # แผนกการเงิน
+FINANCE_RECEIVE_DEPARTMENT_ID = 36  # แผนกการเงินรับ (master แยกแผนก 17/11/2026)
+FINANCE_PAY_DEPARTMENT_ID = 37      # แผนกการเงินจ่าย
+FINANCE_DEPARTMENT_IDS = frozenset({FINANCE_DEPARTMENT_ID, FINANCE_RECEIVE_DEPARTMENT_ID, FINANCE_PAY_DEPARTMENT_ID})
 ACCOUNTING_DEPARTMENT_ID = 6   # แผนกบัญชี
 DEPARTMENT_LABELS = {FINANCE_DEPARTMENT_ID: "แผนกการเงิน", ACCOUNTING_DEPARTMENT_ID: "แผนกบัญชี"}
 
@@ -61,8 +64,19 @@ _PAY_WORDS = ("payment", "payable", "จ่าย")
 _RECEIVE_WORDS = ("receivable", "receiving", "รับ")
 
 
-def finance_line(position_name) -> str | None:
-    """สายการเงินจากชื่อตำแหน่ง (ไทย/อังกฤษ รวมกันเป็นข้อความเดียวก็ได้) · None = ไม่ระบุ = ทำได้ทั้งสองสาย"""
+# แผนกบอกสายก่อน (ผู้ใช้สั่ง 17/11/2026): 37 การเงินจ่าย = สายจ่าย · 36 การเงินรับ = สายรับ · แผนก 4 ดูชื่อตำแหน่ง
+DEPARTMENT_LINE = {FINANCE_PAY_DEPARTMENT_ID: "payment", FINANCE_RECEIVE_DEPARTMENT_ID: "receivable"}
+
+
+def is_finance_department(department_id) -> bool:
+    return _dept(department_id) in FINANCE_DEPARTMENT_IDS
+
+
+def finance_line(position_name, department_id=None) -> str | None:
+    """สายการเงิน: แผนก 36/37 บอกสายเลย · ไม่งั้นอ่านจากชื่อตำแหน่ง (ไทย/อังกฤษ) · None = ไม่ระบุ = ทำได้ทั้งสองสาย"""
+    by_dept = DEPARTMENT_LINE.get(_dept(department_id))
+    if by_dept is not None:
+        return by_dept
     text = str(position_name or "").lower()
     pay = any(w in text for w in _PAY_WORDS)
     receive = any(w in text for w in _RECEIVE_WORDS)
@@ -73,11 +87,11 @@ def finance_line(position_name) -> str | None:
     return None
 
 
-def line_allows(permission: str, position_name) -> bool:
+def line_allows(permission: str, position_name, department_id=None) -> bool:
     need = PERMISSION_LINE.get(permission)
     if need is None:
         return True
-    line = finance_line(position_name)
+    line = finance_line(position_name, department_id)
     return line is None or line == need
 
 
@@ -109,12 +123,14 @@ def allowed(permission: str, employee_id, department_id, position_name=None) -> 
     if permission not in PERMISSION_DEPARTMENT:
         return False
     dept = _dept(department_id)
-    if permission == PERM_CLOSE and dept == FINANCE_DEPARTMENT_ID:
-        return line_allows(PERM_RECEIVE, position_name)
-    if dept != PERMISSION_DEPARTMENT[permission]:
+    finance = dept in FINANCE_DEPARTMENT_IDS
+    if permission == PERM_CLOSE and finance:
+        return line_allows(PERM_RECEIVE, position_name, dept)
+    need_dept = PERMISSION_DEPARTMENT[permission]
+    if not (dept == need_dept or (need_dept == FINANCE_DEPARTMENT_ID and finance)):
         return False
     # แยกสายเฉพาะคนแผนกการเงิน — บัญชีไม่สนคำว่า Payment/Receivable ในชื่อตำแหน่ง
-    return dept != FINANCE_DEPARTMENT_ID or line_allows(permission, position_name)
+    return not finance or line_allows(permission, position_name, dept)
 
 
 def permissions_for(employee_id, department_id, position_name=None) -> list:
