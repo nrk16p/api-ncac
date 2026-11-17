@@ -1015,8 +1015,9 @@ def test_extra_pay_closes_pending_proof_then_finance_attaches(api):
     d = a.put(fid, "confirm", _close_body())
     assert d["status"] == "CLOSED_PENDING_PROOF" and d["fin"]["settle_date"] is None
     assert a.mails() == {}  # อีเมลปิดรายการรอจนการเงินแนบครบ
-    # ฝ่ายอื่นแนบไม่ได้ · ต้องมีไฟล์ · วันที่ไม่เกินวันนี้
-    a.put(fid, "extra-proof", {"action_by": FC, "settle_date": today().isoformat(), "file_names": ["slip.pdf"]}, expect=403)
+    # ผู้ขอ/หัวหน้าแนบไม่ได้ · ต้องมีไฟล์ · วันที่ไม่เกินวันนี้
+    a.put(fid, "extra-proof", {"action_by": REQ, "settle_date": today().isoformat(), "file_names": ["slip.pdf"]}, expect=403)
+    a.put(fid, "extra-proof", {"action_by": LEAD, "settle_date": today().isoformat(), "file_names": ["slip.pdf"]}, expect=403)
     a.put(fid, "extra-proof", {"action_by": FP, "settle_date": today().isoformat(), "file_names": []}, expect=400)
     a.put(fid, "extra-proof", {"action_by": FP, "settle_date": (today() + timedelta(days=1)).isoformat(),
                                "file_names": ["slip.pdf"]}, expect=400)
@@ -1026,6 +1027,15 @@ def test_extra_pay_closes_pending_proof_then_finance_attaches(api):
     assert_mails(a.mails(), {legacy(fid, "รายการเบิกเงินปิดเรียบร้อย"): ([email_of(REQ)], [])})
     # แนบซ้ำหลังปิดแล้วไม่ได้
     a.put(fid, "extra-proof", {"action_by": FP, "settle_date": today().isoformat(), "file_names": ["x.pdf"]}, expect=409)
+
+
+def test_accounting_attaches_extra_proof(api):
+    """บัญชีเป็นคนแนบสลิปโอนเพิ่มให้ (ผู้ใช้สั่ง 17/11/2026)"""
+    a = api
+    fid = _extra_pay_ready(a)
+    assert a.put(fid, "confirm", _close_body())["status"] == "CLOSED_PENDING_PROOF"
+    d = a.put(fid, "extra-proof", {"action_by": FC, "settle_date": today().isoformat(), "file_names": ["slip.pdf"]})
+    assert d["status"] == "CLOSED" and d["fin"]["settle_date"] == today().isoformat()
 
 
 def test_extra_pay_with_date_still_closes_straight_away(api):

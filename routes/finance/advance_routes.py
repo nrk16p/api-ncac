@@ -972,8 +972,12 @@ def confirm_advance(form_id: str, body: ConfirmIn, background_tasks: BackgroundT
 @router.put("/advances/{form_id}/extra-proof")
 def extra_proof_advance(form_id: str, body: ExtraProofIn, background_tasks: BackgroundTasks,
                         db: Session = Depends(get_db)):
-    """การเงินสายจ่ายแนบหลักฐานโอนเงินเพิ่ม (เบิกเพิ่ม) แล้วปิดรายการจริง (ผู้ใช้สั่ง 17/11/2026)"""
-    require_permission(db, body.action_by, perms.PERM_PAY)
+    """แนบหลักฐานโอนเงินเพิ่ม (เบิกเพิ่ม) แล้วปิดรายการจริง (ผู้ใช้สั่ง 17/11/2026)
+    บัญชีเป็นคนแนบ (ผู้ใช้สั่ง 17/11/2026 รอบสอง) → สิทธิ์ปิดรายการ หรือสิทธิ์จ่ายเงิน (การเงินสายจ่าย) ก็ได้"""
+    user = require_finance(db, body.action_by)
+    if not any(perms.allowed(p, user.employee_id, user.department_id, perms.position_text(user))
+               for p in (perms.PERM_CLOSE, perms.PERM_PAY)):
+        raise HTTPException(status_code=403, detail=perms.denied_message(perms.PERM_CLOSE))
     sub, adv, status = _load_for_update(db, form_id)
     try:
         names = logic.check_extra_proof(status, settle_date=body.settle_date, file_names=body.file_names,
