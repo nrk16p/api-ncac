@@ -23,6 +23,16 @@ ORG_WIDE_LEVEL = 9
 # คนที่อยู่ขั้นหลังในสายเดียวกันอนุมัติแทน + ข้ามขั้นพิเศษได้ (ผู้ใช้สั่ง 26/10/2026 จาก ADV-2610-022) — ขั้นพิเศษจำ
 # ระดับของขั้นถัดไปไว้ใน stand_in_level · ขั้นพิเศษที่อยู่ท้ายสายไม่มีคนขั้นหลัง ต้องเป็นคนที่กำหนดเท่านั้น
 SPECIAL_STEPS = ({"department_id": 6, "except_clauses": ("6.7",), "employee_id": "690041"},)
+
+# ผู้บริหารระดับ ORG_WIDE_LEVEL แยกตามฝ่าย (division_id) ของผู้เบิก (ผู้ใช้สั่ง 18/11/2026) ใช้กับข้อ 6.3/6.2/6.1
+# ฝ่ายที่ไม่มีใครดูแลในนี้ (ฝ่ายใหม่ / ผู้เบิกไม่มีฝ่าย) ระดับ 9 ทุกคนยังกดได้ ใบจะได้ไม่ค้าง
+# 29 = คณะกรรมการบริหาร (ผอ.สายงาน) ให้ทั้งสองคน คนหนึ่งเบิกเอง อีกคนอนุมัติได้
+TOP_LEVEL_DIVISIONS = {
+    "563328": frozenset({15, 16, 17, 18, 19, 20, 22, 23, 29}),  # พัชรีรัตน์: สายปฏิบัติการ + ลาดกระบัง + จัดซื้อ
+    "360002": frozenset({24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34}),  # สุวรรณา: บัญชี การเงิน IT สนับสนุน HR
+}
+# ไม่ใช่ผู้อนุมัติงานการเงิน แม้ระดับตำแหน่งถึง (ผู้ใช้สั่ง 18/11/2026: 660239 คณะกรรมการ เอาออก)
+EXCLUDED_APPROVERS = frozenset({"660239"})
 TAB_MINE = "mine"
 TAB_DELEGABLE = "delegable"
 
@@ -216,6 +226,8 @@ def can_approve(approver: Mapping, requester: Mapping, required: int, mapped_div
     approve — see needs_division_fallback. `named` = ขั้นพิเศษ: only that employee, whatever the level."""
     if not approver.get("active"):
         return False
+    if str(approver.get("employee_id")) in EXCLUDED_APPROVERS:
+        return False
     if named is not None:
         return (str(approver.get("employee_id")) == str(named)
                 and approver.get("employee_id") != requester.get("employee_id")
@@ -228,7 +240,7 @@ def can_approve(approver: Mapping, requester: Mapping, required: int, mapped_div
     if approver.get("id") is not None and approver.get("id") in set(excluded):
         return False
     if level >= ORG_WIDE_LEVEL:
-        return True
+        return top_level_covers(approver, requester)
     dept = requester.get("department_id")
     if dept is None:
         return False
@@ -238,6 +250,17 @@ def can_approve(approver: Mapping, requester: Mapping, required: int, mapped_div
     if division is None:
         return False
     return division in set(mapped_divisions) or (widen_to_division and approver.get("division_id") == division)
+
+
+def top_level_covers(approver: Mapping, requester: Mapping) -> bool:
+    """ระดับ 9 อนุมัติใบของฝ่ายไหนได้ (TOP_LEVEL_DIVISIONS) — คนที่ไม่มีในตาราง หรือฝ่ายที่ไม่มีใครดูแล = ทั้งบริษัท"""
+    scope = TOP_LEVEL_DIVISIONS.get(str(approver.get("employee_id")))
+    if scope is None:
+        return True
+    division = requester.get("division_id")
+    if division in scope:
+        return True
+    return not any(division in s for s in TOP_LEVEL_DIVISIONS.values())
 
 
 def _in_own_department(approver: Mapping, requester: Mapping) -> bool:
