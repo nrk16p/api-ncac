@@ -29,6 +29,14 @@ TABLES = [PositionLevel, Position, Division, Department, Site, User, FormApprove
           ArRoleItem, ArUserRole, ArCycle]
 
 
+@pytest.fixture(autouse=True)
+def no_real_mail(monkeypatch):
+    """Submit sends approver mail; with a real .env (SMTP_USER) that went out for real. Tests that check mail
+    patch send_email again on top of this."""
+    from services import email_service
+    monkeypatch.setattr(email_service, "send_email", lambda *a, **k: None)
+
+
 @pytest.fixture
 def engine():
     eng = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
