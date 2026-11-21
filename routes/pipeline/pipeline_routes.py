@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, Header, HTTPException
+from fastapi.encoders import jsonable_encoder
 from pymongo import MongoClient
 
 router = APIRouter(prefix="/pipeline", tags=["Pipeline"])
@@ -485,3 +486,17 @@ async def start_wms_live_sync(
 @router.get("/wms-live-sync")
 async def wms_live_sync_status(_: str = Depends(_verify_key)):
     return _live_sync or {"status": "idle"}
+
+
+@router.post("/finance/overdue-reminders")
+async def finance_overdue_reminders(_: str = Depends(_verify_key)):
+    """ให้ตัวตั้งเวลาภายนอกสั่งรอบเตือนค้างเคลียร์ · เรียกตัวเดียวกับที่ scheduler ใน main.py เรียก
+    (คงรอบ 7 วันกับสวิตช์ FINANCE_EMAIL_ENABLED) · รันนอก event loop"""
+    from database import SessionLocal
+    from services.finance.overdue_reminder import run_overdue_reminders
+
+    try:
+        result = await asyncio.get_running_loop().run_in_executor(None, run_overdue_reminders, SessionLocal)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(exc) or exc.__class__.__name__)
+    return {"ok": True, "result": jsonable_encoder(result)}
