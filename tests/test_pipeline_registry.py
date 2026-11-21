@@ -122,3 +122,9 @@ def test_vehicle_daily_is_registered_and_scheduled():
 def test_core_return_sync_is_scheduled_by_mena_backend_services_not_here():
     source = (ROOT / "main.py").read_text(encoding="utf-8")
     assert 'args=["core-return-sync"]' not in source  # moved 2026-11-21; running it here too would double-run
+
+
+def test_finance_overdue_and_store_withdraw_drift_are_scheduled_by_mena_backend_services():
+    source = (ROOT / "main.py").read_text(encoding="utf-8")
+    assert 'args=["store-withdraw-drift"]' not in source       # moved 2026-11-21
+    assert "sched_finance_overdue_reminder" not in source       # moved 2026-11-21 (mbs calls /pipeline/finance/overdue-reminders)

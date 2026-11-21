@@ -292,7 +292,7 @@ async def startup_event():
     #     แค่ปลุก WMS /api/store-withdraw/drift-tick ให้เช็กใบที่ตัด ATMS แล้วว่าถูกแก้ทีหลังไหม · WMS อ่าน ATMS เอง งานเบา
     #   core-return-sync: ย้ายไปรันที่ mena-backend-services (job `core-return-sync`, 02:30 BKK) ตั้งแต่ 2026-11-21
     #     ห้ามเปิดที่นี่อีก ไม่งั้นจะรันซ้ำสองที่ · สคริปต์ + POST /pipeline/run/core-return-sync ยังเก็บไว้ใช้มือชั่วคราว
-    scheduler.add_job(_run, CronTrigger(hour="0-13", minute="5,35"), args=["store-withdraw-drift"], id="sched_store_withdraw_drift")
+    #   store-withdraw-drift: ย้ายไป mena-backend-services (job `store-withdraw-drift`) ตั้งแต่ 2026-11-21 · ห้ามเปิดที่นี่อีก
     # Jobs tab (fuel-control-center spec §10) — BKK→UTC −7:
     # overspeed 04:30 BKK → 21:30 UTC: reads the day engine-on (21:00) has just read, done before
     #   atms_stockmovement's heavy writes at 22:00; rmc_compensation 09:00 BKK → 02:00 UTC: talks only
@@ -303,15 +303,8 @@ async def startup_event():
     # 07:40 BKK → 00:40 UTC · ต่อจาก procurement/supplier ช่วง 06:00–06:40 และเลี่ยง :15 ของ atms_pr_quick
     # งานเบา ~21 requests ห่างกัน 3 วินาที จบในราว 1–2 นาที
     scheduler.add_job(_run, CronTrigger(hour=0, minute=40), args=["vehicle_daily"], id="sched_vehicle_daily")  # 07:40 BKK
-    # finance advance: overdue clearing reminder, daily 09:00 BKK (no-op unless FINANCE_EMAIL_ENABLED=true)
-    from database import SessionLocal
-    from services.finance.overdue_reminder import run_overdue_reminders
-
-    async def _overdue_job():
-        await asyncio.get_running_loop().run_in_executor(None, run_overdue_reminders, SessionLocal)
-
-    scheduler.add_job(_overdue_job, CronTrigger(hour=9, minute=0, timezone=tz("Asia/Bangkok")),
-                      id="sched_finance_overdue_reminder")
+    # finance advance overdue reminder (09:00 BKK): ย้ายไป mena-backend-services (job `finance-overdue-reminder`)
+    # ตั้งแต่ 2026-11-21 — mbs เรียก POST /pipeline/finance/overdue-reminders · ห้ามตั้งเวลาที่นี่อีก
     scheduler.start()
     import logging
     logging.getLogger(__name__).info("Pipeline scheduler started — LD 02:00, SCCO 02:20, deliver_result 03:30, driver_cost 05:45 (BKK); CPAC runs locally; engineon 04:00 / drivercost_ticket 06:10 / trip_summary 06:30 (BKK)")
