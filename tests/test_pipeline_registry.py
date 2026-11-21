@@ -117,3 +117,8 @@ def test_vehicle_daily_is_registered_and_scheduled():
     assert RUN_LOG_LOCATION["vehicle_daily"] == ("analytics", "etl_jobs")
     source = (ROOT / "main.py").read_text(encoding="utf-8")
     assert 'CronTrigger(hour=0, minute=40), args=["vehicle_daily"]' in source  # 07:40 BKK
+
+
+def test_core_return_sync_is_scheduled_by_mena_backend_services_not_here():
+    source = (ROOT / "main.py").read_text(encoding="utf-8")
+    assert 'args=["core-return-sync"]' not in source  # moved 2026-11-21; running it here too would double-run
