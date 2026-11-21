@@ -226,21 +226,15 @@ async def startup_event():
 
     scheduler = AsyncIOScheduler(timezone=tz("Asia/Bangkok"))
     # Run LD → SCCO → CPAC sequentially so they don't hammer ATMS at the same time
-    scheduler.add_job(_run, CronTrigger(hour=2, minute=0),  args=["ld"],   id="sched_ld")
-    scheduler.add_job(_run, CronTrigger(hour=2, minute=20), args=["scco"], id="sched_scco")
     # deliver_result runs at 03:30 — after ATMS regenerates the monthly batch
     # files (~02:45-02:50) and clear of ld/scco
-    scheduler.add_job(_run, CronTrigger(hour=3, minute=30), args=["deliver_result"], id="sched_deliver_result")
     # driver_cost runs at 05:45 — ATMS regenerates its batch files later (~05:00-05:05)
-    scheduler.add_job(_run, CronTrigger(hour=5, minute=45), args=["driver_cost"], id="sched_driver_cost")
     # cpac is NOT scheduled here — it must run locally (launchd com.mena.mena-data-cpac
     # on the office Mac) because fleetlink/CPAC access is local-only. Manual trigger
     # via POST /pipeline/run/cpac remains available.
     # atms_procurement → mena-wms /pr · scheduler ทำงานเป็น UTC จริง (tz ไม่ apply)
     # ทุก 4 ชม. 06:00–22:00 น. ไทย → 06:00 full (2 เดือน), 10/14/18/22 light (7 วัน)
     # BKK→UTC (−7): 06→23(prev) · 10→03 · 14→07 · 18→11 · 22→15
-    scheduler.add_job(_run, CronTrigger(hour=23, minute=0), args=["atms_procurement"], id="sched_atms_procurement")            # 06:00 BKK full
-    scheduler.add_job(_run, CronTrigger(hour="3,7,11,15", minute=0), args=["atms_procurement_light"], id="sched_atms_procurement_light")  # 10/14/18/22 BKK light
     # atms_pr_quick → รายการ PR + ลบใบที่ถูกลบ + รายการสินค้าเฉพาะใบใหม่ แล้วปลุก /safety-stock (source=pr-hourly)
     # ทุกชั่วโมง 07:15–20:15 BKK → 00–13 UTC นาที 15 (เลี่ยง :00 ของ procurement light ที่ใช้ ~11 นาที
     # และ :30 ของ stockmovement light) · งานเบา ~10–20 requests ต่อรอบ ไม่ถึงนาที
@@ -252,13 +246,9 @@ async def startup_event():
     # master ซัพพลายเออร์ (เครดิตเทอมของ mena-wms /ap-tracking) — 06:40 BKK → 23:40 UTC
     # ต่อท้าย atms_procurement (23:00 UTC) เพื่อให้ ddCount นับจาก deposit_header ที่เพิ่งรีเฟรชแล้ว
     # และไม่ยิง ATMS พร้อมกัน · งานเบา ~11 คำขอ ใช้เวลาไม่ถึงนาที
-    scheduler.add_job(_run, CronTrigger(hour=23, minute=40), args=["atms_supplier"], id="sched_atms_supplier")  # 06:40 BKK
     # engineon chain (BKK→UTC −7): GPS crunch 04:00 BKK → 21:00 UTC (prev day);
     # drivercost_ticket 06:10 BKK → 23:10 UTC (หลัง ATMS regen batch files ~05:00 BKK,
     # เหลื่อมจาก atms_procurement 23:00); trip summary 06:30 BKK → 23:30 UTC
-    scheduler.add_job(_run, CronTrigger(hour=21, minute=0),  args=["engineon"], id="sched_engineon")                          # 04:00 BKK
-    scheduler.add_job(_run, CronTrigger(hour=23, minute=10), args=["drivercost_ticket"], id="sched_drivercost_ticket")        # 06:10 BKK
-    scheduler.add_job(_run, CronTrigger(hour=23, minute=30), args=["engineon_trip_summary"], id="sched_engineon_trip_summary")  # 06:30 BKK
     # fuel series (fuel-control-center spec 2026-10-06) — BKK→UTC −7:
     # Besttech per-vehicle /history for yesterday at 01:30 BKK → 18:30 UTC (~76 min at 35 s per call;
     # the same raw points also give Besttech engine-on → summary_engineon and overspeed → analytics.overspeed,
@@ -266,16 +256,11 @@ async def startup_event():
     # /history_all is avoided — it locks the key out); fuel_nightly at 04:15 BKK → 21:15 UTC:
     # Besttech catch-up only if the 01:30 run left nothing and is not still running, then Terminus
     # once engine-on (21:00 UTC, ~1 min) has read the same day — done before stockmovement 22:00 UTC
-    scheduler.add_job(_run, CronTrigger(hour=18, minute=30), args=["fuel_series_besttech"], id="sched_fuel_series_besttech")  # 01:30 BKK
-    scheduler.add_job(_run, CronTrigger(hour=21, minute=15), args=["fuel_nightly"], id="sched_fuel_nightly")                  # 04:15 BKK
     # fuel_places — Mondays 01:00 BKK → Sundays 18:00 UTC: one Besttech /location call, 30 min before
     # the 18:30 UTC Besttech pull so the two never share the key's rate limit
-    scheduler.add_job(_run, CronTrigger(day_of_week="sun", hour=18, minute=0), args=["fuel_places"], id="sched_fuel_places")  # Mon 01:00 BKK
     # fuel_train — 2nd of each month 03:30 BKK → day 1, 20:30 UTC (after the Besttech pull, before fuel_nightly)
-    scheduler.add_job(_run, CronTrigger(day=1, hour=20, minute=30), args=["fuel_train"], id="sched_fuel_train")  # 2nd 03:30 BKK
     # maintenance (MR sync → maint_* + repair-analysis) 02:00 BKK → 19:00 UTC —
     # ATMS โหลดต่ำ และก่อน ld/scco (09:00/09:20 BKK จริงตาม UTC)
-    scheduler.add_job(_run, CronTrigger(hour=19, minute=0), args=["maintenance"], id="sched_maintenance")  # 02:00 BKK
     # stockmovement → atms.stockmovement_v5 (mena-wms /deadstock /safety-stock /vendors,
     # dw_stockmovement ของ KPI-Motors, mena-intelligence /cost/*) — ย้ายมาจาก notebook
     # บนเครื่อง Mac ที่รันวันละครั้งและข้ามทั้งวันเมื่อเครื่องหลับ/เน็ตสะดุด
@@ -297,17 +282,21 @@ async def startup_event():
     # overspeed 04:30 BKK → 21:30 UTC: reads the day engine-on (21:00) has just read, done before
     #   atms_stockmovement's heavy writes at 22:00; rmc_compensation 09:00 BKK → 02:00 UTC: talks only
     #   to CPAC fleetlink + the push API (moved off the Mac launchd job com.cpac.rmc-daily)
-    scheduler.add_job(_run, CronTrigger(hour=21, minute=30), args=["overspeed"], id="sched_overspeed")                # 04:30 BKK
     scheduler.add_job(_run, CronTrigger(hour=2, minute=0), args=["rmc_compensation"], id="sched_rmc_compensation")   # 09:00 BKK
     # vehicle_daily → atms.vehicle_daily_transaction (รายงานรถประจำวัน ATMS ทุกกลุ่มฟลีท เดือนที่แล้ว + เดือนนี้)
     # 07:40 BKK → 00:40 UTC · ต่อจาก procurement/supplier ช่วง 06:00–06:40 และเลี่ยง :15 ของ atms_pr_quick
     # งานเบา ~21 requests ห่างกัน 3 วินาที จบในราว 1–2 นาที
-    scheduler.add_job(_run, CronTrigger(hour=0, minute=40), args=["vehicle_daily"], id="sched_vehicle_daily")  # 07:40 BKK
     # finance advance overdue reminder (09:00 BKK): ย้ายไป mena-backend-services (job `finance-overdue-reminder`)
     # ตั้งแต่ 2026-11-21 — mbs เรียก POST /pipeline/finance/overdue-reminders · ห้ามตั้งเวลาที่นี่อีก
+    # ── ย้ายไป mena-backend-services (worker `jobs`) ตั้งแต่ 2026-11-21 · ห้ามตั้งเวลาที่นี่อีก ไม่งั้นจะรันซ้ำสองที่ ──
+    #   ld, scco, deliver_result, driver_cost, atms_procurement, atms_procurement_light, atms_supplier,
+    #   engineon, drivercost_ticket, engineon_trip_summary, fuel_series_besttech, fuel_nightly, fuel_places,
+    #   fuel_train, maintenance, overspeed, vehicle_daily — เวลาเดิมทุกตัว (mbs services/jobs/jobs/ncac.ts)
+    #   สคริปต์ + POST /pipeline/run/<name> ยังอยู่ที่นี่ให้กดมือได้ชั่วคราว
+    #   ที่ยังรันที่นี่: atms_pr_quick, atms_stockmovement(+light), wms_sku_sync_morning (รอ CRON_SECRET ของ WMS) และ rmc_compensation (รอ API_PUSH)
     scheduler.start()
     import logging
-    logging.getLogger(__name__).info("Pipeline scheduler started — LD 02:00, SCCO 02:20, deliver_result 03:30, driver_cost 05:45 (BKK); CPAC runs locally; engineon 04:00 / drivercost_ticket 06:10 / trip_summary 06:30 (BKK)")
+    logging.getLogger(__name__).info("Pipeline scheduler started — pr_quick, stockmovement(+light), wms sku sync, rmc here; other pipelines run in mena-backend-services")
 
 
 # ------------------------------

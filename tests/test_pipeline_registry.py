@@ -21,7 +21,7 @@ def test_jobs_tab_pipelines_log_to_etl_jobs():
 
 def test_jobs_tab_pipelines_run_at_their_bangkok_times():
     source = (ROOT / "main.py").read_text(encoding="utf-8")  # CronTrigger hours are UTC (BKK − 7)
-    assert 'CronTrigger(hour=21, minute=30), args=["overspeed"]' in source       # 04:30 BKK
+    assert 'args=["overspeed"]' not in source                                    # moved to mena-backend-services 2026-11-21
     assert 'CronTrigger(hour=2, minute=0), args=["rmc_compensation"]' in source  # 09:00 BKK
 
 
@@ -116,7 +116,7 @@ def test_vehicle_daily_is_registered_and_scheduled():
     assert PIPELINE_NAMES["vehicle_daily"] == "vehicle_daily"
     assert RUN_LOG_LOCATION["vehicle_daily"] == ("analytics", "etl_jobs")
     source = (ROOT / "main.py").read_text(encoding="utf-8")
-    assert 'CronTrigger(hour=0, minute=40), args=["vehicle_daily"]' in source  # 07:40 BKK
+    assert 'args=["vehicle_daily"]' not in source  # moved to mena-backend-services 2026-11-21
 
 
 def test_core_return_sync_is_scheduled_by_mena_backend_services_not_here():
@@ -128,3 +128,22 @@ def test_finance_overdue_and_store_withdraw_drift_are_scheduled_by_mena_backend_
     source = (ROOT / "main.py").read_text(encoding="utf-8")
     assert 'args=["store-withdraw-drift"]' not in source       # moved 2026-11-21
     assert "sched_finance_overdue_reminder" not in source       # moved 2026-11-21 (mbs calls /pipeline/finance/overdue-reminders)
+
+
+MOVED_TO_MBS = ["ld", "scco", "deliver_result", "driver_cost", "atms_procurement", "atms_procurement_light",
+                "atms_supplier", "engineon", "drivercost_ticket", "engineon_trip_summary", "fuel_series_besttech",
+                "fuel_nightly", "fuel_places", "fuel_train", "maintenance", "overspeed", "vehicle_daily"]
+
+
+def test_python_jobs_moved_to_mena_backend_services_are_not_scheduled_here():
+    source = (ROOT / "main.py").read_text(encoding="utf-8")
+    for name in MOVED_TO_MBS:
+        assert f'args=["{name}"]' not in source, name  # moved 2026-11-21; scheduling here too would double-run
+        assert name in PIPELINE_SCRIPTS, name          # manual /pipeline/run/<name> still works
+
+
+def test_jobs_still_scheduled_here_until_their_secrets_move():
+    source = (ROOT / "main.py").read_text(encoding="utf-8")
+    for name in ("atms_pr_quick", "atms_stockmovement", "atms_stockmovement_light", "rmc_compensation"):
+        assert f'args=["{name}"]' in source, name
+    assert "sched_wms_sku_sync_morning" in source
