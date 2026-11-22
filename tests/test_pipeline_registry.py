@@ -132,7 +132,9 @@ def test_finance_overdue_and_store_withdraw_drift_are_scheduled_by_mena_backend_
 
 MOVED_TO_MBS = ["ld", "scco", "deliver_result", "driver_cost", "atms_procurement", "atms_procurement_light",
                 "atms_supplier", "engineon", "drivercost_ticket", "engineon_trip_summary", "fuel_series_besttech",
-                "fuel_nightly", "fuel_places", "fuel_train", "maintenance", "overspeed", "vehicle_daily"]
+                "fuel_nightly", "fuel_places", "fuel_train", "maintenance", "overspeed", "vehicle_daily",
+                # moved 2026-11-22 (mbs fires the WMS sku-sync / safety-stock build after each run)
+                "atms_pr_quick", "atms_stockmovement", "atms_stockmovement_light"]
 
 
 def test_python_jobs_moved_to_mena_backend_services_are_not_scheduled_here():
@@ -142,8 +144,7 @@ def test_python_jobs_moved_to_mena_backend_services_are_not_scheduled_here():
         assert name in PIPELINE_SCRIPTS, name          # manual /pipeline/run/<name> still works
 
 
-def test_jobs_still_scheduled_here_until_their_secrets_move():
+def test_only_rmc_is_still_scheduled_here():
     source = (ROOT / "main.py").read_text(encoding="utf-8")
-    for name in ("atms_pr_quick", "atms_stockmovement", "atms_stockmovement_light", "rmc_compensation"):
-        assert f'args=["{name}"]' in source, name
-    assert "sched_wms_sku_sync_morning" in source
+    assert 'args=["rmc_compensation"]' in source
+    assert "sched_wms_sku_sync_morning" not in source  # moved 2026-11-22 (mbs job wms-sku-sync-morning)

@@ -222,7 +222,7 @@ async def startup_event():
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
     from apscheduler.triggers.cron import CronTrigger
     from pytz import timezone as tz
-    from routes.pipeline.pipeline_routes import _run, run_wms_sku_sync_morning
+    from routes.pipeline.pipeline_routes import _run
 
     scheduler = AsyncIOScheduler(timezone=tz("Asia/Bangkok"))
     # Run LD → SCCO → CPAC sequentially so they don't hammer ATMS at the same time
@@ -238,11 +238,9 @@ async def startup_event():
     # atms_pr_quick → รายการ PR + ลบใบที่ถูกลบ + รายการสินค้าเฉพาะใบใหม่ แล้วปลุก /safety-stock (source=pr-hourly)
     # ทุกชั่วโมง 07:15–20:15 BKK → 00–13 UTC นาที 15 (เลี่ยง :00 ของ procurement light ที่ใช้ ~11 นาที
     # และ :30 ของ stockmovement light) · งานเบา ~10–20 requests ต่อรอบ ไม่ถึงนาที
-    scheduler.add_job(_run, CronTrigger(hour="0-13", minute=15), args=["atms_pr_quick"], id="sched_atms_pr_quick")
     # รอบเช้า mena-wms /safety-stock: sync คงเหลือ/min/max จาก ATMS แล้ว build — 05:55 BKK → 22:55 UTC
     # ใช้ราว 3 นาที จบก่อน atms_procurement 06:00 จะได้ไม่ยิง ATMS พร้อมกัน
     # ⚠️ ช่อง 06:00 ใน BUILD_SCHEDULE ของ mena-wms (lib/safety-stock-core.ts) อิงเวลานี้ — เลื่อนแล้วต้องแก้ที่โน่นด้วย
-    scheduler.add_job(run_wms_sku_sync_morning, CronTrigger(hour=22, minute=55), id="sched_wms_sku_sync_morning")  # 05:55 BKK
     # master ซัพพลายเออร์ (เครดิตเทอมของ mena-wms /ap-tracking) — 06:40 BKK → 23:40 UTC
     # ต่อท้าย atms_procurement (23:00 UTC) เพื่อให้ ddCount นับจาก deposit_header ที่เพิ่งรีเฟรชแล้ว
     # และไม่ยิง ATMS พร้อมกัน · งานเบา ~11 คำขอ ใช้เวลาไม่ถึงนาที
@@ -270,8 +268,6 @@ async def startup_event():
     #   เยื้องจาก procurement light ที่จอง 03/07/11/15 UTC ไว้แล้ว เพราะยิงรายงาน ATMS
     #   พร้อมกันแล้ว ATMS จะ 500 · นาที 30 ยังกันชนกับ driver_cost 05:45 UTC ได้ด้วย
     #   (รอบ light ใช้เวลาจริง ~20 วินาที)
-    scheduler.add_job(_run, CronTrigger(hour=22, minute=0), args=["atms_stockmovement"], id="sched_atms_stockmovement")
-    scheduler.add_job(_run, CronTrigger(hour="1,5,9,13", minute=30), args=["atms_stockmovement_light"], id="sched_atms_stockmovement_light")
     # เบิกอะไหล่ WMS (store-withdraw) + ติดตามซาก (core-return) — ย้ายจาก "Render cron ที่ผู้ใช้ต้องตั้งเอง" มาไว้ที่นี่ (2026-11-09)
     #   store-withdraw-drift: ทุก 30 นาที 07:05–20:35 BKK → UTC 0–13 นาที 5,35 (เยื้อง :00 procurement · :15 pr_quick · :30 stockmovement)
     #     แค่ปลุก WMS /api/store-withdraw/drift-tick ให้เช็กใบที่ตัด ATMS แล้วว่าถูกแก้ทีหลังไหม · WMS อ่าน ATMS เอง งานเบา
@@ -293,10 +289,11 @@ async def startup_event():
     #   engineon, drivercost_ticket, engineon_trip_summary, fuel_series_besttech, fuel_nightly, fuel_places,
     #   fuel_train, maintenance, overspeed, vehicle_daily — เวลาเดิมทุกตัว (mbs services/jobs/jobs/ncac.ts)
     #   สคริปต์ + POST /pipeline/run/<name> ยังอยู่ที่นี่ให้กดมือได้ชั่วคราว
-    #   ที่ยังรันที่นี่: atms_pr_quick, atms_stockmovement(+light), wms_sku_sync_morning (รอ CRON_SECRET ของ WMS) และ rmc_compensation (รอ API_PUSH)
+    #   2026-11-22 ย้ายเพิ่ม: atms_pr_quick, atms_stockmovement, atms_stockmovement_light, wms_sku_sync_morning
+    #   (mbs ยิง WMS ต่อหลังรันจบเหมือน POST_RUN_WEBHOOKS ที่นี่) · ที่ยังรันที่นี่: rmc_compensation
     scheduler.start()
     import logging
-    logging.getLogger(__name__).info("Pipeline scheduler started — pr_quick, stockmovement(+light), wms sku sync, rmc here; other pipelines run in mena-backend-services")
+    logging.getLogger(__name__).info("Pipeline scheduler started — only rmc_compensation here; other pipelines run in mena-backend-services")
 
 
 # ------------------------------
