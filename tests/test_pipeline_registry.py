@@ -22,7 +22,7 @@ def test_jobs_tab_pipelines_log_to_etl_jobs():
 def test_jobs_tab_pipelines_run_at_their_bangkok_times():
     source = (ROOT / "main.py").read_text(encoding="utf-8")  # CronTrigger hours are UTC (BKK − 7)
     assert 'args=["overspeed"]' not in source                                    # moved to mena-backend-services 2026-11-21
-    assert 'CronTrigger(hour=2, minute=0), args=["rmc_compensation"]' in source  # 09:00 BKK
+    assert 'args=["rmc_compensation"]' not in source                             # moved to mena-backend-services 2026-11-22
 
 
 def test_store_withdraw_drift_is_registered_and_posts_to_wms():
@@ -134,7 +134,7 @@ MOVED_TO_MBS = ["ld", "scco", "deliver_result", "driver_cost", "atms_procurement
                 "atms_supplier", "engineon", "drivercost_ticket", "engineon_trip_summary", "fuel_series_besttech",
                 "fuel_nightly", "fuel_places", "fuel_train", "maintenance", "overspeed", "vehicle_daily",
                 # moved 2026-11-22 (mbs fires the WMS sku-sync / safety-stock build after each run)
-                "atms_pr_quick", "atms_stockmovement", "atms_stockmovement_light"]
+                "atms_pr_quick", "atms_stockmovement", "atms_stockmovement_light", "rmc_compensation"]
 
 
 def test_python_jobs_moved_to_mena_backend_services_are_not_scheduled_here():
@@ -144,7 +144,7 @@ def test_python_jobs_moved_to_mena_backend_services_are_not_scheduled_here():
         assert name in PIPELINE_SCRIPTS, name          # manual /pipeline/run/<name> still works
 
 
-def test_only_rmc_is_still_scheduled_here():
+def test_no_pipeline_is_scheduled_here_any_more():
     source = (ROOT / "main.py").read_text(encoding="utf-8")
-    assert 'args=["rmc_compensation"]' in source
+    assert "args=[" not in source
     assert "sched_wms_sku_sync_morning" not in source  # moved 2026-11-22 (mbs job wms-sku-sync-morning)

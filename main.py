@@ -220,7 +220,6 @@ async def startup_event():
 
     # Schedule pipelines at 02:00 Bangkok time (Asia/Bangkok = UTC+7)
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
-    from apscheduler.triggers.cron import CronTrigger
     from pytz import timezone as tz
     from routes.pipeline.pipeline_routes import _run
 
@@ -278,7 +277,6 @@ async def startup_event():
     # overspeed 04:30 BKK → 21:30 UTC: reads the day engine-on (21:00) has just read, done before
     #   atms_stockmovement's heavy writes at 22:00; rmc_compensation 09:00 BKK → 02:00 UTC: talks only
     #   to CPAC fleetlink + the push API (moved off the Mac launchd job com.cpac.rmc-daily)
-    scheduler.add_job(_run, CronTrigger(hour=2, minute=0), args=["rmc_compensation"], id="sched_rmc_compensation")   # 09:00 BKK
     # vehicle_daily → atms.vehicle_daily_transaction (รายงานรถประจำวัน ATMS ทุกกลุ่มฟลีท เดือนที่แล้ว + เดือนนี้)
     # 07:40 BKK → 00:40 UTC · ต่อจาก procurement/supplier ช่วง 06:00–06:40 และเลี่ยง :15 ของ atms_pr_quick
     # งานเบา ~21 requests ห่างกัน 3 วินาที จบในราว 1–2 นาที
@@ -290,10 +288,11 @@ async def startup_event():
     #   fuel_train, maintenance, overspeed, vehicle_daily — เวลาเดิมทุกตัว (mbs services/jobs/jobs/ncac.ts)
     #   สคริปต์ + POST /pipeline/run/<name> ยังอยู่ที่นี่ให้กดมือได้ชั่วคราว
     #   2026-11-22 ย้ายเพิ่ม: atms_pr_quick, atms_stockmovement, atms_stockmovement_light, wms_sku_sync_morning
-    #   (mbs ยิง WMS ต่อหลังรันจบเหมือน POST_RUN_WEBHOOKS ที่นี่) · ที่ยังรันที่นี่: rmc_compensation
+    #   (mbs ยิง WMS ต่อหลังรันจบเหมือน POST_RUN_WEBHOOKS ที่นี่) และ rmc_compensation (แทน launchd บน Mac)
+    #   ตอนนี้ไม่มีงานตั้งเวลาเหลือที่นี่แล้ว · scheduler ยังเปิดไว้ให้ /pipeline/run ใช้ได้ตามเดิม
     scheduler.start()
     import logging
-    logging.getLogger(__name__).info("Pipeline scheduler started — only rmc_compensation here; other pipelines run in mena-backend-services")
+    logging.getLogger(__name__).info("Pipeline scheduler started — no scheduled pipelines here; they run in mena-backend-services")
 
 
 # ------------------------------
