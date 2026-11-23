@@ -1024,3 +1024,25 @@ class TestResubmitKeepsWhatTheScreenCannotSee:
                                                  seq_stub, frozen_bkk):
         claim = repo.create_claim(db_session, claim_payload(wht_applicable=True), weigh_items[:1], actor="55555")
         assert R.get_claim(claim.form_id, db=db_session)["wht_applicable"] is True
+
+
+class TestClaimHistoryHasWhoDidWhat:
+    """23/11/2026: ประวัติใบขึ้น "ตีกลับผู้เบิก · -" เพราะรายละเอียดใบไม่ส่ง log มา FE ต้องเดาจากวันที่ในใบ"""
+
+    def test_claim_detail_carries_its_logs_with_names(self, db_session, fund, weigh_type, weigh_items,
+                                                       seq_stub, frozen_bkk):
+        from schemas.finance_petty_schema import ReturnIn
+        _user(db_session, "55555", "สายใจ", "ทองดี")
+        _user(db_session, "12345", "ณรงค์กรณ์", "อัจฉริยญาติ")
+        claim = repo.create_claim(db_session, claim_payload_for(fund), weigh_items[:1], actor="55555")
+        R.return_claim(claim.form_id, ReturnIn(employee_id="12345", reason="ใบชั่งเบลอ"), db=db_session)
+        logs = R.get_claim(claim.form_id, db=db_session)["logs"]
+        assert [(x["action"], x["actor_name"]) for x in logs][-1] == ("RETURN", "ณรงค์กรณ์ อัจฉริยญาติ")
+        assert logs[-1]["remark"] == "ใบชั่งเบลอ" and logs[-1]["actor"] == "12345" and logs[-1]["at"]
+        assert logs[0]["action"] == "CREATE" and logs[0]["actor_name"] == "สายใจ ทองดี"
+
+    def test_log_rows_never_leak_the_raw_changes(self, db_session, fund, weigh_type, weigh_items,
+                                                 seq_stub, frozen_bkk):
+        claim = repo.create_claim(db_session, claim_payload_for(fund), weigh_items[:1], actor="55555")
+        row = R.get_claim(claim.form_id, db=db_session)["logs"][0]
+        assert set(row) == {"action", "actor", "actor_name", "at", "remark"}

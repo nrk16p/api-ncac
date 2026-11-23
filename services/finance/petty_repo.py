@@ -609,6 +609,12 @@ def edit_doc_numbers(db: Session, batch: FinPettyBatch, actor: str, wanted: dict
     return batch
 
 
+def claim_logs(db: Session, claim_id: int) -> list[FinPettyLog]:
+    """ประวัติของใบ เก่าสุดก่อน — หน้ารายละเอียดใบใช้บอกว่าใครทำอะไรเมื่อไร"""
+    return (db.query(FinPettyLog).filter(FinPettyLog.claim_id == claim_id)
+            .order_by(FinPettyLog.created_at, FinPettyLog.id).all())
+
+
 ROUND_LOG_ACTIONS = ("VOUCHER", "PAY_CLOSE", "EDIT_DOC_NUMBERS")
 
 

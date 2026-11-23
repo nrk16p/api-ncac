@@ -329,6 +329,14 @@ def duplicate_check(expense_type: str, event_date: str, truck_code: Optional[str
     return validate.split_duplicates([row], prior, spec)
 
 
+def _claim_logs(db: Session, claim) -> list[dict]:
+    """ประวัติใบพร้อมชื่อคนทำ (23/11/2026: เดิมไม่ส่ง FE เดาจากวันที่ในใบ ชื่อคนทำขึ้น "-") · ไม่ส่ง changes ดิบ"""
+    rows = repo.claim_logs(db, claim.id)
+    names = repo.employee_names(db, [r.action_by for r in rows])
+    return [{"action": r.action, "actor": r.action_by, "actor_name": names.get(str(r.action_by or "")),
+             "at": _iso(r.created_at), "remark": r.remark} for r in rows]
+
+
 @router.get("/claims/{form_id}")
 def get_claim(form_id: str, employee_id: Optional[str] = None, db: Session = Depends(get_db)):
     """employee_id = คนที่เปิดดู → can_head_approve บอกว่าคนนี้กดอนุมัติขั้นหัวหน้าได้ไหม (BFF ใช้ตัดสินสิทธิ์ดูด้วย)"""
@@ -336,6 +344,7 @@ def get_claim(form_id: str, employee_id: Optional[str] = None, db: Session = Dep
     if claim is None:
         raise HTTPException(status_code=404, detail="ไม่พบใบเบิก")
     body = _out(db, claim)
+    body["logs"] = _claim_logs(db, claim)
     if employee_id:
         body["can_head_approve"] = claim.status == L.PENDING_HEAD and _may_head_approve(db, claim, employee_id)
     return body
