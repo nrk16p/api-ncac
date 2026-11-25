@@ -49,10 +49,12 @@ def put_expense_type(code: str, payload: ExpenseTypeUpdate, db: Session = Depend
 
 
 def _is_super(employee_id) -> bool:
-    """ผู้ดูแลทดสอบ: เห็นและกดได้ทุกขั้นของเงินสดย่อยเหมือนเป็นทุกบทบาท — เปิดด้วย env PETTY_SUPERUSERS
-    (รหัสพนักงานคั่นด้วย ,) ตั้งเฉพาะเครื่องทดสอบ (ผู้ใช้สั่ง 5/11/2026 "เฉพาะใน local") บน prod ไม่ตั้ง = ไม่มีผล"""
+    """ผู้ดูแล: เห็นและกดได้ทุกขั้นของเงินสดย่อยเหมือนเป็นทุกบทบาท
+    - env PETTY_SUPERUSERS (รหัสพนักงานคั่นด้วย ,) สำหรับเครื่องทดสอบ (ผู้ใช้สั่ง 5/11/2026)
+    - superadmin ของการเงิน (permission_logic.SUPERADMIN_EMPLOYEE_IDS = 670108) บน prod ด้วย
+      (ผู้ใช้สั่ง 25/11/2026 "super admin เห็นทุกหน้า ดูและกดได้ทุกขั้น" ทั้งเงินสดย่อยและ Advance)"""
     eid = str(employee_id or "").strip()
-    return bool(eid) and eid in adv_logic.parse_id_list(os.getenv("PETTY_SUPERUSERS"))
+    return bool(eid) and (eid in adv_logic.parse_id_list(os.getenv("PETTY_SUPERUSERS")) or perms.is_superadmin(eid))
 
 
 @router.get("/funds")

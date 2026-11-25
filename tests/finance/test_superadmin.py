@@ -109,3 +109,19 @@ def test_permissions_me_outsider_still_gets_nothing(monkeypatch):
     from routes.finance import advance_routes as ar
     out = ar.my_permissions("680043", _Db(NS(employee_id="680043", department_id=11)))
     assert out == {"employee_id": "680043", "is_finance": False, "permissions": [], "finance_line": None}
+
+
+# ---- เงินสดย่อย: superadmin ของการเงินเป็นผู้ดูแลเงินสดย่อยบน prod ด้วย (ผู้ใช้สั่ง 25/11/2026) ----
+
+def test_petty_super_includes_finance_superadmin_without_env(monkeypatch):
+    from routes.finance import petty_routes as pr
+    monkeypatch.delenv("PETTY_SUPERUSERS", raising=False)
+    assert pr._is_super(SA) and pr._is_super(670108)
+    assert not pr._is_super("690041") and not pr._is_super(None) and not pr._is_super("")
+
+
+def test_petty_super_env_list_still_works(monkeypatch):
+    from routes.finance import petty_routes as pr
+    monkeypatch.setenv("PETTY_SUPERUSERS", "650520, 690189")
+    assert pr._is_super("690189") and pr._is_super(SA)
+    assert not pr._is_super("690041")
