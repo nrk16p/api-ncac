@@ -50,3 +50,28 @@ class TestRecipients:
 
     def test_nobody_means_empty(self):
         assert M.gate_recipients(clerk_email=None, approver_email=None) == []
+
+
+class TestCardLikeAdvance:
+    """อีเมลเงินสดย่อยหน้าตาเดียวกับ Advance · หัวเรื่อง [Petty Cash] (ผู้ใช้สั่ง 25/11/2026)"""
+
+    def test_head_pending_is_a_card_with_details_and_button(self, monkeypatch):
+        monkeypatch.setenv("FE_BASE_URL", "https://menait-service.vercel.app")
+        html = M.render_head_pending("BK-A04-2611-001", "ณิชกานต์ วงษ์อุบล", 500)
+        assert "background:#2ea84f" in html and "รอท่านอนุมัติ" in html
+        assert "ณิชกานต์ วงษ์อุบล" in html and "500.00 บาท" in html and "BK-A04-2611-001" in html
+        assert "https://menait-service.vercel.app/finance/petty/BK-A04-2611-001" in html and "เปิดรายการ" in html
+
+    def test_no_button_without_fe_url(self, monkeypatch):
+        monkeypatch.delenv("FE_BASE_URL", raising=False)
+        assert "เปิดรายการ" not in M.render_head_pending("X", None, 1)
+
+    def test_names_are_escaped(self):
+        assert "<script>" not in M.render_head_pending("X", "<script>bad()</script>", 1)
+
+    def test_subject_prefix(self, monkeypatch):
+        sent = []
+        monkeypatch.setattr(M.mail, "send_finance_email", lambda to, subject, html: sent.append(subject))
+        M.notify_head_pending("BK-A04-2611-001", "x", 500, ["h@x"])
+        M.notify_round_rejected(1, "LB-B02-2611-B9", "ไม่ครบ", holder_email="o@x")
+        assert sent == ["[Petty Cash] รอหัวหน้าอนุมัติ BK-A04-2611-001", "[Petty Cash] ไม่อนุมัติเคลียร์ LB-B02-2611-B9"]
