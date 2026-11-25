@@ -160,11 +160,12 @@ def fleet_name(group) -> str:
 
 
 def driver_role(status) -> str:
-    """'พจส' / 'พจส.' / 'พจส.สแปร์' → 'พจส.' · 'พจร' → 'พจร.' · อื่น ๆ (สนง ว่าง) → ''"""
+    """'พจส' / 'พจส.' / 'พจส.สแปร์' / 'พจน' → 'พจส.' · 'พจร' → 'พจร.' · อื่น ๆ (สนง ว่าง) → ''
+    'พจน' มีใน ATMS 14 แถวช่วง 10–25/11/2026 ผู้ใช้สั่งให้นับเป็น พจส. (25/11/2026)"""
     s = str(status or "").strip()
     if s.startswith("พจร"):
         return "พจร."
-    if s.startswith("พจส"):
+    if s.startswith("พจส") or s.startswith("พจน"):
         return "พจส."
     return ""
 
