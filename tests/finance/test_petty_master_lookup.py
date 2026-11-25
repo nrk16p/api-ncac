@@ -141,7 +141,7 @@ def test_driver_role_from_daily_status_25_11_2026():
     from services.finance.petty_master import driver_role
     assert driver_role("พจส") == "พจส."
     assert driver_role("พจส.สแปร์") == "พจส."
-    assert driver_role("พจน") == "พจส."  # ผู้ใช้สั่งนับเป็น พจส.
+    assert driver_role("พจน") == "พจร."  # พจน = รถร่วมนอก นับเป็น พจร.
     assert driver_role("พจร") == "พจร."
     assert driver_role("สนง") == ""
     assert driver_role(None) == ""
