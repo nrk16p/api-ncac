@@ -30,6 +30,47 @@ def clear_notify(people: Mapping[str, Mapping], mappings: Mapping[str, Iterable[
     return rules.notify_approvers(eligible, required, requester=holder)
 
 
+# ---- ผู้อนุมัติเคลียร์ที่กำหนดรายกองทุน (ผู้ใช้สั่ง 26/11/2026) ----
+# กองที่อยู่ในรายการนี้ไม่ดูสายงานของเจ้าของเงินสด: กดอนุมัติเคลียร์ได้เฉพาะคนในรายการ (กับ superadmin ที่ route)
+# notify = คนที่ได้อีเมลและเห็นในแถบ "รอฉันอนุมัติ" · เจ้าของเงินสดกดรอบของตัวเองไม่ได้เสมอ
+# key = (branch_code, division_code) ของ fin_petty_funds
+CLEAR_APPROVER_OVERRIDES: dict = {
+    # บัญชี ลาดกระบัง (03-A04 ฟาง 610055) → นุ่น พุทธชาติ 690261 · พี่ปู ศิวพร 600181 — "ฟาง ให้นุ่นอนุมัติได้เลย"
+    ("03", "A04"): {"approvers": ("690261", "600181"), "notify": ("690261",)},
+}
+
+
+def clear_override(fund) -> Optional[Mapping]:
+    if fund is None:
+        return None
+    return CLEAR_APPROVER_OVERRIDES.get((str(fund.branch_code), str(fund.division_code)))
+
+
+def can_clear_fund(people: Mapping[str, Mapping], mappings: Mapping[str, Iterable[int]], fund,
+                   required: int, approver_id: str) -> bool:
+    """can_clear ที่รู้จักผู้อนุมัติเคลียร์รายกองทุน · กองที่ไม่อยู่ในรายการ = ตามสายงานเหมือนเดิม"""
+    rule = clear_override(fund)
+    if rule is None:
+        return can_clear(people, mappings, fund.holder_employee_id, required, approver_id)
+    eid = str(approver_id or "")
+    return eid in rule["approvers"] and eid != str(fund.holder_employee_id)
+
+
+def clear_notify_fund(people: Mapping[str, Mapping], mappings: Mapping[str, Iterable[int]], fund,
+                      required: int) -> list:
+    rule = clear_override(fund)
+    if rule is None:
+        return clear_notify(people, mappings, fund.holder_employee_id, required)
+    return [people.get(eid) or {"employee_id": eid} for eid in rule["notify"]
+            if eid != str(fund.holder_employee_id)]
+
+
+def clear_named(fund) -> tuple:
+    """employee_id ของผู้อนุมัติเคลียร์ที่กำหนดไว้ (ว่าง = ตามสายงาน) — FE ใช้บอกว่ารอใคร"""
+    rule = clear_override(fund)
+    return tuple(rule["approvers"]) if rule else ()
+
+
 # ---- หัวหน้าอนุมัติใบก่อนโอน (flow v3 → v3.2 TOA 7/11/2026) ----
 # ระดับที่ต้องอนุมัติเอาจากตาราง TOA เดียวกับ Advance (fin_approval_tiers ตามยอด) และต้องสูงกว่าผู้ขอเบิก
 # ถ้า TOA ให้อำนาจเจ้าของเงินสดอนุมัติใบนี้ได้เอง → ไม่มีขั้นหัวหน้า ใบไปรอเจ้าของเงินสดทีเดียว

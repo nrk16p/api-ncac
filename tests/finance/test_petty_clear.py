@@ -76,3 +76,47 @@ class TestWhoGetsTheEmail:
 
     def test_nobody_when_the_holder_is_unknown(self):
         assert C.clear_notify(people(MANAGER), {}, "690189", 5) == []
+
+
+class _Fund:
+    def __init__(self, branch, division, holder):
+        self.branch_code, self.division_code, self.holder_employee_id = branch, division, holder
+
+
+class TestNamedClearApprovers:
+    """26/11/2026 บัญชีลาดกระบัง (03-A04 ฟาง) ส่งเคลียร์ให้แค่นุ่นกับพี่ปูอนุมัติ · นุ่นได้อีเมล"""
+    FANG = person("610055", 10, 2, dept=6, division=8, site=LKB)
+    NUN = person("690261", 11, 3, dept=6, division=8, site=LKB)
+    POO = person("600181", 12, 3, dept=6, division=8, site=SRB)
+    MANAGER = person("690604", 13, 5, dept=6, division=8, site=1)
+    LKB_ACC = _Fund("03", "A04", "610055")
+
+    def ppl(self):
+        return people(self.FANG, self.NUN, self.POO, self.MANAGER, CEO)
+
+    def test_the_lat_krabang_accounting_fund_is_named(self):
+        assert C.clear_named(self.LKB_ACC) == ("690261", "600181")
+
+    def test_nun_and_poo_may_approve_below_the_line_level(self):
+        for eid in ("690261", "600181"):
+            assert C.can_clear_fund(self.ppl(), {}, self.LKB_ACC, 5, eid)
+
+    def test_nobody_else_in_the_line_may(self):
+        for eid in ("690604", "360002", "610055"):
+            assert not C.can_clear_fund(self.ppl(), {}, self.LKB_ACC, 5, eid)
+
+    def test_email_goes_to_nun_only(self):
+        assert [p["employee_id"] for p in C.clear_notify_fund(self.ppl(), {}, self.LKB_ACC, 5)] == ["690261"]
+
+    def test_the_holder_is_never_named_for_their_own_round(self, monkeypatch):
+        monkeypatch.setitem(C.CLEAR_APPROVER_OVERRIDES, ("02", "A04"),
+                            {"approvers": ("600181", "690261"), "notify": ("600181",)})
+        poo_fund = _Fund("02", "A04", "600181")
+        assert not C.can_clear_fund(self.ppl(), {}, poo_fund, 5, "600181")
+        assert C.clear_notify_fund(self.ppl(), {}, poo_fund, 5) == []
+
+    def test_other_funds_keep_the_chain_of_command(self):
+        fund = _Fund("02", "A04", "600181")  # สระบุรี ยังไม่อยู่ในรายการ
+        assert C.clear_named(fund) == ()
+        assert C.can_clear_fund(self.ppl(), {}, fund, 5, "690604")
+        assert not C.can_clear_fund(self.ppl(), {}, fund, 5, "690261")

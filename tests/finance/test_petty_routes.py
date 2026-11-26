@@ -255,6 +255,40 @@ class TestHeadClearing:
         assert [(r["id"], r["is_primary"]) for r in queue("600100")] == [(sent_round["id"], True)]
         assert [(r["id"], r["is_primary"]) for r in queue("590100")] == [(sent_round["id"], False)]
 
+    def test_a_named_fund_goes_to_the_named_approvers_only(self, db_session, sent_round, line, monkeypatch):
+        # 26/11/2026 กองที่กำหนดผู้อนุมัติเคลียร์ไว้ ไม่ดูสายงาน (ทดสอบกับกองของ fixture 03-B02)
+        from services.finance import petty_clear as C
+        monkeypatch.setitem(C.CLEAR_APPROVER_OVERRIDES, ("03", "B02"),
+                            {"approvers": ("600200", "700000"), "notify": ("600200",)})
+        line["700000"] = _person("700000", 9, 3, dept=99, division=99)
+
+        def queue(emp):
+            return [(r["id"], r["is_primary"]) for r in R.list_rounds(
+                fund_id=None, status=None, holder=None, clear_approver=emp, limit=50, offset=0, db=db_session)]
+
+        rid = sent_round["id"]
+        assert queue("600200") == [(rid, True)] and queue("700000") == [(rid, False)]
+        assert queue("600100") == []  # ผู้จัดการในสายงานกดไม่ได้แล้ว
+        detail = R.get_round(rid, employee_id="600200", db=db_session)
+        assert detail["can_clear"] is True and [n["employee_id"] for n in detail["clear_named"]] == ["600200", "700000"]
+        with pytest.raises(HTTPException) as exc:
+            R.clear_approve_round(rid, RoundActionIn(employee_id="600100"), db_session)
+        assert exc.value.status_code == 403
+        out = R.clear_approve_round(rid, RoundActionIn(employee_id="700000"), db_session)
+        assert out["status"] == "AWAITING_REVIEW"
+
+    def test_round_email_goes_to_the_named_approver(self, db_session, claim, line, monkeypatch):
+        from services.finance import petty_clear as C
+        monkeypatch.setitem(C.CLEAR_APPROVER_OVERRIDES, ("03", "B02"),
+                            {"approvers": ("600200",), "notify": ("600200",)})
+        sent = []
+        monkeypatch.setattr(R.mail, "notify_round_submitted", lambda *a: sent.append(a))
+        monkeypatch.setattr(repo, "employee_email", lambda db, eid: f"{eid}@x")
+        _approve(db_session, claim)
+        R.set_claim_dd(claim.form_id, DdIn(employee_id="12345", dd_no="LBDD26090931"), db_session)
+        R.create_round(_round_in(claim), db_session)
+        assert sent and sent[0][-1] == ["600200@x"]
+
     def test_plain_round_list_has_no_primary_flag(self, db_session, sent_round):
         rows = R.list_rounds(fund_id=None, status=None, holder=None, clear_approver=None,
                              limit=50, offset=0, db=db_session)
