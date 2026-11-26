@@ -271,12 +271,30 @@ HEAD_QUEUE_CAP = 2000
 def list_claims(employee_id: Optional[str] = None, holder: Optional[str] = None,
                 status: Optional[str] = None, month: Optional[str] = None,
                 head_approver: Optional[str] = None, head_approved_by: Optional[str] = None,
+                team_head: Optional[str] = None,
                 limit: int = Query(default=50, le=200), offset: int = 0,
                 db: Session = Depends(get_db)):
     """employee_id = ใบที่คนนั้นเปิด · holder = ทุกใบของกองทุนที่คนนั้นถือ · ไม่ส่งทั้งคู่ = ทุกใบ (บัญชี/การเงิน)
-    head_approver = ใบรอหัวหน้าที่คนนั้นอนุมัติได้ (คิวหัวหน้า มี is_primary) · head_approved_by = ใบที่คนนั้นอนุมัติไปแล้ว"""
+    head_approver = ใบรอหัวหน้าที่คนนั้นอนุมัติได้ (คิวหัวหน้า มี is_primary) · head_approved_by = ใบที่คนนั้นอนุมัติไปแล้ว
+    team_head = ใบของลูกทีมคนนั้นทุกสถานะ ดูอย่างเดียว (ผู้ใช้สั่ง 26/11/2026) กรอง status/month ได้"""
     def _names(rows):
         return repo.employee_names(db, [x for c in rows for x in (c.created_by, c.approved_by, c.head_approved_by)])
+
+    if team_head:
+        rows, _ = repo.list_claims(db, fund_ids=None, created_by=None, status=status, month=month,
+                                   limit=HEAD_QUEUE_CAP, offset=0, exclude_created_by=team_head)
+        people, mappings = repo.line_context(db, fresh=False)
+        is_super = _is_super(team_head)
+        seen: dict = {}  # สิทธิ์ขึ้นกับผู้ขอเบิกอย่างเดียว คิดครั้งเดียวต่อคน
+        team = []
+        for c in rows:
+            if c.created_by not in seen:
+                seen[c.created_by] = is_super or clear.is_team_head(people, mappings, c.created_by, team_head)
+            if seen[c.created_by]:
+                team.append(c)
+        page = team[offset:offset + limit]
+        names = _names(page)
+        return {"total": len(team), "items": [_claim_dict(c, repo.claim_items(db, c.id), names) for c in page]}
 
     if head_approver:
         pending, _ = repo.list_claims(db, fund_ids=None, created_by=None, status=L.PENDING_HEAD, month=month,
@@ -349,7 +367,16 @@ def get_claim(form_id: str, employee_id: Optional[str] = None, db: Session = Dep
     body["logs"] = _claim_logs(db, claim)
     if employee_id:
         body["can_head_approve"] = claim.status == L.PENDING_HEAD and _may_head_approve(db, claim, employee_id)
+        body["can_team_view"] = _is_team_viewer(db, claim, employee_id)
     return body
+
+
+def _is_team_viewer(db: Session, claim, employee_id: str) -> bool:
+    """หัวหน้าของผู้ขอเบิก ดูใบของลูกทีมได้ทุกสถานะ (BFF ใช้ตัดสินสิทธิ์ดูใบและไฟล์)"""
+    if _is_super(employee_id):
+        return True
+    people, mappings = repo.line_context(db, fresh=False)  # ดูอย่างเดียว แคช 60 วิพอ ไม่ต้องโหลดสายงานทุกครั้งที่เปิดใบ
+    return clear.is_team_head(people, mappings, claim.created_by, employee_id)
 
 
 # ---------------------------- transitions ----------------------------

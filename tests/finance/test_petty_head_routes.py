@@ -281,3 +281,36 @@ class TestPayeeMonthTotal:
         _line(monkeypatch)
         out = R.create_claim(ClaimIn(**{**claim_payload(), "items": weigh_items, "wht_amount": "49.20", "wht_applicable": True}), db_session)
         assert out["wht_amount"] == 49.2 and out["net_amount"] == 1590.8 and out["wht_applicable"] is True
+
+
+class TestTeamView:
+    """หัวหน้าดูใบของลูกทีมได้ทุกสถานะ ดูอย่างเดียว (ผู้ใช้สั่ง 26/11/2026)"""
+
+    def test_head_sees_the_team_claim_at_every_status(self, db_session, claim, monkeypatch, mails):
+        _line(monkeypatch)
+        team = R.list_claims(team_head="600050", limit=50, offset=0, db=db_session)
+        assert [c["form_id"] for c in team["items"]] == [claim.form_id] and team["total"] == 1
+        R.head_approve_claim(claim.form_id, HeadApproveIn(employee_id="600050"), db_session)
+        _owner_approve(db_session, claim)
+        again = R.list_claims(team_head="600050", limit=50, offset=0, db=db_session)
+        assert [c["status"] for c in again["items"]] == ["APPROVED"]
+
+    def test_a_higher_head_in_the_line_sees_it_too(self, db_session, claim, monkeypatch, mails):
+        _line(monkeypatch)
+        assert R.list_claims(team_head="600090", limit=50, offset=0, db=db_session)["total"] == 1
+
+    def test_people_outside_the_line_see_nothing(self, db_session, claim, monkeypatch, mails):
+        _line(monkeypatch)
+        for eid in ("700000", "12345", "55555"):  # ระดับไม่ถึง · คนละแผนก · เจ้าตัว
+            assert R.list_claims(team_head=eid, limit=50, offset=0, db=db_session)["items"] == []
+
+    def test_status_filter_still_applies(self, db_session, claim, monkeypatch, mails):
+        _line(monkeypatch)
+        assert R.list_claims(team_head="600050", status="CLOSED", limit=50, offset=0, db=db_session)["items"] == []
+
+    def test_detail_flag_lets_the_bff_open_the_claim_for_the_head(self, db_session, claim, monkeypatch, mails):
+        _line(monkeypatch)
+        R.head_approve_claim(claim.form_id, HeadApproveIn(employee_id="600050"), db_session)
+        assert R.get_claim(claim.form_id, employee_id="600090", db=db_session)["can_team_view"] is True
+        assert R.get_claim(claim.form_id, employee_id="700000", db=db_session)["can_team_view"] is False
+        assert "can_team_view" not in R.get_claim(claim.form_id, db=db_session)

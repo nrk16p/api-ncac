@@ -88,3 +88,20 @@ def head_notify(people: Mapping[str, Mapping], mappings: Mapping[str, Iterable[i
     required, excluded = head_rule(people, mappings, requester_id, holder_id, tiers, amount)
     eligible = rules.eligible_approvers(list(people.values()), requester, required, mappings, excluded)
     return rules.notify_approvers(eligible, required, requester=requester)
+
+
+# ---- หัวหน้าดูใบของลูกทีม (ผู้ใช้สั่ง 26/11/2026) ----
+# "ลูกทีม" = ผู้ขอเบิกที่คนนี้เป็นหัวหน้าตามสายงานได้ ที่ระดับหัวหน้าขั้นต่ำ (สูตร flow v3: ≥ Supervisor และสูงกว่าผู้ขอเบิก)
+# ดูได้อย่างเดียว ไม่แตะสิทธิ์กดอนุมัติ — ขั้นหัวหน้ายังตัดสินด้วย TOA ตามยอดเหมือนเดิม
+
+def is_team_head(people: Mapping[str, Mapping], mappings: Mapping[str, Iterable[int]], requester_id: Optional[str],
+                 viewer_id: Optional[str]) -> bool:
+    if not requester_id or not viewer_id or str(requester_id) == str(viewer_id):
+        return False
+    requester = people.get(requester_id)
+    viewer = people.get(viewer_id)
+    if requester is None or viewer is None:
+        return False
+    from services.finance import petty_logic as L
+    required = L.head_required_level(requester.get("level"))
+    return rules.may_approve(list(people.values()), viewer, requester, required, mappings)
